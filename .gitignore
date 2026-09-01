@@ -1,0 +1,13 @@
+# Signing keys must never be committed.
+*.key
+witness.json
+
+# Local state.
+*.db
+
+# The built binary at the repo root — anchored, or it would also swallow the
+# cmd/kt-witness source directory.
+/kt-witness
+
+# Rust sidecar build output (284MB proof temp files, target dir).
+rust/**/target/

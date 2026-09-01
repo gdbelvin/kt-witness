@@ -1,0 +1,30 @@
+{
+  "name": "witness.kt.example.com",
+  "listen": ":8080",
+  "db": "witness.db",
+  "key_file": "witness.key",
+  "poll_interval": "60s",
+  "max_sign_delay": "30s",
+  "refresh_interval": "1h",
+
+  "audit": {
+    "sidecar_path": "./rust/kt-akd-verify/target/release/kt-akd-verify",
+    "sample_rate": 0.1,
+    "interval": "5m",
+    "timeout": "5m"
+  },
+
+  "logs": [
+    {
+      "origin": "thelemail.com/keys",
+      "base_url": "https://tlog.thelemail.com/",
+      "vkey": "thelemail.com/keys+76ead63c+ASduViYkPgYHzuTuDnuTdEkjR/DIprnavuFA3vom4YZT"
+    },
+    {
+      "type": "akd",
+      "origin": "meta.messenger.kt/v1",
+      "log_directory": "https://d2e61astky5m6k.cloudfront.net",
+      "plexi_namespace_url": "https://plexi.key-transparency.cloudflare.com/namespaces/messenger.key-transparency.v1"
+    }
+  ]
+}
