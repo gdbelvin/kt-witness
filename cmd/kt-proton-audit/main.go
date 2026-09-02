@@ -18,6 +18,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -40,9 +41,17 @@ func main() {
 		apiBase    = flag.String("api", "https://api.protonmail.ch", "Proton API base")
 		dumpBase   = flag.String("dumps", "https://proton.me/kt", "tree dump base URL")
 		keep       = flag.Bool("keep", false, "keep the downloaded dump for the next run")
+		from       = flag.Int64("from", 0, "audit the step from this epoch by applying the target epoch's diff")
 	)
 	flag.Parse()
 
+	if *from > 0 {
+		if err := runIncremental(*from, *epoch, *dir, *shardDepth, *apiBase, *dumpBase, *keep); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(*epoch, *dir, *shardDepth, *apiBase, *dumpBase, *keep); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
@@ -186,4 +195,155 @@ func download(url, path string) (int64, error) {
 	// Renamed only once complete, so an interrupted run never leaves a truncated
 	// dump that would rebuild to a wrong root.
 	return n, os.Rename(tmp, path)
+}
+
+// runIncremental audits the step *between* two snapshots: it takes the tree at
+// `from`, applies the published diff for the next epoch, rebuilds, and checks
+// the result against that epoch's signed tree hash.
+//
+// This is the check that catches an illegal mutation. A full rebuild proves the
+// operator's leaves build the root they signed; it says nothing about whether
+// the change from one epoch to the next was legitimate. Only replaying the
+// transition shows what actually moved — and the mutations are reported rather
+// than folded silently into a new root, because removals and in-place
+// overwrites are the whole point.
+func runIncremental(from, target int64, dir string, shardDepth int, apiBase, dumpBase string, keep bool) error {
+	if target == 0 {
+		target = from + 1
+	}
+	if target <= from {
+		return fmt.Errorf("target epoch %d must be after %d", target, from)
+	}
+
+	meta, err := fetchEpoch(apiBase, target)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("auditing the step %d -> %d\n  published tree hash %s\n", from, target, meta.TreeHash)
+
+	basePath := filepath.Join(dir, fmt.Sprintf("epoch_tree_%d.bin", from))
+	if _, err := os.Stat(basePath); err != nil {
+		url := fmt.Sprintf("%s/epoch.1.%d", dumpBase, from)
+		fmt.Printf("  downloading base tree %s\n", url)
+		start := time.Now()
+		n, err := download(url, basePath)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("  %.2f GB in %s\n", float64(n)/1e9, time.Since(start).Round(time.Second))
+	} else {
+		fmt.Printf("  using cached base %s\n", basePath)
+	}
+
+	diffURL := fmt.Sprintf("%s/epoch.1.%d.diff", dumpBase, target)
+	diff, err := fetchBytes(diffURL)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("  diff %.2f MB (%d records)\n", float64(len(diff))/1e6, len(diff)/69)
+
+	base, closeBase, err := mapFile(basePath)
+	if err != nil {
+		return err
+	}
+	defer closeBase()
+
+	outPath := filepath.Join(dir, fmt.Sprintf("epoch_tree_%d.bin", target))
+	out, err := os.Create(outPath)
+	if err != nil {
+		return err
+	}
+	w := bufio.NewWriterSize(out, 1<<22)
+
+	start := time.Now()
+	stats, err := proton.ApplyDiff(proton.SliceLeaves(base), diff, func(label, value []byte) error {
+		if _, err := w.Write(label); err != nil {
+			return err
+		}
+		_, err := w.Write(value)
+		return err
+	})
+	if err != nil {
+		out.Close()
+		os.Remove(outPath)
+		return err
+	}
+	if err := w.Flush(); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	if !keep {
+		defer os.Remove(outPath)
+		defer os.Remove(basePath)
+	}
+
+	fmt.Printf("  merged in %s\n", time.Since(start).Round(time.Second))
+	fmt.Printf("  mutations: %d added, %d removed, %d overwritten in place, %d removals of absent labels\n",
+		stats.Added, stats.Removed, stats.Overwritten, stats.PhantomRemovals)
+	if stats.Suspicious() {
+		// Not an accusation. Proton permits deletion within a retention window,
+		// so these need judging against that window — but they are invisible
+		// from the epoch chain, so they are surfaced rather than absorbed.
+		fmt.Printf("  NOTE: this epoch mutated existing entries. None of that is\n" +
+			"        visible from the chain of signed epoch hashes.\n")
+	}
+
+	merged, closeMerged, err := mapFile(outPath)
+	if err != nil {
+		return err
+	}
+	defer closeMerged()
+
+	fmt.Printf("  rebuilding %d leaves\n", len(merged)/68)
+	start = time.Now()
+	root, err := proton.TreeRootParallel(proton.SliceLeaves(merged), shardDepth)
+	if err != nil {
+		return err
+	}
+	got := hex.EncodeToString(root)
+	fmt.Printf("  recomputed        %s\n  took              %s\n", got, time.Since(start).Round(time.Second))
+
+	if got != meta.TreeHash {
+		return fmt.Errorf("TREE HASH MISMATCH — the published diff does not carry epoch %d into epoch %d",
+			from, target)
+	}
+	fmt.Printf("\n  MATCH: epoch %d plus its published diff is exactly epoch %d.\n", from, target)
+	return nil
+}
+
+func fetchBytes(url string) ([]byte, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET %s: HTTP %d", url, resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 1<<30))
+}
+
+func mapFile(path string) ([]byte, func(), error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, nil, err
+	}
+	if fi.Size() == 0 || fi.Size()%68 != 0 {
+		f.Close()
+		return nil, nil, fmt.Errorf("%s is %d bytes, not a whole number of 68-byte leaves", path, fi.Size())
+	}
+	data, err := syscall.Mmap(int(f.Fd()), 0, int(fi.Size()), syscall.PROT_READ, syscall.MAP_SHARED)
+	if err != nil {
+		f.Close()
+		return nil, nil, fmt.Errorf("mmap %s: %w", path, err)
+	}
+	return data, func() { syscall.Munmap(data); f.Close() }, nil
 }

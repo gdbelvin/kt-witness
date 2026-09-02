@@ -64,8 +64,9 @@ type logConfig struct {
 	Origin string `json:"origin"`
 
 	// c2sp
-	BaseURL string `json:"base_url"`
-	VKey    string `json:"vkey"`
+	BaseURL       string `json:"base_url"`
+	VKey          string `json:"vkey"`
+	VerifyEntries bool   `json:"verify_entries"`
 
 	// akd / proton / signal
 	APIBase           string   `json:"api_base"`
@@ -83,7 +84,10 @@ type logConfig struct {
 func (l logConfig) build(log *slog.Logger) (source.Source, error) {
 	switch l.Type {
 	case "", "c2sp":
-		return c2sp.New(c2sp.Config{Origin: l.Origin, BaseURL: l.BaseURL, VKey: l.VKey})
+		return c2sp.New(c2sp.Config{
+			Origin: l.Origin, BaseURL: l.BaseURL, VKey: l.VKey,
+			VerifyEntries: l.VerifyEntries,
+		})
 	case "akd":
 		return akd.New(akd.Config{
 			Origin:            l.Origin,
