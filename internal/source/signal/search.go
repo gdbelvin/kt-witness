@@ -61,6 +61,69 @@ type SearchResult struct {
 	Value []byte
 	// Entries is how many log entries the search had to open.
 	Entries int
+	// Opened maps each log entry the search visited to its leaf hash. Retained
+	// so that successive observations can be cross-checked; see entryLedger.
+	Opened map[uint64]hash
+}
+
+// maxLedgerEntries bounds the cross-observation ledger. The search path is
+// recomputed against a growing tree, so the entries near the frontier churn
+// while the low-numbered ones recur; when the ledger is full it keeps the
+// lowest ids, which are both the most stable and the most often revisited.
+const maxLedgerEntries = 1 << 16
+
+// entryLedger remembers the leaf hash of every log entry a verified search has
+// opened, so that a later search opening the same entry can be checked against
+// it.
+//
+// # Why this is worth doing
+//
+// A log entry is immutable once written: position i is position i forever. Head
+// consistency cannot see a violation of that — rewriting an entry's contents
+// while keeping the tree append-only is precisely the mutable-map problem — and
+// a single search proof cannot either, because it only ever describes one
+// moment. Two proofs taken at different times, both chaining to roots Signal
+// signed, are what make the comparison possible.
+//
+// This is the between-snapshot check for Signal, and it uses only data the
+// witness already fetches.
+type entryLedger struct {
+	seen map[uint64]hash
+}
+
+// merge checks a new search's entries against everything recorded, then records
+// them. A returned error names an entry whose contents changed.
+func (l *entryLedger) merge(opened map[uint64]hash) error {
+	if l.seen == nil {
+		l.seen = make(map[uint64]hash)
+	}
+	for id, leaf := range opened {
+		if prev, ok := l.seen[id]; ok && prev != leaf {
+			return fmt.Errorf(
+				"log entry %d changed contents between observations: previously %x, now %x",
+				id, prev[:], leaf[:])
+		}
+	}
+	for id, leaf := range opened {
+		if _, ok := l.seen[id]; ok {
+			continue
+		}
+		if len(l.seen) >= maxLedgerEntries {
+			// Full: only keep this entry if it displaces a higher-numbered one.
+			var highest uint64
+			for k := range l.seen {
+				if k > highest {
+					highest = k
+				}
+			}
+			if id >= highest {
+				continue
+			}
+			delete(l.seen, highest)
+		}
+		l.seen[id] = leaf
+	}
+	return nil
 }
 
 // verifySearch checks a CondensedTreeSearchResponse for searchKey against a log
@@ -110,13 +173,13 @@ func verifySearch(vrfKey *vrf.PublicKey, searchKey []byte, version *uint32,
 	// only supplies the proofs. A response with more steps than the search asks
 	// for is rejected below, so the server cannot smuggle in extra leaves to
 	// steer the batch proof.
-	type opened struct {
+	type openedEntry struct {
 		id         uint64
 		leaf       hash
 		commitment []byte
 		counter    uint32
 	}
-	var visited []opened
+	var visited []openedEntry
 	i := 0
 	for {
 		done, err := guide.poll()
@@ -160,7 +223,7 @@ func verifySearch(vrfKey *vrf.PublicKey, searchKey []byte, version *uint32,
 		copy(c[:], commitment)
 
 		guide.insert(id, ctr)
-		visited = append(visited, opened{id: id, leaf: logLeafHash(prefixRoot, c), commitment: commitment, counter: ctr})
+		visited = append(visited, openedEntry{id: id, leaf: logLeafHash(prefixRoot, c), commitment: commitment, counter: ctr})
 		i++
 	}
 	if i != len(steps) {
@@ -171,7 +234,7 @@ func verifySearch(vrfKey *vrf.PublicKey, searchKey []byte, version *uint32,
 	// The batch inclusion proof: every entry the search opened is genuinely in
 	// the log of treeSize entries. The proof's length is fixed by the entry ids,
 	// so there is no room to pad it into producing a chosen root.
-	byID := append([]opened(nil), visited...)
+	byID := append([]openedEntry(nil), visited...)
 	sort.Slice(byID, func(a, b int) bool { return byID[a].id < byID[b].id })
 	ids := make([]uint64, len(byID))
 	values := make([]hash, len(byID))
@@ -214,6 +277,10 @@ func verifySearch(vrfKey *vrf.PublicKey, searchKey []byte, version *uint32,
 			answer.id, searchKey)
 	}
 
+	opened := make(map[uint64]hash, len(visited))
+	for _, v := range visited {
+		opened[v.id] = v.leaf
+	}
 	return &SearchResult{
 		Index:   index,
 		Root:    root,
@@ -221,5 +288,6 @@ func verifySearch(vrfKey *vrf.PublicKey, searchKey []byte, version *uint32,
 		Version: answer.counter,
 		Value:   value,
 		Entries: len(visited),
+		Opened:  opened,
 	}, nil
 }

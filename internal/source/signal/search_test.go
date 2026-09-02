@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -312,4 +313,89 @@ func flip(t *testing.T, b []byte, i int) {
 		t.Fatalf("cannot flip byte %d of a %d-byte field", i, len(b))
 	}
 	b[i] ^= 0x01
+}
+
+// The ledger is the between-snapshot check: it is the only thing here that can
+// see a log entry change contents, which head consistency and any single search
+// proof both miss.
+func TestEntryLedgerCatchesRewrittenEntry(t *testing.T) {
+	var a, b hash
+	a[0], b[0] = 1, 2
+
+	var l entryLedger
+	if err := l.merge(map[uint64]hash{4: a, 8: a}); err != nil {
+		t.Fatalf("first observation: %v", err)
+	}
+	// The same entries with the same contents: expected, and must not complain.
+	if err := l.merge(map[uint64]hash{4: a, 12: b}); err != nil {
+		t.Fatalf("consistent second observation: %v", err)
+	}
+	// Entry 8 now claims different contents. A log position is immutable.
+	err := l.merge(map[uint64]hash{8: b})
+	if err == nil {
+		t.Fatal("expected a rewritten log entry to be caught")
+	}
+	if !strings.Contains(err.Error(), "changed contents") {
+		t.Errorf("error should name the problem, got: %v", err)
+	}
+}
+
+// When the ledger is full it must keep the low-numbered entries, which recur
+// across searches, rather than the frontier entries, which churn.
+func TestEntryLedgerKeepsLowestEntries(t *testing.T) {
+	var l entryLedger
+	l.seen = make(map[uint64]hash)
+	for i := uint64(0); i < maxLedgerEntries; i++ {
+		l.seen[i*2] = hash{byte(i)}
+	}
+	var h hash
+	if err := l.merge(map[uint64]hash{1: h}); err != nil {
+		t.Fatal(err)
+	}
+	if len(l.seen) != maxLedgerEntries {
+		t.Errorf("ledger grew past its cap: %d", len(l.seen))
+	}
+	if _, ok := l.seen[1]; !ok {
+		t.Error("a low-numbered entry should have displaced a higher one")
+	}
+	if _, ok := l.seen[(maxLedgerEntries-1)*2]; ok {
+		t.Error("the highest-numbered entry should have been evicted")
+	}
+}
+
+// TestLiveEntryLedgerAcrossObservations exercises the between-snapshot check
+// against production: two searches taken moments apart, against different tree
+// sizes, must agree about every log entry they both open.
+//
+// Signal's log grows by thousands of entries a minute, so the two searches
+// recompute different paths — but the low-numbered entries recur, which is
+// exactly what the ledger is there to compare.
+//
+// Requires network; run with KT_WITNESS_LIVE=1.
+func TestLiveEntryLedgerAcrossObservations(t *testing.T) {
+	if os.Getenv("KT_WITNESS_LIVE") == "" {
+		t.Skip("set KT_WITNESS_LIVE=1 to run against production")
+	}
+	s, err := New(Config{Origin: "signal.org/kt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.Fetch(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("first fetch: %v", err)
+	}
+	firstOpened := len(s.ledger.seen)
+
+	second, err := s.Fetch(context.Background(), first)
+	if err != nil {
+		// The ledger reports a rewritten entry as a Fetch failure, so a genuine
+		// contradiction lands here.
+		t.Fatalf("second fetch: %v", err)
+	}
+	overlap := firstOpened + len(s.lastSearch.Opened) - len(s.ledger.seen)
+	t.Logf("sizes %d then %d; %d entries opened, %d shared between the two searches and cross-checked",
+		first.Size, second.Size, len(s.ledger.seen), overlap)
+	if overlap < 1 {
+		t.Errorf("the two searches shared no entries, so nothing was cross-checked")
+	}
 }

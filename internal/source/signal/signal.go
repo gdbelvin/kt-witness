@@ -114,6 +114,10 @@ type Source struct {
 	// loop can report what it opened without re-running the check.
 	lastSearch *SearchResult
 
+	// ledger accumulates the log entries every verified search has opened, so
+	// successive observations can be checked against each other.
+	ledger entryLedger
+
 	// lastProof is the consistency proof carried by the most recent Fetch, for
 	// the VerifyConsistency call that follows it. The witness core always pairs
 	// those two calls for a given source, but that is coupling, so
@@ -540,11 +544,30 @@ func (s *Source) verifyResponse(pb []byte) (uint64, hash, []hash, error) {
 				"signal: the distinguished search proof implies root %x, but the signed tree head at "+
 					"size %d has root %x; withholding", res.Root[:], serviceSize, root[:])
 		}
+
+		// Step 5: cross-check against every previous observation. A log entry is
+		// immutable once written, so an entry that changes contents between two
+		// proofs — both chaining to roots Signal signed — is a contradiction the
+		// append-only checks cannot see.
+		//
+		// It is reported as a withholding rather than a fork. The evidence would
+		// support an accusation, but a fork is permanent and public, and this
+		// path is a fresh reimplementation of somebody else's tree math; a bug
+		// here would libel Signal irreversibly. Withholding costs Signal nothing
+		// and gets a human's attention, which is the right trade until this code
+		// has a production record. See TODO.md.
+		if err := s.ledger.merge(res.Opened); err != nil {
+			return 0, zero, nil, fmt.Errorf(
+				"signal: %w; this contradicts append-only and needs a human look, but "+
+					"withholding rather than accusing", err)
+		}
+
 		s.lastSearch = res
 		if s.cfg.Log != nil {
 			s.cfg.Log.Info("signal search proof verified",
 				"key", string(DistinguishedKey), "index", hex.EncodeToString(res.Index[:8]),
-				"first_position", res.Pos, "version", res.Version, "entries_opened", res.Entries)
+				"first_position", res.Pos, "version", res.Version,
+				"entries_opened", res.Entries, "entries_cross_checked", len(s.ledger.seen))
 		}
 	}
 
