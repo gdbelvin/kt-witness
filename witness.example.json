@@ -25,6 +25,11 @@
       "origin": "meta.messenger.kt/v1",
       "log_directory": "https://d2e61astky5m6k.cloudfront.net",
       "plexi_namespace_url": "https://plexi.key-transparency.cloudflare.com/namespaces/messenger.key-transparency.v1"
+    },
+    {
+      "type": "proton",
+      "origin": "proton.me/kt/v1",
+      "api_base": "https://api.protonmail.ch"
     }
   ]
 }

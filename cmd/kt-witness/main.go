@@ -23,6 +23,7 @@ import (
 	"github.com/gdbsecurity/kt-witness/internal/source"
 	"github.com/gdbsecurity/kt-witness/internal/source/akd"
 	"github.com/gdbsecurity/kt-witness/internal/source/c2sp"
+	"github.com/gdbsecurity/kt-witness/internal/source/proton"
 	"github.com/gdbsecurity/kt-witness/internal/store"
 	"github.com/gdbsecurity/kt-witness/internal/witness"
 )
@@ -63,7 +64,8 @@ type logConfig struct {
 	BaseURL string `json:"base_url"`
 	VKey    string `json:"vkey"`
 
-	// akd
+	// akd / proton
+	APIBase           string `json:"api_base"`
 	LogDirectory      string `json:"log_directory"`
 	PlexiNamespaceURL string `json:"plexi_namespace_url"`
 	StartEpoch        int64  `json:"start_epoch"`
@@ -80,6 +82,12 @@ func (l logConfig) build() (source.Source, error) {
 			LogDirectory:      l.LogDirectory,
 			PlexiNamespaceURL: l.PlexiNamespaceURL,
 			StartEpoch:        l.StartEpoch,
+			MaxEpochsPerRound: l.MaxEpochsPerRound,
+		})
+	case "proton":
+		return proton.New(proton.Config{
+			Origin:            l.Origin,
+			APIBase:           l.APIBase,
 			MaxEpochsPerRound: l.MaxEpochsPerRound,
 		})
 	default:
