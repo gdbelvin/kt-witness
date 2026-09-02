@@ -315,6 +315,14 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 		return errors.New("config: no logs configured")
 	}
 
+	// The tier each origin is witnessed at, so the status page can publish it.
+	// Taken from the sources themselves rather than the config, because the
+	// source is what actually decides.
+	tiers := make(map[string]string, len(sources))
+	for _, src := range sources {
+		tiers[src.Origin()] = src.Tier().String()
+	}
+
 	refreshInterval, err := time.ParseDuration(cfg.RefreshInterval)
 	if err != nil {
 		return fmt.Errorf("refresh_interval: %w", err)
@@ -365,7 +373,7 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 
 	srv := &http.Server{
 		Addr:    cfg.Listen,
-		Handler: (&server.Server{Store: db, VKey: vkey, Version: version}).Handler(),
+		Handler: (&server.Server{Store: db, VKey: vkey, Version: version, Tiers: tiers}).Handler(),
 	}
 	// Bind before starting to witness. A witness whose monitoring endpoint is
 	// unreachable is cosigning into the void, so a listener failure is fatal

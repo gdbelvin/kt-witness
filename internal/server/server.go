@@ -26,6 +26,12 @@ type Server struct {
 	Store   *store.Store
 	VKey    string // our published cosignature verifier key
 	Version string
+
+	// Tiers maps an origin to the assurance tier it is witnessed at. Published
+	// because it is the single thing a reader must not misjudge: a tier-A
+	// cosignature says the log is append-only and nothing whatever about
+	// whether its contents are correctly constructed.
+	Tiers map[string]string
 }
 
 // originHashes returns the identifiers a log may be addressed by. The spec
@@ -47,6 +53,7 @@ func (s *Server) Handler() http.Handler {
 	// /<origin-hash>/checkpoint is routed through index, which dispatches on
 	// the suffix; ServeMux cannot express the variable prefix directly.
 	mux.HandleFunc("/", s.index)
+	mux.HandleFunc("/status.json", s.statusJSON)
 	mux.HandleFunc("/.well-known/tlog-witness-key", s.key)
 	mux.HandleFunc("/forks", s.forks)
 	mux.HandleFunc("/audits", s.audits)
@@ -100,6 +107,14 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// A browser gets the status page; everything else keeps the plain-text
+	// contract that monitors and the C2SP tooling already read. Same URL, so no
+	// existing consumer has to change and no second address has to be published.
+	if strings.Contains(r.Header.Get("Accept"), "text/html") {
+		s.ui(w, r)
+		return
+	}
+
 	recs, err := s.Store.List()
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)

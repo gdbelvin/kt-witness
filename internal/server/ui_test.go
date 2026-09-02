@@ -1,0 +1,133 @@
+package server
+
+import (
+	"encoding/json"
+	"html"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gdbsecurity/kt-witness/internal/store"
+	"golang.org/x/mod/sumdb/tlog"
+)
+
+func testServer(t *testing.T) *Server {
+	t.Helper()
+	db, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	var h tlog.Hash
+	h[0] = 0xab
+	if err := db.CompareAndSet(nil, &store.Record{
+		Origin: "example.org/log", Size: 4321, Hash: h,
+		Cosigned: []byte("example.org/log\n4321\n"), WitnessedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return &Server{
+		Store:   db,
+		VKey:    "witness.example.com+deadbeef+AAAA",
+		Version: "test",
+		Tiers:   map[string]string{"example.org/log": "A+ (root-chain continuity)"},
+	}
+}
+
+// The plain-text index is the machine contract. Monitors and the C2SP tooling
+// read it, so adding a browser UI must not change what a non-browser sees.
+func TestIndexStaysPlainTextForTooling(t *testing.T) {
+	s := testServer(t)
+	for _, accept := range []string{"", "*/*", "application/json", "text/plain"} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		if accept != "" {
+			req.Header.Set("Accept", accept)
+		}
+		w := httptest.NewRecorder()
+		s.index(w, req)
+
+		if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+			t.Errorf("Accept=%q gave Content-Type %q, want text/plain", accept, ct)
+		}
+		if body := w.Body.String(); !strings.Contains(body, "example.org/log") {
+			t.Errorf("Accept=%q: plain-text index lost its content", accept)
+		}
+	}
+}
+
+// A browser gets the status page from the same URL.
+func TestIndexServesHTMLToBrowsers(t *testing.T) {
+	s := testServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
+	w := httptest.NewRecorder()
+	s.index(w, req)
+
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("Content-Type %q, want text/html", ct)
+	}
+	// html/template escapes "+" as &#43;, which is correct — compare against the
+	// unescaped text so the assertions test content, not escaping.
+	body := html.UnescapeString(w.Body.String())
+	for _, want := range []string{
+		"witness.example.com",               // identity
+		"witness.example.com+deadbeef+AAAA", // the key others pin
+		"example.org/log",                   // the witnessed log
+		"4,321",                             // size, humanised
+		"A+ (root-chain continuity)",        // the tier — the thing not to misread
+		"What the tiers mean",               // and its explanation
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("status page is missing %q", want)
+		}
+	}
+}
+
+// The page's data must be scrapable, or publishing it as HTML just moves the
+// problem of evidence being hard to consume.
+func TestStatusJSON(t *testing.T) {
+	s := testServer(t)
+	w := httptest.NewRecorder()
+	s.statusJSON(w, httptest.NewRequest(http.MethodGet, "/status.json", nil))
+
+	var v struct {
+		TotalLogs    int   `json:"TotalLogs"`
+		TotalEntries int64 `json:"TotalEntries"`
+		Logs         []struct {
+			Origin string `json:"Origin"`
+			Tier   string `json:"Tier"`
+		} `json:"Logs"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil {
+		t.Fatalf("status.json is not valid JSON: %v", err)
+	}
+	if v.TotalLogs != 1 || v.TotalEntries != 4321 {
+		t.Errorf("aggregates wrong: %+v", v)
+	}
+	if len(v.Logs) != 1 || v.Logs[0].Tier == "" {
+		t.Errorf("per-log tier missing: %+v", v.Logs)
+	}
+}
+
+// html/template escapes by default; confirm an origin cannot inject markup.
+func TestStatusPageEscapesOrigins(t *testing.T) {
+	s := testServer(t)
+	var h tlog.Hash
+	if err := s.Store.CompareAndSet(nil, &store.Record{
+		Origin: `evil"><script>alert(1)</script>`, Size: 1, Hash: h,
+		Cosigned: []byte("x"), WitnessedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Accept", "text/html")
+	w := httptest.NewRecorder()
+	s.index(w, req)
+	if strings.Contains(w.Body.String(), "<script>alert(1)</script>") {
+		t.Fatal("an origin injected raw markup into the status page")
+	}
+}
