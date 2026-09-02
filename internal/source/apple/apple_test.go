@@ -2,7 +2,10 @@ package apple
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -231,5 +234,31 @@ func TestLiveConsistency(t *testing.T) {
 	bogus.Hash[0] ^= 0xFF
 	if err := s.VerifyConsistency(ctx, prev, &bogus); err == nil {
 		t.Fatal("a head the proof does not reach must be rejected")
+	}
+}
+
+// Apple's KT host is issued by Apple's own private CA, not a public one. macOS
+// trusts it from the system keychain, so an unpinned client works on a laptop
+// and fails in any container with only a public CA bundle. Pinning it is what
+// makes the two behave the same.
+func TestAppleRootIsPinnedAndCorrect(t *testing.T) {
+	cert, err := x509.ParseCertificate(appleRoot)
+	if err != nil {
+		t.Fatalf("embedded root does not parse: %v", err)
+	}
+	if cert.Subject.CommonName != "Apple Root CA" {
+		t.Fatalf("embedded root is %q, want Apple Root CA", cert.Subject.CommonName)
+	}
+	sum := sha256.Sum256(cert.Raw)
+	const want = "b0b1730ecbc7ff4505142c49f1295e6eda6bcaed7e2c68c5be91b5a11001f024"
+	if got := hex.EncodeToString(sum[:]); got != want {
+		t.Fatalf("root fingerprint %s, want %s", got, want)
+	}
+
+	// And the client must actually be using it, rather than the host's store.
+	s := newSource(t)
+	tr, ok := s.client.Transport.(*http.Transport)
+	if !ok || tr.TLSClientConfig == nil || tr.TLSClientConfig.RootCAs == nil {
+		t.Fatal("client is not pinned to a root pool; it would inherit the host trust store")
 	}
 }

@@ -36,7 +36,9 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
+	_ "embed"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -62,6 +64,20 @@ const TopLevelTreeID = 410322746470160
 const TopLevelTreePublicKey = "3059301306072a8648ce3d020106082a8648ce3d030107034200049b18e1d0" +
 	"f1de8644c97b009e4c877c4b688951fc30e59d36d9d89019c548fd8cdd24e99cbffb128df88c9ef811f873" +
 	"53a15e5e983b4073583d9fdaa0d6d71c7c"
+
+// appleRoot is the Apple Root CA.
+//
+// kttcc-prod.ess.apple.com is issued by "Apple Server Authentication CA", a
+// private Apple CA that chains to this root rather than to a public one. macOS
+// trusts it from the system keychain, so this works on a Mac and fails in any
+// container with only a public CA bundle — a difference that shows up at deploy
+// time, not in development. Pinned rather than trusted from the host, since only
+// Apple's own CA should be able to authenticate this host.
+//
+// SHA-256: b0b1730ecbc7ff4505142c49f1295e6eda6bcaed7e2c68c5be91b5a11001f024
+//
+//go:embed apple-root.cer
+var appleRoot []byte
 
 // requestVersion is the API version field Apple's own client sends.
 const requestVersion = 3
@@ -131,10 +147,22 @@ func New(cfg Config) (*Source, error) {
 		return nil, fmt.Errorf("apple: public key is %T, want ECDSA", parsed)
 	}
 
+	roots := x509.NewCertPool()
+	rootCert, err := x509.ParseCertificate(appleRoot)
+	if err != nil {
+		return nil, fmt.Errorf("apple: parse pinned root CA: %w", err)
+	}
+	roots.AddCert(rootCert)
+
 	return &Source{
 		cfg: cfg, pub: pub, pubDER: der,
-		keyID:  sha256.Sum256(der),
-		client: &http.Client{Timeout: 30 * time.Second},
+		keyID: sha256.Sum256(der),
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
+			},
+		},
 	}, nil
 }
 
