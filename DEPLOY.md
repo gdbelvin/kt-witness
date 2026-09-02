@@ -21,8 +21,12 @@ restarts:
 - **`witness.db`** — every head we have attested. Losing it means starting again
   from trust-on-first-use, discarding the history we have witnessed.
 
+The container runs as uid 65532 (distroless nonroot), so the state directory
+must be writable by it.
+
 ```sh
 mkdir -p data && cp witness.example.json data/witness.json
+sudo chown -R 65532:65532 data
 $EDITOR data/witness.json          # set "name" to your witness identity
 
 docker compose run --rm kt-witness -config /data/witness.json -genkey
@@ -80,6 +84,24 @@ Watch for:
   tier B needs real cores.
 - **Disk**: `/tmp` needs ~1 GB for one proof in flight. The compose file mounts
   a tmpfs; on a memory-tight host use a disk-backed mount instead.
+
+## Building on arm64
+
+The Rust stage must target the *run* platform, so cross-building from an arm64
+Mac runs it under emulation and is slow (tens of minutes for the akd tree).
+Building on the amd64 server itself is native and quick. There is no apt-get in
+the image precisely because apt's GPG verification fails under emulation.
+
+To check a built image really targets amd64:
+
+```sh
+docker run --rm --platform linux/amd64 --entrypoint /usr/local/bin/kt-witness \
+  kt-witness:latest -version
+```
+
+If the sidecar were built for the wrong architecture the witness would still
+start and tiers A/A+ would work — only tier B would fail, quietly. Worth
+confirming rather than assuming.
 
 ## Operational bar
 

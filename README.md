@@ -65,6 +65,32 @@ operationally:
 
 Withholding *is* the enforcement mechanism. There is no alerting protocol.
 
+## Backfill
+
+Trust-on-first-use leaves everything before we showed up unattested. `-backfill`
+verifies published history first, and against production it covers a great deal:
+
+| Log | Range verified | Cost |
+|---|---|---|
+| Meta Messenger | **535,390 epochs** (89,395..624,784), zero gaps | ~625 requests, under 2 min |
+| Proton | 501 epochs — its entire ~90-day retention | ~500 requests, ~64 s |
+| Signal | not possible | — |
+
+Meta's is affordable because the bulk object listing turns ~625,000 requests into
+~625, and no proof blob is downloaded at all — the root chain is entirely in the
+key names. Signal cannot be backfilled: anchoring would need a historical signed
+root, and the API only offers proofs from a size we already witnessed.
+
+A contradiction found in history poisons the log exactly as a live one does. A
+*gap* does not: retention limits and partial writes both produce holes, and
+linkage cannot be checked across one. Results are served at `/history`.
+
+## Deployment
+
+See [DEPLOY.md](DEPLOY.md). Two builders (Go core, Rust sidecar) into a
+distroless image; state lives in a `/data` volume that must persist, because the
+signing key is the published identity.
+
 ## Usage
 
 ```sh
@@ -81,6 +107,8 @@ Endpoints:
 | `GET /<origin-hash>/checkpoint` | Latest cosigned checkpoint (C2SP `tlog-witness` monitoring endpoint) |
 | `GET /.well-known/tlog-witness-key` | Our published cosignature verifier key |
 | `GET /forks` | Recorded misbehaviour evidence |
+| `GET /history` | Verified published history, from a backfill pass |
+| `GET /audits?origin=` | Tier-B sampling decisions and results |
 | `GET /` | Human-readable status |
 
 ## What the Meta adapter attests — and what it does not

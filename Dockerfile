@@ -1,21 +1,26 @@
 # Two builders, because verification lives in two languages: the witness core is
 # Go, and AKD proof verification is only practical against facebook/akd in Rust.
 #
-# Target is linux/amd64. Build with:
 #   docker build --platform linux/amd64 -t kt-witness .
+#
+# Note there is no apt-get anywhere. That is deliberate: apt's GPG verification
+# fails under QEMU emulation ("at least one invalid signature was encountered"),
+# so any apt step would break cross-platform builds. Avoiding it entirely is
+# also just less to go wrong.
 
 # Deliberately NOT $BUILDPLATFORM: this must produce a binary for the *target*
-# platform. Building it natively on the build host would silently copy, say, an
-# arm64 binary into an amd64 image. On an amd64 server this stage is native and
-# fast; cross-building from arm64 runs under emulation and is slow.
+# platform. Building natively on the build host would silently copy, say, an
+# arm64 binary into an amd64 image — which fails only at runtime, and only for
+# tier B. On an amd64 host this stage is native and fast; cross-building from
+# arm64 runs under emulation and is slow.
+#
+# No system packages are needed: the sidecar uses rustls and webpki-roots, so
+# there is no OpenSSL to link and no CA bundle to install.
 FROM rust:1-slim-bookworm AS rust-builder
 WORKDIR /src
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        pkg-config libssl-dev ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
 COPY rust/kt-akd-verify/Cargo.toml rust/kt-akd-verify/Cargo.lock ./
 # Prime the dependency cache against a stub so a source-only change does not
-# rebuild the akd tree (which is slow).
+# rebuild the akd tree, which is slow.
 RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release && rm -rf src
 COPY rust/kt-akd-verify/src ./src
 RUN touch src/main.rs && cargo build --release
@@ -32,21 +37,27 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/kt-witness ./cmd/kt-witness
 
 
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --create-home --uid 10001 witness
+# Distroless "cc", not "base": the Rust sidecar is dynamically linked and needs
+# libgcc_s.so.1 for unwinding, which base-debian12 does not ship. With base the
+# image builds and the witness runs — only the sidecar fails, at the moment it is
+# first needed, in a log nobody is watching. Verified by executing the sidecar in
+# the built image, which is worth doing rather than assuming.
+#
+# This layer also provides the CA bundle the Go binary reads (it is CGO-free and
+# uses the system pool), and has no shell or package manager.
+FROM gcr.io/distroless/cc-debian12:nonroot
 
-COPY --from=go-builder  /out/kt-witness                         /usr/local/bin/kt-witness
-COPY --from=rust-builder /src/target/release/kt-akd-verify      /usr/local/bin/kt-akd-verify
+COPY --from=go-builder   /out/kt-witness                    /usr/local/bin/kt-witness
+COPY --from=rust-builder /src/target/release/kt-akd-verify  /usr/local/bin/kt-akd-verify
 
-# State lives here and must be a volume: the signing key is our published
-# identity, and the database is the record of what we have attested. Losing
-# either means the witness comes back as a different, amnesiac party.
+# State lives here and must be a volume. The signing key IS our published
+# identity, and the database is the record of what we have attested; losing
+# either means coming back as a different, amnesiac party.
+#
+# The image runs as uid 65532, so the host directory must be writable by it:
+#   chown -R 65532:65532 ./data
 VOLUME /data
 WORKDIR /data
-USER witness
 
 EXPOSE 8080
 
