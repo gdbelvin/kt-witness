@@ -41,7 +41,7 @@ func TestShippedConfigsBuild(t *testing.T) {
 					t.Errorf("origin %q appears twice", l.Origin)
 				}
 				seen[l.Origin] = true
-				if _, err := l.build(log); err != nil {
+				if _, err := l.build(log, nil); err != nil {
 					t.Errorf("%s (%s): %v", l.Origin, l.Type, err)
 				}
 			}

@@ -81,3 +81,71 @@ func TestAppHeadConflictsAreBounded(t *testing.T) {
 		t.Errorf("conflicts grew to %d, past the %d cap", n, maxAppHeadConflicts)
 	}
 }
+
+// The between-snapshot check is only as good as its memory. Held in RAM it
+// resets on every deploy, and coverage silently becomes "since the last
+// restart" while still reporting success.
+func TestLogEntriesSurviveReopen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+
+	var a, b [32]byte
+	a[0], b[0] = 1, 2
+
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.PutLogEntries("signal.org/kt", map[uint64][32]byte{4: a, 8: b}); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	// Reopen, as a restart would.
+	db2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db2.Close()
+
+	got, err := db2.LogEntries("signal.org/kt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[4] != a || got[8] != b {
+		t.Fatalf("entries did not survive a reopen: %v", got)
+	}
+
+	// Origins must not bleed into each other.
+	if other, err := db2.LogEntries("other.example/log"); err != nil || len(other) != 0 {
+		t.Errorf("entries leaked across origins: %v (err %v)", other, err)
+	}
+}
+
+// The entry set must not grow without bound, and the entries kept must be the
+// low-numbered ones: those recur across searches, while the frontier churns.
+func TestLogEntriesAreBoundedKeepingLowestIDs(t *testing.T) {
+	db := testStore(t)
+	entries := make(map[uint64][32]byte, maxLogEntriesPerOrigin+500)
+	for i := uint64(0); i < maxLogEntriesPerOrigin+500; i++ {
+		var h [32]byte
+		h[0] = byte(i)
+		entries[i] = h
+	}
+	if err := db.PutLogEntries("o", entries); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.LogEntries("o")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != maxLogEntriesPerOrigin {
+		t.Fatalf("kept %d entries, want the cap of %d", len(got), maxLogEntriesPerOrigin)
+	}
+	if _, ok := got[0]; !ok {
+		t.Error("the lowest entry id was evicted; low ids are the ones searches revisit")
+	}
+	if _, ok := got[maxLogEntriesPerOrigin+499]; ok {
+		t.Error("a frontier entry survived past the cap")
+	}
+}

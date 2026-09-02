@@ -7,6 +7,7 @@ package store
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,6 +39,12 @@ var (
 	// bucketAppHeads holds heads of OTHER logs observed inside a log we witness.
 	// Observations, not attestations: we cannot verify their signatures.
 	bucketAppHeads = []byte("app_heads")
+
+	// bucketLogEntries records individual log entries a source has opened and
+	// verified, so between-snapshot checks survive a restart. Without it the
+	// comparison only ever covers one process lifetime, and a container restart
+	// silently resets the coverage to nothing.
+	bucketLogEntries = []byte("log_entries")
 )
 
 // ErrRaced means the stored head changed between verification and persistence,
@@ -65,7 +72,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bucketHeads, bucketForks, bucketPoisoned, bucketAudits, bucketProgress, bucketHistory, bucketAppHeads} {
+		for _, b := range [][]byte{bucketHeads, bucketForks, bucketPoisoned, bucketAudits, bucketProgress, bucketHistory, bucketAppHeads, bucketLogEntries} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -496,4 +503,82 @@ func (s *Store) AppHeads() ([]*AppHead, error) {
 		return nil, fmt.Errorf("store: app heads: %w", err)
 	}
 	return out, nil
+}
+
+// --- verified log entries ----------------------------------------------------
+
+// maxLogEntriesPerOrigin bounds the retained entries per origin. The lowest ids
+// are kept: they are the ones a search revisits, while entries near the frontier
+// churn and are never seen again.
+const maxLogEntriesPerOrigin = 1 << 16
+
+func logEntryKey(origin string, id uint64) []byte {
+	k := make([]byte, 0, len(origin)+9)
+	k = append(k, origin...)
+	k = append(k, 0)
+	var b [8]byte
+	binary.BigEndian.PutUint64(b[:], id)
+	return append(k, b[:]...)
+}
+
+// LogEntries returns every verified entry recorded for an origin.
+func (s *Store) LogEntries(origin string) (map[uint64][32]byte, error) {
+	out := make(map[uint64][32]byte)
+	prefix := append([]byte(origin), 0)
+	err := s.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket(bucketLogEntries).Cursor()
+		for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+			if len(v) != 32 || len(k) != len(prefix)+8 {
+				continue
+			}
+			var h [32]byte
+			copy(h[:], v)
+			out[binary.BigEndian.Uint64(k[len(prefix):])] = h
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: log entries for %s: %w", origin, err)
+	}
+	return out, nil
+}
+
+// PutLogEntries records verified entries for an origin.
+//
+// It does not check for contradictions: that is the source's job, because only
+// the source knows what a contradiction means for its own log. This just makes
+// the observation durable.
+func (s *Store) PutLogEntries(origin string, entries map[uint64][32]byte) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketLogEntries)
+		for id, h := range entries {
+			if err := b.Put(logEntryKey(origin, id), h[:]); err != nil {
+				return err
+			}
+		}
+
+		// Trim from the high end. Collect first, then delete: mutating a bucket
+		// while a cursor walks it is asking for trouble.
+		prefix := append([]byte(origin), 0)
+		var keys [][]byte
+		c := b.Cursor()
+		for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = c.Next() {
+			keys = append(keys, append([]byte(nil), k...))
+		}
+		// Keys are byte-ordered, and the id is a big-endian suffix, so this
+		// slice is already in ascending id order. The tail is the frontier.
+		for i := maxLogEntriesPerOrigin; i < len(keys); i++ {
+			if err := b.Delete(keys[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("store: put log entries for %s: %w", origin, err)
+	}
+	return nil
 }

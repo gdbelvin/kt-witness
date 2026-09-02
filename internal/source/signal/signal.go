@@ -116,7 +116,8 @@ type Source struct {
 
 	// ledger accumulates the log entries every verified search has opened, so
 	// successive observations can be checked against each other.
-	ledger entryLedger
+	ledger       entryLedger
+	ledgerLoaded bool
 
 	// lastProof is the consistency proof carried by the most recent Fetch, for
 	// the VerifyConsistency call that follows it. The witness core always pairs
@@ -146,6 +147,10 @@ type Config struct {
 	// signature preimage, so getting them wrong makes verification fail closed.
 	SigningKey string
 	VRFKey     string
+
+	// Entries, if set, makes the cross-observation ledger durable. Without it
+	// the between-snapshot check only covers a single process lifetime.
+	Entries source.EntryStore
 
 	// SkipSearchProof disables opening the "distinguished" key. The proof ships
 	// in the same response as the tree head, so verifying it is free and on by
@@ -556,10 +561,23 @@ func (s *Source) verifyResponse(pb []byte) (uint64, hash, []hash, error) {
 		// here would libel Signal irreversibly. Withholding costs Signal nothing
 		// and gets a human's attention, which is the right trade until this code
 		// has a production record. See TODO.md.
+		if err := s.loadLedger(); err != nil {
+			return 0, zero, nil, err
+		}
 		if err := s.ledger.merge(res.Opened); err != nil {
 			return 0, zero, nil, fmt.Errorf(
 				"signal: %w; this contradicts append-only and needs a human look, but "+
 					"withholding rather than accusing", err)
+		}
+
+		if s.cfg.Entries != nil {
+			if err := s.cfg.Entries.PutLogEntries(s.cfg.Origin, res.Opened); err != nil {
+				// Persisting is best effort: failing to remember is not a reason
+				// to withhold a cosignature that is otherwise fully verified.
+				if s.cfg.Log != nil {
+					s.cfg.Log.Warn("persisting verified log entries", "origin", s.cfg.Origin, "err", err)
+				}
+			}
 		}
 
 		s.lastSearch = res
@@ -701,4 +719,31 @@ func varintOf(m message, field int) uint64 {
 		return 0
 	}
 	return binary.BigEndian.Uint64(v)
+}
+
+// loadLedger populates the cross-observation ledger from durable storage, once.
+//
+// A restart would otherwise reset between-snapshot coverage to nothing while
+// still reporting success, which is the quiet kind of wrong.
+func (s *Source) loadLedger() error {
+	if s.ledgerLoaded || s.cfg.Entries == nil {
+		s.ledgerLoaded = true
+		return nil
+	}
+	seen, err := s.cfg.Entries.LogEntries(s.cfg.Origin)
+	if err != nil {
+		return fmt.Errorf("signal: loading verified entries: %w", err)
+	}
+	if s.ledger.seen == nil {
+		s.ledger.seen = make(map[uint64]hash, len(seen))
+	}
+	for id, h := range seen {
+		s.ledger.seen[id] = h
+	}
+	s.ledgerLoaded = true
+	if s.cfg.Log != nil && len(seen) > 0 {
+		s.cfg.Log.Info("restored verified log entries",
+			"origin", s.cfg.Origin, "entries", len(seen))
+	}
+	return nil
 }

@@ -191,3 +191,15 @@ type Scanner interface {
 	Source
 	ScanApplications(ctx context.Context) ([]AppHead, error)
 }
+
+// EntryStore persists individual verified log entries so that between-snapshot
+// checks survive a restart.
+//
+// A source that compares what it sees now against what it saw before is only as
+// good as its memory. Held in RAM, that memory resets on every deploy, and the
+// coverage silently becomes "since the last restart" rather than "since we
+// started witnessing".
+type EntryStore interface {
+	LogEntries(origin string) (map[uint64][32]byte, error)
+	PutLogEntries(origin string, entries map[uint64][32]byte) error
+}
