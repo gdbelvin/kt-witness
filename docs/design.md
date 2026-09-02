@@ -11,6 +11,7 @@ unique to that deployment:
 | [proton.md](proton.md) | Proton Mail, the one directory published in full |
 | [signal.md](signal.md) | Signal, the one with no published root |
 | [apple.md](apple.md) | Apple, the one with no published directory |
+| [landscape.md](landscape.md) | The whole transparency-log world: what exists, what is covered, what is deliberately excluded |
 
 ## The problem
 
@@ -162,10 +163,13 @@ Meta is currently the only derived-head source.
    ──────────       │  (all KT-specific cryptography lives   │
                     │             only in here)              │
   thelemail  ──────▶│  c2sp    tier A / B                    │
+  static CT  ──────▶│  c2sp  + staticct    tier A            │
   Meta       ──────▶│  akd     tier A+ / B   derived head    │
+  WhatsApp   ──────▶│  akd     tier A+ / B   derived head    │
   Proton     ──────▶│  proton  tier A+ / B                   │
   Signal     ──────▶│  signal  tier A + per-label spot check │
-  Apple      ──────▶│  apple   tier A                        │
+  Apple KT   ──────▶│  apple   tier A                        │
+  Apple AT   ──────▶│  apple   tier A                        │
                     └───────────────────┬────────────────────┘
                                         │  Source interface
                                         │  Origin() Tier() DerivedHead()

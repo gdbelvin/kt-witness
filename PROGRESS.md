@@ -5,12 +5,14 @@ differently than expected. Written to be read cold.
 
 ## Status
 
-Five Key Transparency deployments witnessed by one process, verified live
-against production. Design and per-ecosystem detail is in [docs/](docs/).
+**Ten origins** across six protocol families, witnessed by one process and
+verified live against production. Design and per-ecosystem detail is in
+[docs/](docs/); [docs/landscape.md](docs/landscape.md) surveys everything else
+that exists.
 
-Three of the five are construction audited — the tier that can see an illegal
-mutation. Signal is head-consistency plus a per-label spot check verified on
-every poll; Apple is head-consistency only.
+Four are construction audited — the tier that can see an illegal mutation.
+Signal is head-consistency plus a per-label spot check verified on every poll;
+Apple and the CT logs are head-consistency only.
 
 | Log | Tier | What is proven |
 |---|---|---|
@@ -19,6 +21,9 @@ every poll; Apple is head-consistency only.
 | `proton.me/kt/v1` | **A+ / B** | Epoch hash chain, the WebPKI certificate committing to each chain hash, and a full construction audit: 200,714,006 leaves rebuilt, and the step between two epochs replayed from the published diff |
 | `signal.org/kt` | **A** | Service root derived from three auditors, confirmed by Signal's signature, append-only across observations — plus a full search proof for `distinguished` on every poll (VRF → prefix tree → batch inclusion → commitment) and a cross-observation check that no log entry changed contents |
 | `apple.com/kt/top-level-tree` | **A** | ECDSA-signed head, append-only via Apple's consistency proofs |
+| `whatsapp.kt/v2` | **A+ / B** | Root-chain continuity, and sampled AKD construction proofs. The largest KT deployment there is, and it needed no code |
+| `apple.com/at/pcc` | **A** | Apple's Transparency log for Private Cloud Compute — the only Apple tree whose inclusion proofs a third party can verify |
+| 3 × static CT | **A** | C2SP checkpoint under the RFC 6962 tree head signature, append-only from tiles. All 80 logs in Google's list verify; three are configured |
 
 Plus seven Apple per-application trees tracked as **observations** — including
 two iMessage trees — which are deliberately never cosigned.

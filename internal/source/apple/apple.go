@@ -380,6 +380,15 @@ const scanWindow = 200
 // rollback, a repeated revision with a different root, or a change of signing key
 // visible — none of which requires verifying a signature.
 func (s *Source) ScanApplications(ctx context.Context) ([]source.AppHead, error) {
+	// Only the Top-Level Tree is a log of per-application heads. Every other
+	// Apple tree this adapter can be pointed at — the PCC Apple Transparency
+	// log, say — has leaves of an entirely different shape, and parsing those as
+	// application heads would write nonsense into applications.json, which is
+	// published output. Returning nothing is right: there is nothing to observe.
+	if s.cfg.TreeID != TopLevelTreeID {
+		return nil, nil
+	}
+
 	head, err := s.Fetch(ctx, nil)
 	if err != nil {
 		return nil, err

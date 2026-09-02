@@ -262,3 +262,24 @@ func TestAppleRootIsPinnedAndCorrect(t *testing.T) {
 		t.Fatal("client is not pinned to a root pool; it would inherit the host trust store")
 	}
 }
+
+// Only the Top-Level Tree carries per-application heads. Any other tree scanned
+// as though it did would put nonsense into applications.json, which is
+// published, so a non-TLT source must observe nothing at all.
+func TestScanApplicationsOnlyForTopLevelTree(t *testing.T) {
+	s, err := New(Config{
+		Origin: "apple.com/at/pcc", TreeID: ATLogTreeID, PublicKeyDER: ATLogPublicKey,
+		LogType: LogTypeATLog, Application: ApplicationPCC,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No network should be touched: the guard returns before Fetch.
+	heads, err := s.ScanApplications(context.Background())
+	if err != nil {
+		t.Fatalf("scanning a non-TLT tree should be a no-op, got: %v", err)
+	}
+	if len(heads) != 0 {
+		t.Fatalf("a non-TLT tree reported %d application heads", len(heads))
+	}
+}
