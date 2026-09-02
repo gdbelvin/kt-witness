@@ -26,12 +26,17 @@ type stubSource struct {
 	// consistencyErr is what VerifyConsistency returns; nil means "proven".
 	consistencyErr error
 	verifyCalled   bool
+	// fetchErr, when set, is returned by Fetch instead of a head.
+	fetchErr error
 }
 
 func (s *stubSource) Origin() string    { return s.origin }
 func (s *stubSource) Tier() source.Tier { return source.TierA }
 func (s *stubSource) DerivedHead() bool { return s.derived }
 func (s *stubSource) Fetch(context.Context, *source.Head) (*source.Head, error) {
+	if s.fetchErr != nil {
+		return nil, s.fetchErr
+	}
 	return s.head, nil
 }
 func (s *stubSource) VerifyConsistency(_ context.Context, _, _ *source.Head) error {
@@ -313,5 +318,47 @@ func TestDerivedHeadRegressionWithholdsWithoutAccusing(t *testing.T) {
 				t.Fatalf("no fork evidence should be recorded, got %d", len(forks))
 			}
 		})
+	}
+}
+
+// A Source can reach a conclusive contradiction while fetching — Signal's
+// auditors disagreeing on the derived service root, for instance. That evidence
+// must be recorded and the log poisoned, exactly as for the other gates.
+func TestForkRaisedDuringFetchIsRecorded(t *testing.T) {
+	w, db := newTestWitness(t)
+	origin := "example.com/log"
+
+	src := &stubSource{origin: origin, head: head(t, origin, 10, hashOf(1))}
+	if _, err := w.Process(context.Background(), src); err != nil {
+		t.Fatal(err)
+	}
+
+	src.fetchErr = &source.ForkError{
+		Origin: origin,
+		Reason: "auditors disagree on the derived root",
+		Next:   &source.Head{Origin: origin, Size: 11, Signed: []byte("raw evidence")},
+	}
+
+	_, err := w.Process(context.Background(), src)
+	var fe *source.ForkError
+	if !errors.As(err, &fe) {
+		t.Fatalf("want ForkError, got %v", err)
+	}
+
+	forks, _ := db.Forks()
+	if len(forks) != 1 {
+		t.Fatalf("a fork raised during Fetch must be persisted, got %d records", len(forks))
+	}
+	if string(forks[0].NextSigned) != "raw evidence" {
+		t.Errorf("verbatim evidence must be retained, got %q", forks[0].NextSigned)
+	}
+	if forked, _ := db.IsForked(origin); !forked {
+		t.Fatal("the log must be poisoned")
+	}
+
+	// And it must stay refused even if the source starts behaving.
+	src.fetchErr = nil
+	if _, err := w.Process(context.Background(), src); !errors.As(err, &fe) {
+		t.Fatal("a poisoned log must stay refused")
 	}
 }

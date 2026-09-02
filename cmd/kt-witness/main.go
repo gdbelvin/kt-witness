@@ -76,7 +76,7 @@ type logConfig struct {
 	MaxEpochsPerRound int64    `json:"max_epochs_per_round"`
 }
 
-func (l logConfig) build() (source.Source, error) {
+func (l logConfig) build(log *slog.Logger) (source.Source, error) {
 	switch l.Type {
 	case "", "c2sp":
 		return c2sp.New(c2sp.Config{Origin: l.Origin, BaseURL: l.BaseURL, VKey: l.VKey})
@@ -100,6 +100,7 @@ func (l logConfig) build() (source.Source, error) {
 			Endpoint:    l.Endpoint,
 			AuditorKeys: l.AuditorKeys,
 			MinAuditors: l.MinAuditors,
+			Log:         log,
 		})
 	default:
 		return nil, fmt.Errorf("log %q: unknown type %q", l.Origin, l.Type)
@@ -212,7 +213,7 @@ func run(cfg *config, log *slog.Logger, once bool) error {
 
 	var sources []source.Source
 	for _, l := range cfg.Logs {
-		src, err := l.build()
+		src, err := l.build(log)
 		if err != nil {
 			return err
 		}

@@ -98,6 +98,14 @@ func (w *Witness) Process(ctx context.Context, src source.Source) (*Outcome, err
 
 	next, err := src.Fetch(ctx, prev)
 	if err != nil {
+		// A Source can reach a conclusive contradiction while fetching — Signal's
+		// auditors disagreeing on the derived root, say. That evidence must be
+		// persisted here; nothing downstream does it, and an unrecorded fork is
+		// the one outcome this design must never produce.
+		var fe *source.ForkError
+		if errors.As(err, &fe) {
+			return nil, w.fork(fe)
+		}
 		return nil, fmt.Errorf("witness: fetch %s: %w", origin, err)
 	}
 	if next.Origin != origin {

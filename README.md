@@ -19,7 +19,7 @@ overpromises, so the distinction is enforced in the type system
 | **A** — checkpoint witness | The sequence of signed roots is append-only (split-view detection) | Negligible |
 | **A+** — root-chain continuity | Additionally, continuity across the log's *entire* published history, where layout permits it from metadata alone | Negligible |
 | **B** — construction audit | Additionally, the tree is correctly built, by replaying the log's own proofs | Large (see below) |
-| **S** — signed head | Weaker than A: heads are authentic and equivocation at a given size is detectable, but append-only between observations is *not* proven. No adapter currently needs it; kept because the distinction is worth naming |
+| **S** — signed head | Weaker than A: heads are authentic and equivocation at a given size is detectable, but append-only between observations is *not* proven. No adapter needs it today; kept because the distinction is worth naming | Negligible |
 
 ## Status
 

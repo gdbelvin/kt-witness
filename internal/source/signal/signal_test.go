@@ -56,6 +56,8 @@ type auditor struct {
 	rootOverride *hash
 	// tamperRootAfterSigning swaps the served root without re-signing it.
 	tamperRootAfterSigning *hash
+	// suppressSignature emits the tree head with no signature at all.
+	suppressSignature bool
 }
 
 // fakeSignal builds responses over a real reference tree, so the consistency
@@ -111,7 +113,9 @@ func (f *fakeSignal) build(s *Source, lastSize uint64) []byte {
 
 		// AuditorTreeHead{1:tree_size, 2:timestamp, 3:signature}
 		ah := append(varField(1, a.size), varField(2, uint64(f.timestamp))...)
-		ah = append(ah, lenField(3, sig)...)
+		if !a.suppressSignature {
+			ah = append(ah, lenField(3, sig)...)
+		}
 
 		// FullAuditorTreeHead{1:tree_head, 2:root_value, 3:consistency, 4:public_key}
 		fa := append(lenField(1, ah), lenField(2, served[:])...)
@@ -368,5 +372,24 @@ func TestSignablePreimageLayout(t *testing.T) {
 	}
 	if binary.BigEndian.Uint64(got[want-48:want-40]) != 1 {
 		t.Fatal("tree size not encoded big-endian where expected")
+	}
+}
+
+// An auditor that has caught up but supplies no signature must not be counted:
+// otherwise MinAuditors silently means fewer verified auditors than it says.
+func TestCaughtUpAuditorWithoutSignatureIsNotCounted(t *testing.T) {
+	s, f := newFake(t, 20, 20, 15)
+	s.cfg.MinAuditors = 2
+
+	// Strip the caught-up auditor's signature by giving it a key nobody signs
+	// with: rebuild its entry with an empty signature.
+	f.auditors[0].suppressSignature = true
+
+	_, err := s.Fetch(context.Background(), nil)
+	if err == nil {
+		t.Fatal("an unsigned auditor root must not satisfy the quorum")
+	}
+	if !strings.Contains(err.Error(), "need 2") {
+		t.Fatalf("want a quorum error, got %v", err)
 	}
 }

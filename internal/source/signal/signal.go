@@ -52,6 +52,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -125,6 +126,10 @@ type Config struct {
 	// signature preimage, so getting them wrong makes verification fail closed.
 	SigningKey string
 	VRFKey     string
+
+	// Log, if set, reports each auditor's tree size so lag between them stays
+	// observable.
+	Log *slog.Logger
 }
 
 func New(cfg Config) (*Source, error) {
@@ -341,6 +346,7 @@ func (s *Source) verifyResponse(pb []byte) (uint64, hash, []hash, error) {
 
 	// Step 1 and 2: each auditor's signed root, run forward to the service size.
 	derived := map[string]hash{}
+	sizes := map[string]uint64{}
 	for _, faRaw := range fth[4] {
 		fa := parse(faRaw)
 		pub := first(fa, 4)
@@ -366,16 +372,17 @@ func (s *Source) verifyResponse(pb []byte) (uint64, hash, []hash, error) {
 		var serviceRoot hash
 		switch {
 		case aSize == serviceSize:
-			// Caught up: the auditor's own root is the service root.
-			if len(rootBytes) != 32 {
+			// Caught up: the auditor's own root is the service root. It still
+			// has to be signed — an unsigned root must never count towards the
+			// quorum, or MinAuditors quietly means less than it says.
+			if len(rootBytes) != 32 || len(sig) != ed25519.SignatureSize {
 				continue
 			}
-			copy(serviceRoot[:], rootBytes)
-			if len(sig) == ed25519.SignatureSize &&
-				!ed25519.Verify(pub, s.signable(pub, aSize, aTS, rootBytes), sig) {
+			if !ed25519.Verify(pub, s.signable(pub, aSize, aTS, rootBytes), sig) {
 				return 0, zero, nil, fmt.Errorf("signal: auditor %s signature does not verify",
 					hex.EncodeToString(pub)[:16])
 			}
+			copy(serviceRoot[:], rootBytes)
 		default:
 			if len(rootBytes) != 32 || len(sig) != ed25519.SignatureSize {
 				continue
@@ -401,10 +408,22 @@ func (s *Source) verifyResponse(pb []byte) (uint64, hash, []hash, error) {
 				return 0, zero, nil, fmt.Errorf("signal: auditor %s: %w", hex.EncodeToString(pub)[:16], err2)
 			} else {
 				derived[hex.EncodeToString(pub)] = serviceRoot
+				sizes[hex.EncodeToString(pub)] = aSize
 				continue
 			}
 		}
 		derived[hex.EncodeToString(pub)] = serviceRoot
+		sizes[hex.EncodeToString(pub)] = aSize
+	}
+
+	if s.cfg.Log != nil {
+		// Per-auditor lag was visible when each auditor was its own log; now
+		// that they are cross-checked into one head, log it explicitly or it
+		// disappears.
+		for key, size := range sizes {
+			s.cfg.Log.Info("signal auditor",
+				"auditor", key[:16], "size", size, "behind_service", serviceSize-size)
+		}
 	}
 
 	if len(derived) < s.cfg.MinAuditors {
@@ -430,6 +449,9 @@ func (s *Source) verifyResponse(pb []byte) (uint64, hash, []hash, error) {
 					"auditors disagree on the service root at size %d: %s implies %x, %s implies %x "+
 						"(at least one signed a root from a different history; the response does not say which)",
 					serviceSize, refKey[:16], root, k[:16], v),
+				// The whole response, verbatim, so the disagreement can be
+				// reproduced by anyone from the signed bytes alone.
+				Next: &source.Head{Origin: s.cfg.Origin, Size: int64(serviceSize), Signed: pb},
 			}
 		}
 	}

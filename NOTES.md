@@ -78,14 +78,20 @@ and the sampling argument would need rethinking from scratch.
 
 ### Attribution in a Signal incident
 
-The three Signal auditors are witnessed as three separate origins, so a fork is
-recorded against whichever origin observed it. That is right when an *auditor*
-equivocates. But if Signal's *service* tree forked, the evidence would land on
-whichever auditor origin we happened to see it through, and `/forks` would read
-"auditor X forked" when the story is "Signal's tree forked, seen via auditor X".
-Before disclosing anything here, check whether the other two origins show the
-same contradiction — agreement across auditors points at the service, divergence
-points at the auditor.
+Signal is now witnessed as one origin (`signal.org/kt`), not three, because the
+three auditors are cross-checked into a single derived service root rather than
+tracked separately. That makes attribution *better*, not worse:
+
+- An auditor whose signed root fails its own consistency proof is identified by
+  key in the error — the fault is that auditor's.
+- Auditors whose roots are individually valid but imply different service roots
+  produce the disagreement fork. At least one signed a root from a different
+  history, and the response does not say which; the recorded evidence is the
+  whole raw response so a third party can reach their own conclusion.
+- A missing or wrong service signature over the derived root implicates Signal,
+  not an auditor.
+
+Say which of those three it was before disclosing anything.
 
 ## IETF keytrans: deliberately skipped
 
