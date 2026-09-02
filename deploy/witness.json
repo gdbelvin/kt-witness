@@ -1,0 +1,44 @@
+{
+  "name": "witness.kt.gdbsecurity.com",
+  "listen": ":8080",
+  "db": "/data/witness.db",
+  "key_file": "/data/witness.key",
+  "export_dir": "/data/public",
+  "poll_interval": "60s",
+  "max_sign_delay": "120s",
+  "refresh_interval": "1h",
+  "audit": {
+    "sidecar_path": "/usr/local/bin/kt-akd-verify",
+    "sample_rate": 0.1,
+    "interval": "5m",
+    "timeout": "10m"
+  },
+  "logs": [
+    {
+      "origin": "thelemail.com/keys",
+      "base_url": "https://tlog.thelemail.com/",
+      "vkey": "thelemail.com/keys+76ead63c+ASduViYkPgYHzuTuDnuTdEkjR/DIprnavuFA3vom4YZT",
+      "verify_entries": true
+    },
+    {
+      "type": "akd",
+      "origin": "meta.messenger.kt/v1",
+      "log_directory": "https://d2e61astky5m6k.cloudfront.net",
+      "plexi_namespace_url": "https://plexi.key-transparency.cloudflare.com/namespaces/messenger.key-transparency.v1"
+    },
+    {
+      "type": "proton",
+      "origin": "proton.me/kt/v1",
+      "api_base": "https://api.protonmail.ch"
+    },
+    {
+      "type": "signal",
+      "origin": "signal.org/kt",
+      "min_auditors": 2
+    },
+    {
+      "type": "apple",
+      "origin": "apple.com/kt/top-level-tree"
+    }
+  ]
+}

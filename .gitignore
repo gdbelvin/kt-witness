@@ -1,6 +1,10 @@
 # Signing keys must never be committed.
 *.key
-witness.json
+
+# The operator's live config, at the repo root only. Anchored: unanchored it
+# also swallowed deploy/witness.json, so the staged deployment config was
+# silently never committed.
+/witness.json
 
 # Local state.
 *.db
