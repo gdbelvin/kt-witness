@@ -51,6 +51,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/forks", s.forks)
 	mux.HandleFunc("/audits", s.audits)
 	mux.HandleFunc("/history", s.history)
+	mux.HandleFunc("/applications", s.applications)
 	return mux
 }
 
@@ -208,5 +209,31 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 		"note": "verified published history, from a backfill pass. Gaps are recorded, " +
 			"not treated as evidence: retention limits and partial writes both produce them.",
 		"histories": hs,
+	})
+}
+
+// applications publishes per-application heads observed inside a witnessed log.
+//
+// Kept separate from the cosigned checkpoints on purpose. These are Apple
+// per-application heads read out of the Top-Level Tree — including iMessage,
+// whose own tree is not publicly served — but they are signed by keys Apple does
+// not publish, and are not yet bound to the root we verify. So they are reported
+// as observations and never cosigned, and the note says so rather than leaving a
+// reader to assume the same footing as everything else here.
+func (s *Server) applications(w http.ResponseWriter, r *http.Request) {
+	heads, err := s.Store.AppHeads()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	enc.Encode(map[string]any{
+		"note": "OBSERVATIONS, NOT ATTESTATIONS. These are per-application tree heads " +
+			"read from the leaves of a log we witness. They are signed by keys the operator " +
+			"does not publish, and are not bound to the verified root, so they are never " +
+			"cosigned. Contradictions are recorded for a human to judge.",
+		"applications": heads,
 	})
 }

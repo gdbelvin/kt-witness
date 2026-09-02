@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -376,6 +377,11 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 		}()
 	}
 
+	// Scanning surfaces other logs' heads carried inside a log we witness —
+	// Apple's Top-Level Tree is a log of per-application heads, iMessage among
+	// them. Observations only: they are recorded, never cosigned.
+	scanApplications(ctx, db, sources, log)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -384,6 +390,7 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 		case <-time.After(pollInterval):
 		}
 		round(ctx, w, sources, log)
+		scanApplications(ctx, db, sources, log)
 	}
 }
 
@@ -426,6 +433,42 @@ func runBackfill(ctx context.Context, db *store.Store, sources []source.Source, 
 		log.Info("backfill complete", "origin", src.Origin(),
 			"from", res.From, "to", res.To, "epochs", res.Epochs,
 			"gaps", len(res.Gaps), "took", time.Since(start).Round(time.Second).String())
+	}
+}
+
+func scanApplications(ctx context.Context, db *store.Store, sources []source.Source, log *slog.Logger) {
+	now := time.Now().UTC()
+	for _, src := range sources {
+		sc, ok := src.(source.Scanner)
+		if !ok {
+			continue
+		}
+		heads, err := sc.ScanApplications(ctx)
+		if err != nil {
+			log.Warn("application scan", "origin", src.Origin(), "err", err)
+			continue
+		}
+		for _, h := range heads {
+			obs := &store.AppHead{
+				Origin: src.Origin(), TreeID: h.TreeID, Application: h.Application,
+				Name: h.Name, LogSize: h.LogSize, Revision: h.Revision,
+				RootHash:       hex.EncodeToString(h.RootHash),
+				SigningKeyHash: hex.EncodeToString(h.SigningKeyHash),
+			}
+			merged, err := db.ObserveAppHead(now, obs)
+			if err != nil {
+				log.Warn("recording application head", "tree", h.TreeID, "err", err)
+				continue
+			}
+			// Conflicts are not evidence of misbehaviour we can stand behind —
+			// these heads are not signature-verified — but they are exactly what
+			// a human should look at.
+			if n := len(merged.Conflicts); n > 0 {
+				log.Error("CONTRADICTION IN OBSERVED APPLICATION HEAD",
+					"application", h.Name, "tree", h.TreeID,
+					"latest", merged.Conflicts[n-1])
+			}
+		}
 	}
 }
 

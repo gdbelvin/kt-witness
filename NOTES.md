@@ -103,6 +103,30 @@ wire. The draft's auditor is also a stateful push consumer that replays every
 log entry — a different shape from a pull-based witness. Revisit when a public
 deployment exists.
 
+## Apple: binding iMessage heads to the verified root
+
+The Top-Level Tree's leaves carry per-application heads, including IDS_MESSAGING.
+We read and track them, but two links are missing before they could be attested
+rather than merely observed:
+
+1. **Leaf-to-root binding.** `log_inclusion_proof` is live but rejects every
+   request shape tried; its request message is not in the protos Apple ships
+   (only `PaclInclusionProofRequest` is). `LogLeavesForRevision` would give
+   leaves *with* inclusion proofs against a signed head — exactly what is needed
+   — but that endpoint 404s on the researcher API. Finding either would bind an
+   iMessage head into a root Apple signs with the key we already pin, which is
+   the whole game: it needs no per-application key at all.
+2. **The hash construction.** Apple's `Auditor.swift` uses `SHA256.leaf(data:)`
+   and a `MerkleTree<SHA256>`, but `MerkleTree.swift` was not captured. RFC 6962
+   hashing (`H(0x00||leaf)`, `H(0x01||l||r)`) is the obvious hypothesis and is
+   cheap to test once a proof can be fetched: fold it and compare against the
+   signed root.
+
+Per-application signing keys are a dead end by comparison: `list_trees` omits the
+IDS trees, `log_head` and `log_leaves` return INVALID_REQUEST for them by id, and
+`PerApplicationTreeConfigNode` (which holds the key) lives at index 0 of a tree
+we cannot read.
+
 ## Apple: what would unlock tier A
 
 The Top-Level Tree is witnessable today at tier S. Two things block tier A, and

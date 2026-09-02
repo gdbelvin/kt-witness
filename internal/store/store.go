@@ -33,6 +33,10 @@ var (
 
 	// bucketHistory holds the result of backfilling a log's published history.
 	bucketHistory = []byte("history")
+
+	// bucketAppHeads holds heads of OTHER logs observed inside a log we witness.
+	// Observations, not attestations: we cannot verify their signatures.
+	bucketAppHeads = []byte("app_heads")
 )
 
 // ErrRaced means the stored head changed between verification and persistence,
@@ -60,7 +64,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bucketHeads, bucketForks, bucketPoisoned, bucketAudits, bucketProgress, bucketHistory} {
+		for _, b := range [][]byte{bucketHeads, bucketForks, bucketPoisoned, bucketAudits, bucketProgress, bucketHistory, bucketAppHeads} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -365,6 +369,107 @@ func (s *Store) Histories() ([]*History, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store: histories: %w", err)
+	}
+	return out, nil
+}
+
+// AppHead is what we have observed about another log's head, seen inside a log
+// we witness.
+//
+// Deliberately separate from Record: these are observations, not attestations.
+// We never cosign them, because we cannot verify their signatures.
+type AppHead struct {
+	Origin      string `json:"origin"`
+	TreeID      uint64 `json:"tree_id"`
+	Application uint64 `json:"application"`
+	Name        string `json:"name"`
+
+	LogSize  uint64 `json:"log_size"`
+	Revision uint64 `json:"revision"`
+	RootHash string `json:"root_hash"`
+
+	SigningKeyHash string `json:"signing_key_hash"`
+
+	FirstSeen time.Time `json:"first_seen"`
+	LastSeen  time.Time `json:"last_seen"`
+
+	// Conflicts records contradictions: a revision reappearing with a different
+	// root, a size going backwards, or the signing key changing.
+	Conflicts []string `json:"conflicts,omitempty"`
+}
+
+func appHeadKey(origin string, treeID uint64) []byte {
+	return []byte(fmt.Sprintf("%s|%020d", origin, treeID))
+}
+
+// ObserveAppHead merges a new observation, recording any contradiction against
+// what we saw before.
+func (s *Store) ObserveAppHead(now time.Time, obs *AppHead) (*AppHead, error) {
+	var out *AppHead
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketAppHeads)
+		key := appHeadKey(obs.Origin, obs.TreeID)
+
+		cur := new(AppHead)
+		if raw := b.Get(key); raw != nil {
+			if err := json.Unmarshal(raw, cur); err != nil {
+				return err
+			}
+		} else {
+			*cur = *obs
+			cur.FirstSeen = now
+		}
+
+		// Contradictions are recorded rather than acted on: these heads are not
+		// signature-verified, so they are evidence to look at, not grounds to
+		// refuse anything.
+		if obs.Revision == cur.Revision && obs.RootHash != cur.RootHash {
+			cur.Conflicts = append(cur.Conflicts, fmt.Sprintf(
+				"revision %d seen with two roots: %s then %s", obs.Revision, cur.RootHash, obs.RootHash))
+		}
+		if obs.LogSize < cur.LogSize {
+			cur.Conflicts = append(cur.Conflicts, fmt.Sprintf(
+				"log size went backwards: %d then %d", cur.LogSize, obs.LogSize))
+		}
+		if cur.SigningKeyHash != "" && obs.SigningKeyHash != cur.SigningKeyHash {
+			cur.Conflicts = append(cur.Conflicts, fmt.Sprintf(
+				"signing key changed: %s then %s", cur.SigningKeyHash, obs.SigningKeyHash))
+		}
+
+		if obs.LogSize >= cur.LogSize {
+			cur.LogSize, cur.Revision, cur.RootHash = obs.LogSize, obs.Revision, obs.RootHash
+			cur.SigningKeyHash = obs.SigningKeyHash
+		}
+		cur.Name, cur.Application, cur.TreeID, cur.Origin = obs.Name, obs.Application, obs.TreeID, obs.Origin
+		cur.LastSeen = now
+
+		enc, err := json.Marshal(cur)
+		if err != nil {
+			return err
+		}
+		out = cur
+		return b.Put(key, enc)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: observe app head: %w", err)
+	}
+	return out, nil
+}
+
+func (s *Store) AppHeads() ([]*AppHead, error) {
+	var out []*AppHead
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketAppHeads).ForEach(func(_, raw []byte) error {
+			a := new(AppHead)
+			if err := json.Unmarshal(raw, a); err != nil {
+				return err
+			}
+			out = append(out, a)
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: app heads: %w", err)
 	}
 	return out, nil
 }

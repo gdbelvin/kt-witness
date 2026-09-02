@@ -267,3 +267,137 @@ func (s *Source) verifyLogHead(body []byte) (uint64, []byte, error) {
 func (s *Source) VerifyConsistency(context.Context, *source.Head, *source.Head) error {
 	return nil
 }
+
+// Applications are the enum values Apple uses in its log heads.
+var Applications = map[uint64]string{
+	1: "IDS_MESSAGING",
+	2: "IDS_FACETIME",
+	3: "IDS_MULTIPLEX",
+	5: "PRIVATE_CLOUD_COMPUTE",
+}
+
+// scanWindow is how many trailing leaves to read. Applications appear
+// interleaved, so a window well above the number of applications is needed to
+// see each one at least once; 200 covers every application observed in practice
+// several times over.
+const scanWindow = 200
+
+// ScanApplications reads the tail of the Top-Level Tree and returns the
+// per-application heads committed into it.
+//
+// This is the only public route to iMessage's Key Transparency state. Its own
+// tree is absent from list_trees and the API rejects requests for it by id — but
+// the Top-Level Tree is a log of per-application heads, and IDS_MESSAGING heads
+// are in there, readable by anyone.
+//
+// # What these observations are worth
+//
+// Each head is a SignedObject, but signed by that application's own key, which
+// Apple does not publish anywhere reachable — the leaf carries only the key's
+// hash. And the leaf is not yet bound to the Top-Level Tree root we do verify,
+// because the inclusion-proof request schema is absent from Apple's published
+// protos and could not be determined by probing.
+//
+// So these are observations, not attestations. They are never cosigned. What
+// they still support is real: tracking each application's head over time makes a
+// rollback, a repeated revision with a different root, or a change of signing key
+// visible — none of which requires verifying a signature.
+func (s *Source) ScanApplications(ctx context.Context) ([]source.AppHead, error) {
+	head, err := s.Fetch(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	size := uint64(head.Size)
+	start := uint64(0)
+	if size > scanWindow {
+		start = size - scanWindow
+	}
+
+	body, err := s.post(ctx, "log_leaves", s.logLeavesRequest(start, size))
+	if err != nil {
+		return nil, err
+	}
+
+	resp := pbwire.Parse(body)
+	if len(resp[3]) == 0 {
+		return nil, fmt.Errorf("apple: log_leaves returned no leaves (status %d)", pbwire.Uint64(resp, 1))
+	}
+
+	var out []source.AppHead
+	for _, leaf := range resp[3] {
+		lf := pbwire.Parse(leaf)
+		// Only TLT_NODE (3) leaves carry a per-application head.
+		if pbwire.Uint64(lf, 1) != 3 {
+			continue
+		}
+		node := pbwire.Parse(pbwire.First(lf, 2))
+
+		// TopLevelTreeNode{patHead = 1} wrapping SignedObject{object=1, signature=2}.
+		so := pbwire.Parse(pbwire.First(node, 1))
+		inner := pbwire.First(so, 1)
+		if inner == nil {
+			continue
+		}
+		sig := pbwire.Parse(pbwire.First(so, 2))
+
+		// LogHead{logSize=2, logHeadHash=3, revision=4, application=6, treeId=7}.
+		lh := pbwire.Parse(inner)
+		treeID := pbwire.Uint64(lh, 7)
+		if treeID == 0 {
+			continue
+		}
+		app := pbwire.Uint64(lh, 6)
+		out = append(out, source.AppHead{
+			TreeID:         treeID,
+			Application:    app,
+			Name:           Applications[app],
+			LogSize:        pbwire.Uint64(lh, 2),
+			Revision:       pbwire.Uint64(lh, 4),
+			RootHash:       pbwire.First(lh, 3),
+			SigningKeyHash: pbwire.First(sig, 2),
+			LeafIndex:      pbwire.Uint64(lf, 3),
+		})
+	}
+	return out, nil
+}
+
+// logLeavesRequest builds LogLeavesRequest{version, treeId, startIndex, endIndex,
+// startMergeGroup, endMergeGroup}.
+//
+// The merge-group fields are not optional in practice: omitting them returns
+// HTTP 200 with an empty leaf list rather than an error, which reads exactly
+// like a log that has no leaves.
+func (s *Source) logLeavesRequest(start, end uint64) []byte {
+	var b []byte
+	b = pbwire.AppendTag(b, 1, 0)
+	b = pbwire.AppendVarint(b, requestVersion)
+	b = pbwire.AppendTag(b, 2, 0)
+	b = pbwire.AppendVarint(b, s.cfg.TreeID)
+	b = pbwire.AppendTag(b, 4, 0)
+	b = pbwire.AppendVarint(b, start)
+	b = pbwire.AppendTag(b, 5, 0) // exclusive
+	b = pbwire.AppendVarint(b, end)
+	b = pbwire.AppendTag(b, 7, 0)
+	b = pbwire.AppendVarint(b, 0)
+	b = pbwire.AppendTag(b, 8, 0)
+	b = pbwire.AppendVarint(b, 1)
+	return b
+}
+
+func (s *Source) post(ctx context.Context, path string, body []byte) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		s.cfg.Endpoint+"/"+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/protobuf")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("apple: %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("apple: %s: HTTP %d", path, resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+}

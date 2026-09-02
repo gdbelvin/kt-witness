@@ -145,3 +145,50 @@ func TestLiveFetch(t *testing.T) {
 	}
 	t.Logf("Apple top-level tree: size=%d root=%x", head.Size, head.Hash)
 }
+
+func TestLogLeavesRequestIncludesMergeGroups(t *testing.T) {
+	s := newSource(t)
+	m := pbwire.Parse(s.logLeavesRequest(100, 200))
+
+	// Omitting the merge-group fields returns HTTP 200 with an empty leaf list,
+	// which is indistinguishable from a log with no leaves. They must be present.
+	if len(m[7]) == 0 || len(m[8]) == 0 {
+		t.Fatal("merge group bounds missing: the server would return an empty list, not an error")
+	}
+	if pbwire.Uint64(m, 4) != 100 || pbwire.Uint64(m, 5) != 200 {
+		t.Fatalf("index range wrong: %d..%d", pbwire.Uint64(m, 4), pbwire.Uint64(m, 5))
+	}
+	if pbwire.Uint64(m, 2) != TopLevelTreeID {
+		t.Fatal("wrong tree id")
+	}
+}
+
+// Live: the only public route to iMessage's Key Transparency state.
+func TestLiveScanFindsIMessage(t *testing.T) {
+	if os.Getenv("KT_WITNESS_LIVE") == "" {
+		t.Skip("set KT_WITNESS_LIVE=1 to run against production")
+	}
+	s := newSource(t)
+	heads, err := s.ScanApplications(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	byApp := map[string]int{}
+	var ids []string
+	for _, h := range heads {
+		name := h.Name
+		if name == "" {
+			name = "app-" + hex.EncodeToString([]byte{byte(h.Application)})
+		}
+		byApp[name]++
+		if h.Name == "IDS_MESSAGING" {
+			ids = append(ids, hex.EncodeToString(h.RootHash)[:16])
+			t.Logf("IDS_MESSAGING tree=%d logSize=%d revision=%d root=%x...",
+				h.TreeID, h.LogSize, h.Revision, h.RootHash[:8])
+		}
+	}
+	t.Logf("applications seen in %d leaves: %v", len(heads), byApp)
+	if len(ids) == 0 {
+		t.Fatal("no IDS_MESSAGING heads found; the scan window may be too small")
+	}
+}

@@ -159,3 +159,35 @@ type Backfiller interface {
 	// positive contradiction, never for absence.
 	Backfill(ctx context.Context, log *slog.Logger) (*BackfillResult, error)
 }
+
+// AppHead is a per-application tree head observed inside another log's leaves.
+type AppHead struct {
+	// TreeID identifies the application's own tree.
+	TreeID uint64
+	// Application is the log's own application enum value.
+	Application uint64
+	// Name is a human label for Application where one is known.
+	Name string
+
+	LogSize  uint64
+	Revision uint64
+	RootHash []byte
+
+	// SigningKeyHash identifies the key that signed this head. The key itself is
+	// not published, so the hash is all we get — enough to notice it changing,
+	// not enough to verify the signature.
+	SigningKeyHash []byte
+
+	// LeafIndex is the position in the containing log.
+	LeafIndex uint64
+}
+
+// Scanner is implemented by sources whose leaves carry other logs' heads.
+//
+// Apple's Top-Level Tree is the motivating case: it is a log of per-application
+// tree heads, so reading its leaves surfaces heads for applications — iMessage
+// among them — whose own trees the API refuses to serve.
+type Scanner interface {
+	Source
+	ScanApplications(ctx context.Context) ([]AppHead, error)
+}

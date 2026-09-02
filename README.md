@@ -46,6 +46,11 @@ overpromises, so the distinction is enforced in the type system
   that iMessage commits into — not iMessage's own tree, which is not publicly
   listed. Append-only is unproven because `consistency_proof` rejects
   size-to-size ranges.
+
+  It also surfaces **iMessage**. The Top-Level Tree is a *log of per-application
+  tree heads*, so reading its leaves yields IDS_MESSAGING heads even though that
+  tree is absent from `list_trees` and the API rejects it by id. Those are
+  published at `/applications` as **observations, never cosigned** — see below.
 - **Google KT** — archived since 2024-10-11, no live deployment.
 - **IETF keytrans** — the draft deliberately specifies no transport, and no
   public deployment speaks it, so there is nothing to be conformant to on the
@@ -114,6 +119,7 @@ Endpoints:
 | `GET /forks` | Recorded misbehaviour evidence |
 | `GET /history` | Verified published history, from a backfill pass |
 | `GET /audits?origin=` | Tier-B sampling decisions and results |
+| `GET /applications` | Per-application heads observed inside a witnessed log (not attestations) |
 | `GET /` | Human-readable status |
 
 ## What the Meta adapter attests — and what it does not
@@ -194,6 +200,25 @@ pair up to 40.
 What is still **not** verified is the prefix tree — that individual
 identifier-to-key bindings are correctly placed. That needs VRF evaluation and
 the search-proof machinery, and is the Signal analogue of tier B.
+
+## Observations vs attestations
+
+Everything cosigned here is verified. One thing is deliberately not cosigned.
+
+Apple's Top-Level Tree is a log of per-application tree heads, so its leaves
+carry heads for applications whose own trees are not publicly served —
+**IDS_MESSAGING among them**, two distinct trees, ~49 heads per 200 leaves. That
+is the only public route to iMessage's Key Transparency state.
+
+But those heads are signed by per-application keys Apple does not publish (the
+leaf carries only the key's hash), and they are not yet bound to the Top-Level
+Tree root we do verify, because the inclusion-proof request schema is absent from
+Apple's published protos and could not be determined by probing.
+
+So they are recorded as observations and served at `/applications` with that
+stated plainly. What they still support is real and needs no signature: a
+rollback, a revision reappearing with a different root, or a change of signing
+key all become visible, and are recorded as conflicts for a human to judge.
 
 ## Operating notes
 
