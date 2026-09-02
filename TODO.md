@@ -26,12 +26,18 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
       researcher bag; its response carries leaves *with* inclusion proofs and
       would solve this outright. The tree is RFC 6962, so folding a proof needs
       no new cryptography.
-- [ ] **Signal: prefix-tree audit (tier B).** Now the largest remaining gap,
-      since Signal is tier A only — head-consistency, which cannot see an
-      illegal mutation. Verifies that individual
-      identifier-to-key bindings sit where they should. Needs ECVRF and the
-      combined-tree search proof. Note the sampling argument does not carry over:
-      Signal's proofs are per-*label*, not per-epoch.
+- [x] **ECVRF-EDWARDS25519-SHA512-TAI (RFC 9381).** Done — `internal/vrf`,
+      verification only. Passes all three RFC 9381 vectors including the
+      intermediate hash-to-curve point, and verifies a live proof from Signal's
+      production service.
+- [ ] **Signal: prefix-tree audit (tier B).** The largest remaining assurance
+      gap, since Signal is tier A only — head-consistency, which cannot see an
+      illegal mutation. The VRF half is done; what remains is the prefix tree and
+      the combined-tree search proof, both of which arrive in the same
+      unauthenticated `distinguished` response (field 2, ~300 KB).
+      Note the sampling argument does not carry over: Signal's proofs are
+      per-*label*, not per-epoch, so a third party can only audit labels it can
+      name. Full coverage still needs the operator's auditor feed.
 - [x] **Proton: tree re-verification (tier B).** Done — `kt-proton-audit`
       rebuilds all 200,714,006 leaves and matches the signed tree hash.
 - [ ] **Run Proton tier B continuously.** The pieces exist (`ApplyDiff` merges
