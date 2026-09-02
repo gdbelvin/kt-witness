@@ -40,11 +40,14 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
       name. Full coverage still needs the operator's auditor feed.
 - [x] **Proton: tree re-verification (tier B).** Done — `kt-proton-audit`
       rebuilds all 200,714,006 leaves and matches the signed tree hash.
-- [ ] **Run Proton tier B continuously.** The pieces exist (`ApplyDiff` merges
-      the ~3 MB per-epoch delta), but the loop is not wired: it needs the 13.6 GB
-      tree kept on disk between epochs, and an end-to-end run of
-      dump &rarr; diff &rarr; rebuild against a *later* epoch's signed hash. Only
-      the one-shot full audit has been validated against production so far.
+- [x] **Proton between-snapshot audit.** Done and validated end to end:
+      `kt-proton-audit -from 6708 -epoch 6709` applies the published 3 MB diff to
+      epoch 6708's tree and reproduces 6709's signed hash exactly. Merge 37 s,
+      rebuild 18m45s.
+- [ ] **Run Proton tier B inside the witness loop.** The audit works as a
+      command; the witness process does not yet run it every epoch. Needs the
+      13.6 GB tree kept on disk between epochs and a scheduler that tolerates a
+      ~19-minute job against a ~4-hour epoch cadence.
 - [ ] **Judge Proton's removals.** Epoch 6709 alone removed 9,337 leaves.
       Proton permits deletion within a ~90-day window, so the audit should check
       each removal against that window rather than merely counting it.

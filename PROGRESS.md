@@ -11,9 +11,9 @@ tests, 79 tests, 13 commits.
 
 | Log | Tier | What is proven |
 |---|---|---|
-| `thelemail.com/keys` | **A** | Signed checkpoint, append-only via locally computed consistency proof |
+| `thelemail.com/keys` | **B** | Signed checkpoint, append-only via locally computed consistency proof, and every added leaf checked against the entry the log publishes |
 | `meta.messenger.kt/v1` | **A+** | Root-chain continuity across all published history |
-| `proton.me/kt/v1` | **A+** | Epoch hash chain, plus the WebPKI certificate committing to each chain hash |
+| `proton.me/kt/v1` | **A+ / B** | Epoch hash chain, the WebPKI certificate committing to each chain hash, and a full construction audit: 200,714,006 leaves rebuilt, and the step between two epochs replayed from the published diff |
 | `signal.org/kt` | **A** | Service root derived from three auditors, confirmed by Signal's signature, append-only across observations |
 | `apple.com/kt/top-level-tree` | **A** | ECDSA-signed head, append-only via Apple's consistency proofs |
 

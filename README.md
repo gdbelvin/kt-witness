@@ -243,10 +243,25 @@ That is not hypothetical. A single Proton epoch (6709) contains **36,520
 additions and 9,337 removals**. A fifth of the mutations in one epoch are
 deletions, and nothing in the epoch chain reveals that they happened.
 
-Only tier B closes it, by rebuilding the tree from its published leaves:
+Only tier B closes it, by rebuilding the tree from its published leaves. Both the
+full rebuild and the step *between* two snapshots are verified against
+production:
+
+```
+auditing the step 6708 -> 6709
+  diff 3.16 MB (45857 records)
+  mutations: 36520 added, 9337 removed, 0 overwritten in place, 0 removals of absent labels
+  recomputed        b18dc51c789386cf34fa7fd497128260986aee8ea6e9082074a602f93352db8c
+  MATCH: epoch 6708 plus its published diff is exactly epoch 6709.
+```
+
+That is the check with teeth: it replays what actually changed and reports it,
+instead of only confirming that the endpoints agree. Running it:
 
 ```sh
-go build ./cmd/kt-proton-audit && ./kt-proton-audit
+go build ./cmd/kt-proton-audit
+./kt-proton-audit                          # rebuild one epoch from scratch
+./kt-proton-audit -from 6708 -epoch 6709   # audit the step between two
 ```
 
 ```
