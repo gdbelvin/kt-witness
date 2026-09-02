@@ -1,4 +1,4 @@
-// Package signal witnesses Signal's Key Transparency deployment.
+// Package signal witnesses Signal's Key Transparency deployment at tier A.
 //
 // # Why this is possible without asking Signal
 //
@@ -10,29 +10,34 @@
 //
 //	GET https://chat.signal.org/v1/key-transparency/distinguished
 //
-// returns a FullTreeHead containing the service's tree head and, because Signal
-// deploys in third-party-auditing mode, one FullAuditorTreeHead per auditor.
-// Each of those carries the auditor's own tree size, timestamp, root value and
-// Ed25519 signature.
+// # How the service root is obtained
 //
-// # What this adapter verifies, and what it does not
+// Signal never serves the service tree's root directly; libsignal reconstructs
+// it from the combined-tree search proof, which is a large piece of machinery.
+// There is a much shorter path.
 //
-// It verifies the auditor's Ed25519 signature over the exact preimage libsignal
-// uses, and tracks that auditor's signed heads over time. Combined with the
-// core's gates, that gives conclusive equivocation detection: two different
-// roots signed at the same tree size is a contradiction the auditor's own key
-// attests to.
+// Because Signal deploys in third-party-auditing mode, the response carries one
+// FullAuditorTreeHead per auditor, each with the auditor's Ed25519-signed root
+// at its own (smaller) tree size, plus a consistency proof up to the service's
+// size. A consistency proof does not merely check a root — run forwards, it
+// *determines* one. So each auditor independently yields the service root.
 //
-// It does NOT prove append-only between two observations. Doing so needs a
-// consistency proof between the two auditor tree sizes, and Signal's public API
-// offers consistency proofs only against the *service* tree — whose root is not
-// served directly and must be reconstructed via the combined-tree search proof
-// machinery. That is a substantial piece of work and is not done here, so this
-// source reports TierSignedHead rather than TierA. See NOTES.md.
+// That gives three checks that all have to line up:
 //
-// Three auditors are configured in production (Signal, Cloudflare, Trail of
-// Bits). Each is witnessed as its own log, so divergence or lag between them is
-// visible rather than averaged away.
+//  1. Every auditor's signature over its own root must verify.
+//  2. All auditors must derive the *same* service root. They start from
+//     different sizes with different proofs, so agreement is meaningful.
+//  3. Signal's own signature over the derived root must verify. Signal emits one
+//     signature per auditor key, each binding that key into the preimage.
+//
+// With a verified service root in hand, append-only across our own observations
+// follows from the consistency proof the endpoint returns for lastTreeHeadSize —
+// which is what makes this tier A rather than merely a signed-head observation.
+//
+// What is still not verified here is the *prefix* tree: that individual
+// identifier-to-key bindings are correctly placed, which needs VRF evaluation
+// and the search-proof machinery. That is the analogue of tier B and is not
+// done.
 package signal
 
 import (
@@ -48,6 +53,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,9 +70,8 @@ import (
 //go:embed signal-root.cer
 var signalRoot []byte
 
-// Production key material, pinned in libsignal rust/net/src/env.rs. These were
-// cross-checked against the live wire: the auditor_public_key values in a real
-// distinguished response match the hardcoded auditor keys byte for byte.
+// Production key material, pinned in libsignal rust/net/src/env.rs and
+// cross-checked against the live wire.
 const (
 	ProdSigningKey = "a3973067984382cfa89ec26d7cc176680aefe92b3d2eba85159dad0b8354b622"
 	ProdVRFKey     = "3849cf116c7bc9aef5f13f0c61a7c246e5bade4eb7e1c7b0efcacdd8c1e6a6ff"
@@ -86,36 +91,58 @@ var ProdAuditorKeys = []string{
 const deploymentModeThirdPartyAuditing = 3
 
 type Source struct {
-	cfg     Config
-	client  *http.Client
-	sigKey  []byte
-	vrfKey  []byte
-	auditor []byte
+	cfg      Config
+	client   *http.Client
+	sigKey   []byte
+	vrfKey   []byte
+	auditors [][]byte
+
+	// lastProof is the consistency proof carried by the most recent Fetch, for
+	// the VerifyConsistency call that follows it. The witness core always pairs
+	// those two calls for a given source, but that is coupling, so
+	// lastProofFrom records which starting size the proof was requested for and
+	// VerifyConsistency refuses to use it against any other.
+	lastProof     []hash
+	lastProofFrom uint64
 }
 
 type Config struct {
-	// Origin is the canonical checkpoint origin we mint for this auditor.
+	// Origin is the canonical checkpoint origin we mint for Signal's tree.
 	Origin string
 
 	// Endpoint defaults to Signal production.
 	Endpoint string
 
-	// AuditorKey is the hex Ed25519 key of the auditor this source tracks.
-	AuditorKey string
+	// AuditorKeys defaults to all production auditors. More is strictly better:
+	// each independently derives the service root and they are cross-checked.
+	AuditorKeys []string
 
-	// SigningKey and VRFKey are the service's keys. They are not used to verify
-	// anything directly here, but they are mixed into the signature preimage, so
-	// getting them wrong makes every signature fail.
+	// MinAuditors is how many auditor-derived roots must agree before we will
+	// sign. Defaults to 2, so no single auditor can move our view alone.
+	MinAuditors int
+
+	// SigningKey and VRFKey are the service's keys. They are mixed into every
+	// signature preimage, so getting them wrong makes verification fail closed.
 	SigningKey string
 	VRFKey     string
 }
 
 func New(cfg Config) (*Source, error) {
-	if cfg.Origin == "" || cfg.AuditorKey == "" {
-		return nil, fmt.Errorf("signal: origin and auditor_key are required")
+	if cfg.Origin == "" {
+		return nil, fmt.Errorf("signal: origin is required")
 	}
 	if cfg.Endpoint == "" {
 		cfg.Endpoint = "https://chat.signal.org"
+	}
+	if len(cfg.AuditorKeys) == 0 {
+		cfg.AuditorKeys = ProdAuditorKeys
+	}
+	if cfg.MinAuditors == 0 {
+		cfg.MinAuditors = 2
+	}
+	if cfg.MinAuditors > len(cfg.AuditorKeys) {
+		return nil, fmt.Errorf("signal: min_auditors %d exceeds %d configured auditor keys",
+			cfg.MinAuditors, len(cfg.AuditorKeys))
 	}
 	if cfg.SigningKey == "" {
 		cfg.SigningKey = ProdSigningKey
@@ -133,8 +160,12 @@ func New(cfg Config) (*Source, error) {
 	if s.vrfKey, err = decodeKey(cfg.VRFKey, "VRF"); err != nil {
 		return nil, err
 	}
-	if s.auditor, err = decodeKey(cfg.AuditorKey, "auditor"); err != nil {
-		return nil, err
+	for _, k := range cfg.AuditorKeys {
+		raw, err := decodeKey(k, "auditor")
+		if err != nil {
+			return nil, err
+		}
+		s.auditors = append(s.auditors, raw)
 	}
 
 	roots := x509.NewCertPool()
@@ -167,10 +198,10 @@ func decodeKey(hexKey, kind string) ([]byte, error) {
 }
 
 func (s *Source) Origin() string    { return s.cfg.Origin }
-func (s *Source) Tier() source.Tier { return source.TierSignedHead }
+func (s *Source) Tier() source.Tier { return source.TierA }
 
-// DerivedHead is false: the head is carried by an Ed25519 signature from the
-// auditor, so a contradiction is the auditor contradicting its own key.
+// DerivedHead is false: the head carries Signal's own Ed25519 signature over
+// the root, so a contradiction is Signal contradicting its own key.
 func (s *Source) DerivedHead() bool { return false }
 
 // signable rebuilds the preimage libsignal signs (TreeHead::to_signable_header):
@@ -178,13 +209,14 @@ func (s *Source) DerivedHead() bool { return false }
 //	[0,0] ciphersuite ‖ mode ‖ len16‖signing_key ‖ len16‖vrf_key ‖
 //	len16‖auditor_key ‖ tree_size u64be ‖ timestamp i64be ‖ root
 //
-// For an auditor tree head the signer and the embedded auditor key are the same
-// key.
-func (s *Source) signable(size uint64, timestamp int64, root []byte) []byte {
+// For an auditor's own tree head the signer and the embedded auditor key are the
+// same key; for the service's tree head the signer is the service key and the
+// embedded key selects which of its signatures is being checked.
+func (s *Source) signable(auditorKey []byte, size uint64, timestamp int64, root []byte) []byte {
 	var buf []byte
 	buf = append(buf, 0, 0)
 	buf = append(buf, deploymentModeThirdPartyAuditing)
-	for _, k := range [][]byte{s.sigKey, s.vrfKey, s.auditor} {
+	for _, k := range [][]byte{s.sigKey, s.vrfKey, auditorKey} {
 		var l [2]byte
 		binary.BigEndian.PutUint16(l[:], uint16(len(k)))
 		buf = append(buf, l[:]...)
@@ -198,15 +230,35 @@ func (s *Source) signable(size uint64, timestamp int64, root []byte) []byte {
 	return append(buf, root...)
 }
 
-type auditorHead struct {
-	treeSize  uint64
-	timestamp int64
-	root      []byte
+func (s *Source) known(key []byte) bool {
+	for _, k := range s.auditors {
+		if len(k) == len(key) && subtleEqual(k, key) {
+			return true
+		}
+	}
+	return false
 }
 
-func (s *Source) Fetch(ctx context.Context, _ *source.Head) (*source.Head, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		s.cfg.Endpoint+"/v1/key-transparency/distinguished", nil)
+func subtleEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	var d byte
+	for i := range a {
+		d |= a[i] ^ b[i]
+	}
+	return d == 0
+}
+
+func (s *Source) Fetch(ctx context.Context, prev *source.Head) (*source.Head, error) {
+	url := s.cfg.Endpoint + "/v1/key-transparency/distinguished"
+	if prev != nil && prev.Size > 0 {
+		// Asks the service for a consistency proof from the size we last
+		// witnessed, which is what VerifyConsistency will check.
+		url += "?lastTreeHeadSize=" + strconv.FormatInt(prev.Size, 10)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -235,108 +287,229 @@ func (s *Source) Fetch(ctx context.Context, _ *source.Head) (*source.Head, error
 		return nil, fmt.Errorf("signal: decode serializedResponse: %w", err)
 	}
 
-	head, serviceSize, err := s.extract(pb)
+	size, root, proof, err := s.verifyResponse(pb)
 	if err != nil {
 		return nil, err
 	}
 
-	// An auditor claiming to be ahead of the service is incoherent; libsignal
-	// rejects it too. Treated as unverifiable rather than as a fork, since we
-	// cannot tell which of the two statements is the wrong one.
-	if head.treeSize > serviceSize {
-		return nil, fmt.Errorf("signal: auditor tree size %d exceeds service tree size %d",
-			head.treeSize, serviceSize)
+	s.lastProof = proof
+	s.lastProofFrom = 0
+	if prev != nil {
+		s.lastProofFrom = uint64(prev.Size)
 	}
 
-	var hash tlog.Hash
-	copy(hash[:], head.root)
-
+	var h tlog.Hash
+	copy(h[:], root[:])
 	cp := torchwood.Checkpoint{
 		Origin: s.cfg.Origin,
-		Tree:   tlog.Tree{N: int64(head.treeSize), Hash: hash},
+		Tree:   tlog.Tree{N: int64(size), Hash: h},
 	}
 	text := cp.String()
 	return &source.Head{
 		Origin:    s.cfg.Origin,
-		Size:      int64(head.treeSize),
-		Hash:      hash,
+		Size:      int64(size),
+		Hash:      h,
 		Signed:    []byte(text),
 		Note:      &note.Note{Text: text},
 		FetchedAt: fetchedAt,
 	}, nil
 }
 
-// extract finds our auditor's tree head in the response and verifies its
-// signature. It returns the service tree size alongside, for the coherence check.
-func (s *Source) extract(pb []byte) (*auditorHead, uint64, error) {
+// verifyResponse performs the three-way check described in the package comment
+// and returns the verified service tree size, its root, and the consistency
+// proof against our previously witnessed size.
+func (s *Source) verifyResponse(pb []byte) (uint64, hash, []hash, error) {
+	var zero hash
+
 	top := parse(pb)
 	fthRaw := first(top, 1)
 	if fthRaw == nil {
-		return nil, 0, fmt.Errorf("signal: response has no FullTreeHead")
+		return 0, zero, nil, fmt.Errorf("signal: response has no FullTreeHead")
 	}
 	fth := parse(fthRaw)
 
 	thRaw := first(fth, 1)
 	if thRaw == nil {
-		return nil, 0, fmt.Errorf("signal: response has no TreeHead")
+		return 0, zero, nil, fmt.Errorf("signal: response has no TreeHead")
 	}
 	th := parse(thRaw)
 	serviceSize := varintOf(th, 1)
+	serviceTS := int64(varintOf(th, 2))
+	if serviceSize == 0 {
+		return 0, zero, nil, fmt.Errorf("signal: service tree is empty")
+	}
 
+	// Step 1 and 2: each auditor's signed root, run forward to the service size.
+	derived := map[string]hash{}
 	for _, faRaw := range fth[4] {
 		fa := parse(faRaw)
 		pub := first(fa, 4)
-		if pub == nil || !equalBytes(pub, s.auditor) {
-			continue
+		if pub == nil || !s.known(pub) {
+			continue // an auditor we are not configured to trust
 		}
-		root := first(fa, 2)
-		if len(root) != 32 {
-			return nil, 0, fmt.Errorf("signal: auditor root is %d bytes, want 32", len(root))
-		}
+
 		ahRaw := first(fa, 1)
 		if ahRaw == nil {
-			return nil, 0, fmt.Errorf("signal: auditor entry has no tree head")
+			continue
 		}
 		ah := parse(ahRaw)
-		size := varintOf(ah, 1)
-		ts := int64(varintOf(ah, 2))
+		aSize := varintOf(ah, 1)
+		aTS := int64(varintOf(ah, 2))
 		sig := first(ah, 3)
-		if len(sig) != ed25519.SignatureSize {
-			return nil, 0, fmt.Errorf("signal: auditor signature is %d bytes, want %d",
-				len(sig), ed25519.SignatureSize)
+		rootBytes := first(fa, 2)
+
+		if aSize > serviceSize {
+			return 0, zero, nil, fmt.Errorf("signal: auditor %s claims size %d beyond service size %d",
+				hex.EncodeToString(pub)[:16], aSize, serviceSize)
 		}
 
-		if !ed25519.Verify(ed25519.PublicKey(s.auditor), s.signable(size, ts, root), sig) {
-			// The response is not authentic for this auditor. Withhold; we
-			// cannot attribute it, so it is not evidence against anyone.
-			return nil, 0, fmt.Errorf("signal: auditor %s: signature does not verify over tree head (size %d)",
-				s.cfg.AuditorKey[:16], size)
+		var serviceRoot hash
+		switch {
+		case aSize == serviceSize:
+			// Caught up: the auditor's own root is the service root.
+			if len(rootBytes) != 32 {
+				continue
+			}
+			copy(serviceRoot[:], rootBytes)
+			if len(sig) == ed25519.SignatureSize &&
+				!ed25519.Verify(pub, s.signable(pub, aSize, aTS, rootBytes), sig) {
+				return 0, zero, nil, fmt.Errorf("signal: auditor %s signature does not verify",
+					hex.EncodeToString(pub)[:16])
+			}
+		default:
+			if len(rootBytes) != 32 || len(sig) != ed25519.SignatureSize {
+				continue
+			}
+			if !ed25519.Verify(pub, s.signable(pub, aSize, aTS, rootBytes), sig) {
+				return 0, zero, nil, fmt.Errorf("signal: auditor %s signature does not verify over its tree head",
+					hex.EncodeToString(pub)[:16])
+			}
+			var aRoot hash
+			copy(aRoot[:], rootBytes)
+
+			proof := make([]hash, 0, len(fa[3]))
+			for _, p := range fa[3] {
+				if len(p) != 32 {
+					return 0, zero, nil, fmt.Errorf("signal: auditor %s consistency hash is %d bytes",
+						hex.EncodeToString(pub)[:16], len(p))
+				}
+				var ph hash
+				copy(ph[:], p)
+				proof = append(proof, ph)
+			}
+			if serviceRoot, err2 := deriveRoot(aSize, serviceSize, proof, aRoot); err2 != nil {
+				return 0, zero, nil, fmt.Errorf("signal: auditor %s: %w", hex.EncodeToString(pub)[:16], err2)
+			} else {
+				derived[hex.EncodeToString(pub)] = serviceRoot
+				continue
+			}
 		}
-		return &auditorHead{treeSize: size, timestamp: ts, root: root}, serviceSize, nil
+		derived[hex.EncodeToString(pub)] = serviceRoot
 	}
-	return nil, 0, fmt.Errorf("signal: no tree head from auditor %s in response", s.cfg.AuditorKey[:16])
+
+	if len(derived) < s.cfg.MinAuditors {
+		return 0, zero, nil, fmt.Errorf("signal: only %d auditor(s) yielded a service root, need %d",
+			len(derived), s.cfg.MinAuditors)
+	}
+
+	// All auditors must land on the same root. They start from different sizes
+	// with different proofs, so disagreement means at least one signed a root
+	// belonging to a different history — conclusive misbehaviour by someone,
+	// though the response alone does not say by whom.
+	var root hash
+	var refKey string
+	for k, v := range derived {
+		if refKey == "" {
+			root, refKey = v, k
+			continue
+		}
+		if v != root {
+			return 0, zero, nil, &source.ForkError{
+				Origin: s.cfg.Origin,
+				Reason: fmt.Sprintf(
+					"auditors disagree on the service root at size %d: %s implies %x, %s implies %x "+
+						"(at least one signed a root from a different history; the response does not say which)",
+					serviceSize, refKey[:16], root, k[:16], v),
+			}
+		}
+	}
+
+	// Step 3: Signal's own signature over the derived root.
+	verified := 0
+	for _, sigRaw := range th[3] {
+		sm := parse(sigRaw)
+		auditorKey := first(sm, 1)
+		sig := first(sm, 2)
+		if len(auditorKey) != 32 || len(sig) != ed25519.SignatureSize || !s.known(auditorKey) {
+			continue
+		}
+		if ed25519.Verify(s.sigKey, s.signable(auditorKey, serviceSize, serviceTS, root[:]), sig) {
+			verified++
+		}
+	}
+	if verified == 0 {
+		return 0, zero, nil, fmt.Errorf(
+			"signal: no service signature verifies over the derived root at size %d", serviceSize)
+	}
+
+	// FullTreeHead.distinguished (field 3) is the consistency proof against the
+	// size we asked about; field 2 is the equivalent for a plain search.
+	raw := fth[3]
+	if len(raw) == 0 {
+		raw = fth[2]
+	}
+	proof := make([]hash, 0, len(raw))
+	for _, p := range raw {
+		if len(p) != 32 {
+			return 0, zero, nil, fmt.Errorf("signal: consistency hash is %d bytes, want 32", len(p))
+		}
+		var ph hash
+		copy(ph[:], p)
+		proof = append(proof, ph)
+	}
+
+	return serviceSize, root, proof, nil
 }
 
-// VerifyConsistency has nothing further to prove at this tier.
+// VerifyConsistency proves the new service tree extends the one we witnessed.
 //
-// Proving append-only between two auditor heads needs a consistency proof
-// between their tree sizes. Signal's public API supplies consistency proofs only
-// against the service tree, whose root is not served and must be reconstructed
-// from the combined-tree search proof — not implemented here.
-//
-// What still holds, enforced by the witness core rather than by this function:
-// the auditor's tree size may not go backwards, and two different roots signed
-// at the same tree size are a conclusive contradiction. That is equivocation
-// detection; it is not an append-only proof, and Tier() says so.
-func (s *Source) VerifyConsistency(context.Context, *source.Head, *source.Head) error {
+// Both roots carry Signal's signature, so a proof that fails to connect them
+// means Signal either forked or served a broken proof. Tempting to call that a
+// fork — but we cannot tell which, and the accusation is permanent, so we
+// withhold instead. That is not a loss: withholding is the enforcement
+// mechanism, and a genuine split view is detected by comparing what different
+// witnesses cosigned, which is exactly what our published checkpoints are for.
+// A persistent failure here is worth a human look.
+func (s *Source) VerifyConsistency(_ context.Context, prev, next *source.Head) error {
+	if prev == nil {
+		return nil // trust on first use
+	}
+	if s.lastProofFrom != uint64(prev.Size) {
+		// The proof we hold was requested against a different starting size, so
+		// it cannot speak to this transition. Withhold rather than misuse it.
+		return fmt.Errorf("signal: consistency proof was fetched for size %d, not %d",
+			s.lastProofFrom, prev.Size)
+	}
+
+	derived, err := deriveRoot(uint64(prev.Size), uint64(next.Size), s.lastProof, prev.Hash)
+	if err != nil {
+		// Malformed or absent proof: we could not check, which is not evidence.
+		return fmt.Errorf("signal: consistency %d->%d unproven: %w", prev.Size, next.Size, err)
+	}
+	if derived != next.Hash {
+		return fmt.Errorf(
+			"signal: no valid consistency proof from size %d (root %x) to size %d (root %x): "+
+				"the proof supplied implies root %x; withholding",
+			prev.Size, prev.Hash, next.Size, next.Hash, derived)
+	}
 	return nil
 }
 
 // --- minimal protobuf reader -------------------------------------------------
 //
-// Hand-rolled rather than generated: we need four field numbers from two nested
-// messages, and a hand-written reader is small enough to audit in full, which
-// matters more here than convenience.
+// Hand-rolled rather than generated: we need a handful of field numbers from a
+// few nested messages, and a hand-written reader is small enough to audit in
+// full, which matters more here than convenience.
 
 type message map[int][][]byte
 
@@ -409,16 +582,4 @@ func varintOf(m message, field int) uint64 {
 		return 0
 	}
 	return binary.BigEndian.Uint64(v)
-}
-
-func equalBytes(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

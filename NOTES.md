@@ -63,25 +63,18 @@ verifiable form), the AKD adapter should verify it and `DerivedHead()` should
 become false for that source — which would also restore the stronger conclusive
 treatment of head regressions in the witness core.
 
-## Signal: append-only is not proven
+## Signal: what remains after tier A
 
-The Signal adapter verifies each auditor's Ed25519 signature over its tree head,
-which gives authenticity and same-size equivocation detection — but not an
-append-only proof between two observations (hence tier S rather than A).
+Append-only is now proven (see the README), by deriving the service root from the
+auditors' consistency proofs. What is still unverified is the **prefix tree**:
+that each identifier-to-key binding sits where it should. That needs ECVRF
+evaluation and the combined-tree search proof from `SearchResponse`, and is the
+Signal analogue of tier B — the point at which we would be auditing construction
+rather than witnessing heads.
 
-The missing piece is a consistency proof between two auditor tree sizes.
-Signal's public API supplies consistency proofs only against the *service* tree,
-whose root is not served directly and must be reconstructed from the
-combined-tree search proof in the distinguished response.
-
-There is a promising shortcut worth trying: each `FullAuditorTreeHead` carries
-both a signed `root_value` at the auditor's size and a `consistency` proof from
-that size up to the service size. An RFC6962-style consistency proof lets you
-*recompute* the newer root from the older one, so the service root should be
-derivable from any single auditor's head — and all three auditors should derive
-the same service root. That would give both an append-only proof and a strong
-three-way cross-check, without implementing VRF or the search-proof machinery.
-It needs Signal's log-tree hashing reimplemented, which is the real work.
+Worth knowing before starting it: unlike Meta's AKD proofs, Signal's search
+proofs are per-label, so a construction audit would sample *labels*, not epochs,
+and the sampling argument would need rethinking from scratch.
 
 ### Attribution in a Signal incident
 

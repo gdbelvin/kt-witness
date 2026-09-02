@@ -66,13 +66,14 @@ type logConfig struct {
 	VKey    string `json:"vkey"`
 
 	// akd / proton / signal
-	APIBase           string `json:"api_base"`
-	Endpoint          string `json:"endpoint"`
-	AuditorKey        string `json:"auditor_key"`
-	LogDirectory      string `json:"log_directory"`
-	PlexiNamespaceURL string `json:"plexi_namespace_url"`
-	StartEpoch        int64  `json:"start_epoch"`
-	MaxEpochsPerRound int64  `json:"max_epochs_per_round"`
+	APIBase           string   `json:"api_base"`
+	Endpoint          string   `json:"endpoint"`
+	AuditorKeys       []string `json:"auditor_keys"`
+	MinAuditors       int      `json:"min_auditors"`
+	LogDirectory      string   `json:"log_directory"`
+	PlexiNamespaceURL string   `json:"plexi_namespace_url"`
+	StartEpoch        int64    `json:"start_epoch"`
+	MaxEpochsPerRound int64    `json:"max_epochs_per_round"`
 }
 
 func (l logConfig) build() (source.Source, error) {
@@ -95,9 +96,10 @@ func (l logConfig) build() (source.Source, error) {
 		})
 	case "signal":
 		return ktsignal.New(ktsignal.Config{
-			Origin:     l.Origin,
-			Endpoint:   l.Endpoint,
-			AuditorKey: l.AuditorKey,
+			Origin:      l.Origin,
+			Endpoint:    l.Endpoint,
+			AuditorKeys: l.AuditorKeys,
+			MinAuditors: l.MinAuditors,
 		})
 	default:
 		return nil, fmt.Errorf("log %q: unknown type %q", l.Origin, l.Type)

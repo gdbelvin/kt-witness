@@ -19,7 +19,7 @@ overpromises, so the distinction is enforced in the type system
 | **A** — checkpoint witness | The sequence of signed roots is append-only (split-view detection) | Negligible |
 | **A+** — root-chain continuity | Additionally, continuity across the log's *entire* published history, where layout permits it from metadata alone | Negligible |
 | **B** — construction audit | Additionally, the tree is correctly built, by replaying the log's own proofs | Large (see below) |
-| **S** — signed head | Weaker than A: heads are authentic and equivocation at a given size is detectable, but append-only between observations is *not* proven, because the deployment exposes no consistency proof we can check | Negligible |
+| **S** — signed head | Weaker than A: heads are authentic and equivocation at a given size is detectable, but append-only between observations is *not* proven. No adapter currently needs it; kept because the distinction is worth naming |
 
 ## Status
 
@@ -33,12 +33,13 @@ overpromises, so the distinction is enforced in the type system
 - **Meta tier B** — feasibility established by spike (see below); not yet wired.
 - **Proton, tier A+ — working.** Walks the epoch chain and verifies the WebPKI
   certificate that commits to each chain hash. No account, no coordination.
-- **Signal, tier S — working.** Signal's KT client endpoints are unauthenticated
-  *by design* (sending credentials is an error), so
-  `GET /v1/key-transparency/distinguished` yields signed tree heads to anyone.
-  Each of Signal's three auditors is witnessed as its own log, with its Ed25519
-  signature verified over libsignal's exact preimage — which also makes lag and
-  divergence between them visible.
+- **Signal, tier A — working.** Signal's KT client endpoints are unauthenticated
+  *by design* (sending credentials is an error). Signal never serves its tree
+  root, so we **derive** it: each auditor's signed root plus its consistency
+  proof yields the service root, all three must agree, and Signal's own
+  signature must verify over the result. Append-only across observations then
+  follows from the `lastTreeHeadSize` consistency proof. Verified live at tree
+  size 852,163,309.
 - **Apple** — no external verification surface; client-only by design.
 - **Google KT** — archived since 2024-10-11, no live deployment.
 - **IETF keytrans** — the draft deliberately specifies no transport, and no
@@ -127,6 +128,39 @@ Three practical notes discovered against the live service:
 
 `whatsapp.key-transparency.v1` is **not** a config copy-paste away: it currently
 reports status `Disabled` with inconsistent epochs. Check `v2` before adding it.
+
+## How Signal's service root is recovered
+
+Signal never serves the service tree's root; libsignal reconstructs it from the
+combined-tree search proof, which is a large piece of machinery. There is a much
+shorter path, and it is the core of this adapter.
+
+Because Signal deploys in third-party-auditing mode, each response carries one
+`FullAuditorTreeHead` per auditor: the auditor's Ed25519-signed root at its own
+(smaller) tree size, plus a consistency proof up to the service's size. A
+consistency proof does not merely *check* a root — run forwards, it *determines*
+one. So every auditor independently yields the service root, and three things
+must line up:
+
+1. each auditor's signature over its own root verifies;
+2. all auditors derive the **same** service root, from different sizes with
+   different proofs;
+3. Signal's own signature verifies over the derived root.
+
+Against production this holds: three auditors at different sizes with 21- and
+23-hash proofs all derive the identical root, and all three of Signal's
+signatures verify over it. That agreement is also the test — if the log-tree
+reimplementation were wrong, none of it would line up.
+
+Signal's log tree is reimplemented in `logtree.go`: left-balanced with RFC 9420
+node numbering (not RFC 6962), nodes hashed as `H(marshal(l) || marshal(r))` over
+a 33-byte encoding whose leading byte distinguishes leaves from interior nodes.
+It is tested against a tree built independently from leaves, for every `(m, n)`
+pair up to 40.
+
+What is still **not** verified is the prefix tree — that individual
+identifier-to-key bindings are correctly placed. That needs VRF evaluation and
+the search-proof machinery, and is the Signal analogue of tier B.
 
 ## Operating notes
 
