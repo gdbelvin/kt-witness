@@ -60,12 +60,13 @@ func New(cfg Config) (*Source, error) {
 			return nil, fmt.Errorf("c2sp: parse vkey for %s: %w", cfg.Origin, err)
 		}
 	}
-	if v.Name() != cfg.Origin {
-		// The policy checks the origin line and the signature independently, so
-		// a verifier named differently from the configured origin would let a
-		// correctly signed checkpoint be witnessed under the wrong name.
-		return nil, fmt.Errorf("c2sp: verifier is named %q but the origin is %q", v.Name(), cfg.Origin)
-	}
+	// Deliberately no requirement that v.Name() equals cfg.Origin. A checkpoint's
+	// origin line and its signer's name are separate things in the note format,
+	// and they genuinely differ in the wild: the Go checksum database signs
+	// "go.sum database tree" with a key named "sum.golang.org". The policy below
+	// pins both independently, which is what actually matters — a checkpoint is
+	// accepted only if its origin line is exactly cfg.Origin *and* it carries a
+	// signature from v.
 	f, err := torchwood.NewTileFetcher(cfg.BaseURL,
 		torchwood.WithUserAgent("kt-witness/0.1 (+https://github.com/gdbsecurity/kt-witness)"))
 	if err != nil {

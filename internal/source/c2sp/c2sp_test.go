@@ -51,16 +51,18 @@ func TestTierReflectsEntryVerification(t *testing.T) {
 	}
 }
 
-// A verifier whose name differs from the configured origin must be refused.
-// The policy checks the origin line and the signature separately, so a mismatch
-// would let a correctly signed checkpoint be witnessed under another log's name.
-func TestVerifierNameMustMatchOrigin(t *testing.T) {
-	const vkey = "thelemail.com/keys+76ead63c+ASduViYkPgYHzuTuDnuTdEkjR/DIprnavuFA3vom4YZT"
-	_, err := New(Config{Origin: "someone.else/log", BaseURL: "https://example.invalid/", VKey: vkey})
-	if err == nil {
-		t.Fatal("a verifier named for a different log was accepted")
-	}
-	if !strings.Contains(err.Error(), "origin") {
-		t.Errorf("error should explain the mismatch, got: %v", err)
+// A signer's name and a checkpoint's origin line are different things, and real
+// logs differ in both: the Go checksum database signs the origin
+// "go.sum database tree" with a key named "sum.golang.org". Constructing such a
+// source must work — the origin line is pinned by the policy, not by insisting
+// the two strings match.
+func TestSignerNameMayDifferFromOrigin(t *testing.T) {
+	const vkey = "sum.golang.org+033de0ae+Ac4zctda0e5eza+HJyk9SxEdh+s3Ux18htTTAD8OuAn8"
+	if _, err := New(Config{
+		Origin:  "go.sum database tree",
+		BaseURL: "https://sum.golang.org/",
+		VKey:    vkey,
+	}); err != nil {
+		t.Fatalf("a log whose signer name differs from its origin was refused: %v", err)
 	}
 }
