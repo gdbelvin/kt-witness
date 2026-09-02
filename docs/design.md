@@ -153,7 +153,8 @@ have gone backwards is far more likely to be a bad read than a rollback.
 Sources therefore declare `DerivedHead()`. When it is true, even a
 size-with-different-root contradiction only withholds, because the "contradiction"
 is between two of *our* readings rather than two of the operator's signatures.
-Meta is currently the only derived-head source.
+Meta and WhatsApp are the derived-head sources: both are read out of object
+listings rather than handed to us signed.
 
 ## Architecture
 
