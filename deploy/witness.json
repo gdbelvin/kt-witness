@@ -27,6 +27,12 @@
       "plexi_namespace_url": "https://plexi.key-transparency.cloudflare.com/namespaces/messenger.key-transparency.v1"
     },
     {
+      "type": "akd",
+      "origin": "whatsapp.kt/v2",
+      "log_directory": "https://d4ttn6vhp3mg0.cloudfront.net",
+      "plexi_namespace_url": "https://plexi.key-transparency.cloudflare.com/namespaces/whatsapp.key-transparency.v2"
+    },
+    {
       "type": "proton",
       "origin": "proton.me/kt/v1",
       "api_base": "https://api.protonmail.ch"
