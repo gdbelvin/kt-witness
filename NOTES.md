@@ -127,29 +127,23 @@ IDS trees, `log_head` and `log_leaves` return INVALID_REQUEST for them by id, an
 `PerApplicationTreeConfigNode` (which holds the key) lives at index 0 of a tree
 we cannot read.
 
-## Apple: what would unlock tier A
+## Apple: iMessage heads are still observations
 
-The Top-Level Tree is witnessable today at tier S. Two things block tier A, and
-one blocks witnessing iMessage at all:
+Apple's Top-Level Tree is now witnessed at tier A. What remains is binding the
+per-application heads inside it — iMessage among them — to the root we verify.
 
-- `consistency_proof` returns INVALID_REQUEST for every size-to-size range
-  tried. Apple's own auditor rebuilds consistency from `log_leaves` plus a
-  revision tree instead. Working that out — or finding the accepted parameter
-  shape — is what would promote Apple from S to A.
-- `list_trees` exposes only the Top-Level Tree and the PRIVATE_CLOUD_COMPUTE
-  (application 5) trees. There is no IDS_MESSAGING (application 1) tree, and the
-  iMessage client endpoints require device attestation plus Apple ID auth. So
-  iMessage's own tree cannot be witnessed until Apple lists it.
+`RevisionLogInclusionProofRequest` (KtClientApi.proto) is the right shape:
+`{version, application, logType, repeated revision}`, and for logType
+TOP_LEVEL_TREE the revisions are the *per-application* tree's, returning proof of
+that application head's leaf in the TLT. That is exactly the missing link. But
+`at_researcher/log_inclusion_proof` still returns INVALID_REQUEST for it, and the
+client-plane equivalent (`kt_client/revision_inclusion_proof`) requires device
+attestation. The `at_client` surface, which unlocked consistency proofs, is worth
+probing for an inclusion-proof path too — that is the obvious next thing to try,
+since `at_client` is where consistency turned out to live.
 
-Also worth recording: the signing key is served by `list_trees`, the same
-endpoint that serves the heads. Trusting it from there is circular, so the DER
-is pinned in the adapter. Its SHA-256 equals the `signingKeySPKIHash` Apple puts
-in every signature, so the response field is used only to select a key, never to
-supply one.
-
-The request encoding has a trap. `revision` must be explicitly -1; omitting it
-defaults to 0 and the server answers HTTP 200 with a correctly signed head of the
-*empty* tree. The adapter rejects a zero size for exactly this reason.
+The hashing is no longer a question: the Top-Level Tree is RFC 6962, so once a
+proof can be fetched, folding it needs no new cryptography.
 
 ## Blocked ecosystems
 

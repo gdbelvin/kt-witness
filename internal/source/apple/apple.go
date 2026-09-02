@@ -79,6 +79,10 @@ type Source struct {
 	pub    *ecdsa.PublicKey
 	pubDER []byte
 	keyID  [32]byte
+
+	// latest caches the most recent verified head, so the revision behind a
+	// witnessed size is usually known without searching for it.
+	latest *treeState
 }
 
 type Config struct {
@@ -93,6 +97,10 @@ type Config struct {
 
 	// PublicKeyDER is the hex DER SPKI to pin. Defaults to the Top-Level Tree's.
 	PublicKeyDER string
+
+	// ClientEndpoint is the at_client surface, which serves consistency proofs.
+	// Defaults to the at_client path on the same host as Endpoint.
+	ClientEndpoint string
 }
 
 func New(cfg Config) (*Source, error) {
@@ -131,7 +139,7 @@ func New(cfg Config) (*Source, error) {
 }
 
 func (s *Source) Origin() string    { return s.cfg.Origin }
-func (s *Source) Tier() source.Tier { return source.TierSignedHead }
+func (s *Source) Tier() source.Tier { return source.TierA }
 
 // DerivedHead is false: the head carries Apple's ECDSA signature, so a
 // contradiction is Apple contradicting its own key.
@@ -176,95 +184,119 @@ func (s *Source) Fetch(ctx context.Context, _ *source.Head) (*source.Head, error
 		return nil, err
 	}
 
-	size, root, err := s.verifyLogHead(body)
+	st, err := s.verifyHeadResponse(body)
 	if err != nil {
 		return nil, err
 	}
+	s.latest = st
 
-	var h tlog.Hash
-	copy(h[:], root)
-	cp := torchwood.Checkpoint{Origin: s.cfg.Origin, Tree: tlog.Tree{N: int64(size), Hash: h}}
+	cp := torchwood.Checkpoint{Origin: s.cfg.Origin, Tree: tlog.Tree{N: int64(st.size), Hash: st.root}}
 	text := cp.String()
 	return &source.Head{
 		Origin:    s.cfg.Origin,
-		Size:      int64(size),
-		Hash:      h,
+		Size:      int64(st.size),
+		Hash:      st.root,
 		Signed:    []byte(text),
 		Note:      &note.Note{Text: text},
 		FetchedAt: fetchedAt,
 	}, nil
 }
 
-// verifyLogHead checks Apple's signature over the tree head and returns the
-// attested size and root.
-func (s *Source) verifyLogHead(body []byte) (uint64, []byte, error) {
+// verifyHeadResponse verifies a LogHeadResponse and returns the head it carries.
+func (s *Source) verifyHeadResponse(body []byte) (*treeState, error) {
 	// LogHeadResponse{status = 1, logHead = 4}. Note field 4, not 2.
 	resp := pbwire.Parse(body)
 	signedObj := pbwire.First(resp, 4)
 	if signedObj == nil {
-		return 0, nil, fmt.Errorf("apple: response carries no log head (status %d)",
+		return nil, fmt.Errorf("apple: response carries no log head (status %d)",
 			pbwire.Uint64(resp, 1))
 	}
-
-	// SignedObject{object = 1, signature = 2}.
-	so := pbwire.Parse(signedObj)
-	obj := pbwire.First(so, 1)
-	sigMsg := pbwire.First(so, 2)
-	if obj == nil || sigMsg == nil {
-		return 0, nil, fmt.Errorf("apple: malformed SignedObject")
-	}
-
-	// Signature{signature = 1, signingKeySPKIHash = 2, algorithm = 3}.
-	sm := pbwire.Parse(sigMsg)
-	sig := pbwire.First(sm, 1)
-	keyHash := pbwire.First(sm, 2)
-	if alg := pbwire.Uint64(sm, 3); alg != 1 {
-		return 0, nil, fmt.Errorf("apple: signature algorithm %d, want 1 (ECDSA_SHA256)", alg)
-	}
-	if len(keyHash) != 32 || !bytes.Equal(keyHash, s.keyID[:]) {
-		return 0, nil, fmt.Errorf("apple: head signed by key %x, not the pinned key %x",
-			keyHash, s.keyID[:8])
-	}
-
-	// The signature covers the inner object bytes exactly as transmitted, so
-	// they are verified as received and never re-serialized: protobuf encoding
-	// is not guaranteed to round-trip byte-for-byte.
-	digest := sha256.Sum256(obj)
-	if !ecdsa.VerifyASN1(s.pub, digest[:], sig) {
-		return 0, nil, fmt.Errorf("apple: signature does not verify over the tree head")
-	}
-
-	// LogHead{logSize = 2, logHeadHash = 3, revision = 4, logType = 5, treeId = 7}.
-	lh := pbwire.Parse(obj)
-	size := pbwire.Uint64(lh, 2)
-	root := pbwire.First(lh, 3)
-	treeID := pbwire.Uint64(lh, 7)
-
-	if treeID != s.cfg.TreeID {
-		return 0, nil, fmt.Errorf("apple: head is for tree %d, expected %d", treeID, s.cfg.TreeID)
-	}
-	if len(root) != 32 {
-		return 0, nil, fmt.Errorf("apple: log head hash is %d bytes, want 32", len(root))
-	}
-	if size == 0 {
-		// The empty-tree head, which is what the server returns — signed, with
-		// HTTP 200 — when the revision field is missing. Correctly signed and
-		// completely useless, so it is rejected explicitly rather than being
-		// witnessed as a real head that later appears to regress.
-		return 0, nil, fmt.Errorf("apple: server returned the empty tree head; " +
-			"the request is missing an explicit revision")
-	}
-	return size, root, nil
+	return s.verifySignedHead(signedObj)
 }
 
-// VerifyConsistency has nothing further to prove at this tier.
+// VerifyConsistency proves the new tree extends the one we witnessed.
 //
-// Apple's consistency_proof rejects every size-to-size range; its own auditor
-// rebuilds consistency from log_leaves and a revision tree instead, which is not
-// implemented here. What still holds, enforced by the witness core: the tree
-// size may not go backwards, and two different roots signed at the same size are
-// a conclusive contradiction. Tier() says exactly this much and no more.
-func (s *Source) VerifyConsistency(context.Context, *source.Head, *source.Head) error {
+// Both endpoints of the proof are signed heads verified against the pinned key,
+// and the proof itself is checked with RFC 6962 consistency verification —
+// confirmed empirically to be Apple's construction by checking a production
+// proof against golang.org/x/mod/sumdb/tlog.
+//
+// The server may split a range into several adjoining proofs, so they are
+// chained: each must start where the previous ended, and the chain must run from
+// the head we witnessed to the head we are about to attest.
+func (s *Source) VerifyConsistency(ctx context.Context, prev, next *source.Head) error {
+	if prev == nil {
+		return nil // trust on first use
+	}
+
+	startRev, err := s.revisionForSize(ctx, uint64(prev.Size), s.latest)
+	if err != nil {
+		return fmt.Errorf("apple: locating revision for witnessed size %d: %w", prev.Size, err)
+	}
+	endRev := uint64(0)
+	if s.latest != nil && s.latest.size == uint64(next.Size) {
+		endRev = s.latest.revision
+	} else {
+		if endRev, err = s.revisionForSize(ctx, uint64(next.Size), s.latest); err != nil {
+			return fmt.Errorf("apple: locating revision for size %d: %w", next.Size, err)
+		}
+	}
+	if startRev >= endRev {
+		return fmt.Errorf("apple: revisions do not advance (%d -> %d)", startRev, endRev)
+	}
+
+	body, err := s.postTo(ctx, s.clientBase(), consistencyEndpoint, s.consistencyRequest(startRev, endRev))
+	if err != nil {
+		return err
+	}
+	resp := pbwire.Parse(body)
+	if st := pbwire.Uint64(resp, 1); st != 1 {
+		return fmt.Errorf("apple: consistency proof %d->%d: status %d", startRev, endRev, st)
+	}
+	if len(resp[3]) == 0 {
+		return fmt.Errorf("apple: consistency proof %d->%d: no proofs returned", startRev, endRev)
+	}
+
+	cur := &treeState{size: uint64(prev.Size), root: prev.Hash}
+	for i, segRaw := range resp[3] {
+		seg := pbwire.Parse(segRaw)
+		from, err := s.verifySignedHead(pbwire.First(seg, 3))
+		if err != nil {
+			return fmt.Errorf("apple: proof segment %d start head: %w", i, err)
+		}
+		to, err := s.verifySignedHead(pbwire.First(seg, 4))
+		if err != nil {
+			return fmt.Errorf("apple: proof segment %d end head: %w", i, err)
+		}
+		if from.size != cur.size || from.root != cur.root {
+			return fmt.Errorf("apple: proof segment %d starts at size %d, expected %d (chain broken)",
+				i, from.size, cur.size)
+		}
+
+		var proof tlog.TreeProof
+		for _, h := range seg[5] {
+			if len(h) != 32 {
+				return fmt.Errorf("apple: proof hash is %d bytes, want 32", len(h))
+			}
+			var ph tlog.Hash
+			copy(ph[:], h)
+			proof = append(proof, ph)
+		}
+		if err := tlog.CheckTree(proof, int64(to.size), to.root, int64(from.size), from.root); err != nil {
+			// Both heads carry Apple\'s signature, so no valid proof connecting
+			// them would mean Apple signed two roots that cannot share a
+			// history. But a broken proof looks the same from here, and the
+			// accusation is permanent, so we withhold instead. A genuine split
+			// view is caught by comparing what different witnesses cosigned.
+			return fmt.Errorf("apple: no valid consistency proof %d->%d: %w", from.size, to.size, err)
+		}
+		cur = to
+	}
+
+	if cur.size != uint64(next.Size) || cur.root != next.Hash {
+		return fmt.Errorf("apple: proof chain ends at size %d, not the head being attested (%d)",
+			cur.size, next.Size)
+	}
 	return nil
 }
 
@@ -385,8 +417,12 @@ func (s *Source) logLeavesRequest(start, end uint64) []byte {
 }
 
 func (s *Source) post(ctx context.Context, path string, body []byte) ([]byte, error) {
+	return s.postTo(ctx, s.cfg.Endpoint, path, body)
+}
+
+func (s *Source) postTo(ctx context.Context, base, path string, body []byte) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		s.cfg.Endpoint+"/"+path, bytes.NewReader(body))
+		base+"/"+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -400,4 +436,159 @@ func (s *Source) post(ctx context.Context, path string, body []byte) ([]byte, er
 		return nil, fmt.Errorf("apple: %s: HTTP %d", path, resp.StatusCode)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+}
+
+// consistencyEndpoint is on the at_client surface, not at_researcher.
+//
+// This distinction is the whole reason append-only is provable here:
+// at_researcher/consistency_proof rejects every request, while
+// at_client/consistency_proof answers the same question unauthenticated. The
+// researcher bag does not mention it; it comes from the *client* bag.
+const consistencyEndpoint = "consistency_proof"
+
+// clientBase derives the at_client URL from the configured at_researcher one,
+// since the two live on the same host.
+func (s *Source) clientBase() string {
+	if s.cfg.ClientEndpoint != "" {
+		return s.cfg.ClientEndpoint
+	}
+	return strings.TrimSuffix(s.cfg.Endpoint, "/at_researcher") + "/at_client"
+}
+
+// consistencyRequest builds ConsistencyProofRequest{version, requests, logType}.
+//
+// Note the proof is keyed by *revision*, not by tree size — asking in sizes is
+// rejected, which is an easy way to conclude wrongly that the endpoint is
+// broken. application is omitted because logType is TOP_LEVEL_TREE.
+func (s *Source) consistencyRequest(startRev, endRev uint64) []byte {
+	var sub []byte
+	sub = pbwire.AppendTag(sub, 3, 0)
+	sub = pbwire.AppendVarint(sub, startRev)
+	sub = pbwire.AppendTag(sub, 4, 0)
+	sub = pbwire.AppendVarint(sub, endRev)
+
+	var b []byte
+	b = pbwire.AppendTag(b, 1, 0)
+	b = pbwire.AppendVarint(b, requestVersion)
+	b = pbwire.AppendTag(b, 2, 2)
+	b = pbwire.AppendVarint(b, uint64(len(sub)))
+	b = append(b, sub...)
+	b = pbwire.AppendTag(b, 3, 0)
+	b = pbwire.AppendVarint(b, logTypeTopLevelTree)
+	return b
+}
+
+const logTypeTopLevelTree = 3
+
+// treeState is one signed head, verified.
+type treeState struct {
+	size     uint64
+	revision uint64
+	root     tlog.Hash
+}
+
+// verifySignedHead checks a SignedObject carrying a LogHead and returns it.
+// Shared by the head and consistency paths so both hold to the same standard.
+func (s *Source) verifySignedHead(signedObj []byte) (*treeState, error) {
+	so := pbwire.Parse(signedObj)
+	obj := pbwire.First(so, 1)
+	sigMsg := pbwire.First(so, 2)
+	if obj == nil || sigMsg == nil {
+		return nil, fmt.Errorf("apple: malformed SignedObject")
+	}
+	sm := pbwire.Parse(sigMsg)
+	sig := pbwire.First(sm, 1)
+	keyHash := pbwire.First(sm, 2)
+	if alg := pbwire.Uint64(sm, 3); alg != 1 {
+		return nil, fmt.Errorf("apple: signature algorithm %d, want 1 (ECDSA_SHA256)", alg)
+	}
+	if len(keyHash) != 32 || !bytes.Equal(keyHash, s.keyID[:]) {
+		return nil, fmt.Errorf("apple: head signed by key %x, not the pinned key %x", keyHash, s.keyID[:8])
+	}
+	digest := sha256.Sum256(obj)
+	if !ecdsa.VerifyASN1(s.pub, digest[:], sig) {
+		return nil, fmt.Errorf("apple: signature does not verify over the tree head")
+	}
+
+	lh := pbwire.Parse(obj)
+	if tid := pbwire.Uint64(lh, 7); tid != s.cfg.TreeID {
+		return nil, fmt.Errorf("apple: head is for tree %d, expected %d", tid, s.cfg.TreeID)
+	}
+	rootBytes := pbwire.First(lh, 3)
+	if len(rootBytes) != 32 {
+		return nil, fmt.Errorf("apple: log head hash is %d bytes, want 32", len(rootBytes))
+	}
+	st := &treeState{size: pbwire.Uint64(lh, 2), revision: pbwire.Uint64(lh, 4)}
+	copy(st.root[:], rootBytes)
+	if st.size == 0 {
+		return nil, fmt.Errorf("apple: server returned the empty tree head; " +
+			"the request is missing an explicit revision")
+	}
+	return st, nil
+}
+
+// revisionForSize finds the revision whose head has the given tree size.
+//
+// Consistency proofs are keyed by revision, but a witnessed head is identified
+// by size, and the mapping is not derivable. Rather than carry extra state that
+// a restart would lose, it is recovered by binary search over log_head — which
+// accepts a revision — costing about twenty requests and always working from a
+// cold start.
+func (s *Source) revisionForSize(ctx context.Context, size uint64, hint *treeState) (uint64, error) {
+	if hint != nil && hint.size == size {
+		return hint.revision, nil
+	}
+	lo, hi := uint64(1), hint.revision
+	if hint == nil {
+		cur, err := s.head(ctx, latestRevision)
+		if err != nil {
+			return 0, err
+		}
+		hi = cur.revision
+	}
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		st, err := s.head(ctx, int64(mid))
+		if err != nil {
+			return 0, err
+		}
+		switch {
+		case st.size == size:
+			return mid, nil
+		case st.size < size:
+			lo = mid + 1
+		default:
+			hi = mid
+		}
+	}
+	st, err := s.head(ctx, int64(lo))
+	if err != nil {
+		return 0, err
+	}
+	if st.size != size {
+		return 0, fmt.Errorf("apple: no revision has tree size %d (revision %d has %d)", size, lo, st.size)
+	}
+	return lo, nil
+}
+
+// head fetches and verifies the head at a revision (-1 for latest).
+func (s *Source) head(ctx context.Context, revision int64) (*treeState, error) {
+	var b []byte
+	b = pbwire.AppendTag(b, 1, 0)
+	b = pbwire.AppendVarint(b, requestVersion)
+	b = pbwire.AppendTag(b, 2, 0)
+	b = pbwire.AppendVarint(b, s.cfg.TreeID)
+	b = pbwire.AppendTag(b, 4, 0)
+	b = pbwire.AppendVarint(b, uint64(revision))
+
+	body, err := s.post(ctx, "log_head", b)
+	if err != nil {
+		return nil, err
+	}
+	resp := pbwire.Parse(body)
+	signedObj := pbwire.First(resp, 4)
+	if signedObj == nil {
+		return nil, fmt.Errorf("apple: response carries no log head (status %d)", pbwire.Uint64(resp, 1))
+	}
+	return s.verifySignedHead(signedObj)
 }

@@ -40,12 +40,11 @@ overpromises, so the distinction is enforced in the type system
   signature must verify over the result. Append-only across observations then
   follows from the `lastTreeHeadSize` consistency proof. Verified live at tree
   size 852,163,309.
-- **Apple, tier S — working.** Apple's promised public auditing was never
-  announced, but the infrastructure is live: `at_researcher/log_head` serves
-  ECDSA-signed tree heads to anyone. This witnesses the shared **Top-Level Tree**
-  that iMessage commits into — not iMessage's own tree, which is not publicly
-  listed. Append-only is unproven because `consistency_proof` rejects
-  size-to-size ranges.
+- **Apple, tier A — working.** Apple's promised public auditing was never
+  announced, but the infrastructure is live and open. `at_researcher/log_head`
+  serves ECDSA-signed heads of the shared **Top-Level Tree** that iMessage
+  commits into, and `at_client/consistency_proof` proves append-only between
+  them. Verified live across a real gap.
 
   It also surfaces **iMessage**. The Top-Level Tree is a *log of per-application
   tree heads*, so reading its leaves yields IDS_MESSAGING heads even though that
@@ -200,6 +199,32 @@ pair up to 40.
 What is still **not** verified is the prefix tree — that individual
 identifier-to-key bindings are correctly placed. That needs VRF evaluation and
 the search-proof machinery, and is the Signal analogue of tier B.
+
+## How Apple's append-only proof is obtained
+
+Two things had to be found, and both were non-obvious.
+
+**The endpoint is on a different surface.** `at_researcher/consistency_proof`
+rejects every request — which reads like the capability does not exist. But the
+*client* bag (not the researcher one) points at `at_client/consistency_proof` on
+the same host, and that answers the same question unauthenticated.
+
+**The proof is keyed by revision, not tree size.** Asking in sizes is rejected.
+A Top-Level Tree head carries both, and they are far apart (revision ~979,550 at
+size ~1,642,919), so using the wrong one looks like a broken endpoint rather than
+a wrong argument.
+
+The response returns both endpoint heads as signed objects plus the proof hashes,
+so both ends are verified against the pinned key and then the proof is checked.
+Apple's construction turned out to be **standard RFC 6962**, established by
+running a production proof through `golang.org/x/mod/sumdb/tlog` — it verified
+first try. The server may split a range into adjoining proofs, so segments are
+chained and each must start where the previous ended.
+
+Consistency proofs are keyed by revision but a witnessed head is identified by
+size, and the mapping is not derivable. Rather than carry state a restart would
+lose, the revision is recovered by binary search over `log_head` — about twenty
+requests, and it always works from cold.
 
 ## Observations vs attestations
 

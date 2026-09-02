@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gdbsecurity/kt-witness/internal/pbwire"
+	"github.com/gdbsecurity/kt-witness/internal/source"
 )
 
 func newSource(t *testing.T) *Source {
@@ -70,15 +71,18 @@ func captured(t *testing.T) []byte {
 
 func TestVerifiesCapturedProductionHead(t *testing.T) {
 	s := newSource(t)
-	size, root, err := s.verifyLogHead(captured(t))
+	st, err := s.verifyHeadResponse(captured(t))
 	if err != nil {
 		t.Fatalf("a genuine signed head should verify: %v", err)
 	}
-	if size != 1642829 {
-		t.Fatalf("want tree size 1642829, got %d", size)
+	if st.size != 1642829 {
+		t.Fatalf("want tree size 1642829, got %d", st.size)
+	}
+	if st.revision != 979517 {
+		t.Fatalf("want revision 979517, got %d", st.revision)
 	}
 	const wantRoot = "027b7d7e433a63089e85476cccf2669dd4728cc474038c20bb435f86aa96ef3c"
-	if got := hex.EncodeToString(root); got != wantRoot {
+	if got := hex.EncodeToString(st.root[:]); got != wantRoot {
 		t.Fatalf("root %s, want %s", got, wantRoot)
 	}
 }
@@ -96,7 +100,7 @@ func TestTamperedHeadIsRejected(t *testing.T) {
 			break
 		}
 	}
-	if _, _, err := s.verifyLogHead(body); err == nil {
+	if _, err := s.verifyHeadResponse(body); err == nil {
 		t.Fatal("a modified tree head must not verify")
 	}
 }
@@ -111,7 +115,7 @@ func TestHeadSignedByAnotherKeyIsRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = s.verifyLogHead(captured(t))
+	_, err = s.verifyHeadResponse(captured(t))
 	if err == nil || !strings.Contains(err.Error(), "not the pinned key") {
 		t.Fatalf("want a pinned-key mismatch, got %v", err)
 	}
@@ -124,7 +128,7 @@ func TestRejectsMalformedResponses(t *testing.T) {
 		"garbage":   []byte{0xff, 0xff, 0xff},
 		"truncated": captured(t)[:20],
 	} {
-		if _, _, err := s.verifyLogHead(body); err == nil {
+		if _, err := s.verifyHeadResponse(body); err == nil {
 			t.Errorf("%s: must be rejected", name)
 		}
 	}
@@ -190,5 +194,42 @@ func TestLiveScanFindsIMessage(t *testing.T) {
 	t.Logf("applications seen in %d leaves: %v", len(heads), byApp)
 	if len(ids) == 0 {
 		t.Fatal("no IDS_MESSAGING heads found; the scan window may be too small")
+	}
+}
+
+// The tier-A claim, end to end against production: fetch a head, wait for the
+// tree to advance, then prove the new head extends the old one.
+func TestLiveConsistency(t *testing.T) {
+	if os.Getenv("KT_WITNESS_LIVE") == "" {
+		t.Skip("set KT_WITNESS_LIVE=1 to run against production")
+	}
+	s := newSource(t)
+	ctx := context.Background()
+
+	// An earlier revision gives a genuine gap to prove across without waiting.
+	cur, err := s.head(ctx, latestRevision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	older, err := s.head(ctx, int64(cur.revision-20))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("proving %d (rev %d) -> %d (rev %d)", older.size, older.revision, cur.size, cur.revision)
+
+	prev := &source.Head{Origin: s.cfg.Origin, Size: int64(older.size), Hash: older.root}
+	next := &source.Head{Origin: s.cfg.Origin, Size: int64(cur.size), Hash: cur.root}
+	s.latest = cur
+
+	if err := s.VerifyConsistency(ctx, prev, next); err != nil {
+		t.Fatalf("a genuine extension should verify: %v", err)
+	}
+	t.Log("consistency proven: Apple's tree is append-only across these observations")
+
+	// And a root that is not what the proof implies must be refused.
+	bogus := *next
+	bogus.Hash[0] ^= 0xFF
+	if err := s.VerifyConsistency(ctx, prev, &bogus); err == nil {
+		t.Fatal("a head the proof does not reach must be rejected")
 	}
 }
