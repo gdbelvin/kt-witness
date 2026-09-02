@@ -163,7 +163,7 @@ func TestAuditsAreValidJSONLines(t *testing.T) {
 		t.Fatal(err)
 	}
 	for epoch := int64(1); epoch <= 3; epoch++ {
-		if _, err := db.ObserveAppHead(time.Now(), &store.AppHead{Origin: origin, TreeID: 1}); err != nil {
+		if _, _, err := db.ObserveAppHead(time.Now(), &store.AppHead{Origin: origin, TreeID: 1}); err != nil {
 			t.Fatal(err)
 		}
 		if err := db.RecordAudit(&store.Audit{

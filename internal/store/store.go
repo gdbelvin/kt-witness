@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -404,8 +405,14 @@ func appHeadKey(origin string, treeID uint64) []byte {
 
 // ObserveAppHead merges a new observation, recording any contradiction against
 // what we saw before.
-func (s *Store) ObserveAppHead(now time.Time, obs *AppHead) (*AppHead, error) {
+// maxAppHeadConflicts bounds the recorded contradictions per observed tree.
+const maxAppHeadConflicts = 32
+
+// ObserveAppHead records an observed per-application head and returns the merged
+// record together with any contradictions seen *for the first time*.
+func (s *Store) ObserveAppHead(now time.Time, obs *AppHead) (*AppHead, []string, error) {
 	var out *AppHead
+	var newConflicts []string
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketAppHeads)
 		key := appHeadKey(obs.Origin, obs.TreeID)
@@ -423,17 +430,34 @@ func (s *Store) ObserveAppHead(now time.Time, obs *AppHead) (*AppHead, error) {
 		// Contradictions are recorded rather than acted on: these heads are not
 		// signature-verified, so they are evidence to look at, not grounds to
 		// refuse anything.
+		var found []string
 		if obs.Revision == cur.Revision && obs.RootHash != cur.RootHash {
-			cur.Conflicts = append(cur.Conflicts, fmt.Sprintf(
+			found = append(found, fmt.Sprintf(
 				"revision %d seen with two roots: %s then %s", obs.Revision, cur.RootHash, obs.RootHash))
 		}
 		if obs.LogSize < cur.LogSize {
-			cur.Conflicts = append(cur.Conflicts, fmt.Sprintf(
+			found = append(found, fmt.Sprintf(
 				"log size went backwards: %d then %d", cur.LogSize, obs.LogSize))
 		}
 		if cur.SigningKeyHash != "" && obs.SigningKeyHash != cur.SigningKeyHash {
-			cur.Conflicts = append(cur.Conflicts, fmt.Sprintf(
+			found = append(found, fmt.Sprintf(
 				"signing key changed: %s then %s", cur.SigningKeyHash, obs.SigningKeyHash))
+		}
+
+		// Only conflicts not already recorded are new. Without this the same
+		// historical contradiction is reported on every scan for the life of the
+		// record, which trains an operator to ignore the one log line that is
+		// supposed to demand attention.
+		for _, c := range found {
+			if !slices.Contains(cur.Conflicts, c) {
+				newConflicts = append(newConflicts, c)
+			}
+		}
+		cur.Conflicts = append(cur.Conflicts, newConflicts...)
+		// Bounded: an unbounded list is a memory and storage leak, and the first
+		// occurrences are the informative ones.
+		if len(cur.Conflicts) > maxAppHeadConflicts {
+			cur.Conflicts = cur.Conflicts[:maxAppHeadConflicts]
 		}
 
 		if obs.LogSize >= cur.LogSize {
@@ -451,9 +475,9 @@ func (s *Store) ObserveAppHead(now time.Time, obs *AppHead) (*AppHead, error) {
 		return b.Put(key, enc)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("store: observe app head: %w", err)
+		return nil, nil, fmt.Errorf("store: observe app head: %w", err)
 	}
-	return out, nil
+	return out, newConflicts, nil
 }
 
 func (s *Store) AppHeads() ([]*AppHead, error) {

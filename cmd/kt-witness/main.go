@@ -513,18 +513,19 @@ func scanApplications(ctx context.Context, db *store.Store, sources []source.Sou
 				RootHash:       hex.EncodeToString(h.RootHash),
 				SigningKeyHash: hex.EncodeToString(h.SigningKeyHash),
 			}
-			merged, err := db.ObserveAppHead(now, obs)
+			merged, fresh, err := db.ObserveAppHead(now, obs)
 			if err != nil {
 				log.Warn("recording application head", "tree", h.TreeID, "err", err)
 				continue
 			}
 			// Conflicts are not evidence of misbehaviour we can stand behind —
 			// these heads are not signature-verified — but they are exactly what
-			// a human should look at.
-			if n := len(merged.Conflicts); n > 0 {
+			// a human should look at. Only newly seen ones are reported: an alarm
+			// that repeats every scan forever is an alarm nobody reads.
+			if n := len(fresh); n > 0 {
 				log.Error("CONTRADICTION IN OBSERVED APPLICATION HEAD",
 					"application", h.Name, "tree", h.TreeID,
-					"latest", merged.Conflicts[n-1])
+					"new", n, "latest", fresh[n-1], "total", len(merged.Conflicts))
 			}
 		}
 	}
