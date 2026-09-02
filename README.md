@@ -15,6 +15,10 @@ deployment. One file per ecosystem covers what is unique to it:
 [c2sp](docs/c2sp.md) · [meta](docs/meta.md) · [proton](docs/proton.md) ·
 [signal](docs/signal.md) · [apple](docs/apple.md).
 
+[`docs/landscape.md`](docs/landscape.md) surveys the whole transparency-log
+world: what exists, what is witnessed here, what is reachable, and what is
+deliberately excluded.
+
 ## Assurance tiers
 
 Every published assertion names its tier. Conflating them is how a witness

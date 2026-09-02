@@ -114,8 +114,26 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
 - [ ] **Gossip with other witnesses.** Cross-witness comparison is how split
       views are actually caught, and it would subsume the beacon-canonicalisation
       problem above.
-- [ ] **WhatsApp.** Not a config copy-paste: `whatsapp.key-transparency.v1`
-      reports status `Disabled` with inconsistent epochs. Check `v2` first.
+- [x] **WhatsApp.** Done — `whatsapp.key-transparency.v2` is Online with a
+      public log directory and needed no code at all. v1 stays untouched
+      (`Disabled`). Tier B verified feasible: one real proof through the
+      existing sidecar in 2.7 s. Cost differs from Messenger — 30 s epochs at
+      ~58.5 MB, so ~17 GB/day at the 0.1 sample rate.
+- [ ] **Witness the remaining 77 static CT logs.** All 80 in Google's list
+      verify; three are configured. Pure configuration from here, but the load
+      and the question of whether more CT witnesses are wanted are operational
+      decisions. See [docs/landscape.md](docs/landscape.md).
+- [ ] **Go checksum database.** Serves a C2SP note and is the single point of
+      trust for the whole Go module ecosystem, with few independent witnesses.
+      Needs two small changes: its checkpoint is at `/latest` rather than
+      `/checkpoint`, and its tiles use the older sumdb layout rather than
+      `tlog-tiles`.
+- [ ] **Sigstore Rekor.** `/api/v2/checkpoint` answers 200 and v1 serves a
+      signed tree head; verify one through the adapter and it is likely
+      configuration. Witnessing Rekor covers npm and PyPI attestations
+      transitively.
+- [ ] **sigsum.** Its own protocol, and it already has a witness network —
+      joining is probably worth more than reimplementing.
 - [ ] **IETF keytrans.** Revisit when a public deployment exists. The draft
       specifies no transport, so there is currently nothing to be conformant to
       on the wire.
