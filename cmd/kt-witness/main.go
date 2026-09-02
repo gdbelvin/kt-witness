@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -28,6 +29,7 @@ import (
 	"github.com/gdbsecurity/kt-witness/internal/source/c2sp"
 	"github.com/gdbsecurity/kt-witness/internal/source/proton"
 	ktsignal "github.com/gdbsecurity/kt-witness/internal/source/signal"
+	"github.com/gdbsecurity/kt-witness/internal/staticct"
 	"github.com/gdbsecurity/kt-witness/internal/store"
 	"github.com/gdbsecurity/kt-witness/internal/witness"
 )
@@ -73,6 +75,11 @@ type logConfig struct {
 	VKey          string `json:"vkey"`
 	VerifyEntries bool   `json:"verify_entries"`
 
+	// staticct: the log's DER SubjectPublicKeyInfo, base64, exactly as
+	// published in the CT log list. Origin must be the submission prefix
+	// without scheme; BaseURL is the monitoring prefix.
+	LogKey string `json:"log_key"`
+
 	// akd / proton / signal
 	APIBase           string   `json:"api_base"`
 	Endpoint          string   `json:"endpoint"`
@@ -102,6 +109,24 @@ func (l logConfig) build(log *slog.Logger) (source.Source, error) {
 			PlexiNamespaceURL: l.PlexiNamespaceURL,
 			StartEpoch:        l.StartEpoch,
 			MaxEpochsPerRound: l.MaxEpochsPerRound,
+		})
+	case "staticct":
+		// Static CT logs are tlog-tiles logs whose checkpoint carries an
+		// RFC 6962 tree head signature instead of Ed25519, so they reuse the
+		// c2sp adapter with a different verifier.
+		spki, err := base64.StdEncoding.DecodeString(l.LogKey)
+		if err != nil {
+			return nil, fmt.Errorf("log %q: log_key is not base64: %w", l.Origin, err)
+		}
+		v, err := staticct.NewVerifier(l.Origin, spki)
+		if err != nil {
+			return nil, fmt.Errorf("log %q: %w", l.Origin, err)
+		}
+		return c2sp.New(c2sp.Config{
+			Origin: l.Origin, BaseURL: l.BaseURL, Verifier: v,
+			// Entry verification is deliberately not offered here: static CT
+			// serves entries at tile/entries with a different encoding from
+			// tlog-tiles' tile/data, so the c2sp entry reader does not apply.
 		})
 	case "proton":
 		return proton.New(proton.Config{

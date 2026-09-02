@@ -37,8 +37,14 @@ type Config struct {
 	// BaseURL serves both "checkpoint" and "tile/...".
 	BaseURL string
 
-	// VKey is the log's note verifier key, in name+keyid+base64 form.
+	// VKey is the log's note verifier key, in name+keyid+base64 form. It is
+	// used only when Verifier is nil.
 	VKey string
+
+	// Verifier overrides VKey, for logs whose checkpoint signature the note
+	// package cannot parse by itself. Static CT logs sign with the RFC 6962
+	// tree head signature rather than Ed25519; see internal/staticct.
+	Verifier note.Verifier
 
 	// VerifyEntries additionally checks that each newly added leaf is the hash
 	// of an entry the log publishes. For an append-only entry log that is the
@@ -47,9 +53,18 @@ type Config struct {
 }
 
 func New(cfg Config) (*Source, error) {
-	v, err := note.NewVerifier(cfg.VKey)
-	if err != nil {
-		return nil, fmt.Errorf("c2sp: parse vkey for %s: %w", cfg.Origin, err)
+	v := cfg.Verifier
+	if v == nil {
+		var err error
+		if v, err = note.NewVerifier(cfg.VKey); err != nil {
+			return nil, fmt.Errorf("c2sp: parse vkey for %s: %w", cfg.Origin, err)
+		}
+	}
+	if v.Name() != cfg.Origin {
+		// The policy checks the origin line and the signature independently, so
+		// a verifier named differently from the configured origin would let a
+		// correctly signed checkpoint be witnessed under the wrong name.
+		return nil, fmt.Errorf("c2sp: verifier is named %q but the origin is %q", v.Name(), cfg.Origin)
 	}
 	f, err := torchwood.NewTileFetcher(cfg.BaseURL,
 		torchwood.WithUserAgent("kt-witness/0.1 (+https://github.com/gdbsecurity/kt-witness)"))

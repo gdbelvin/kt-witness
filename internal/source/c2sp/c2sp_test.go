@@ -34,7 +34,7 @@ func TestSplitEntriesRejectsTruncated(t *testing.T) {
 // entries we do not read is still witnessed at tier A.
 func TestTierReflectsEntryVerification(t *testing.T) {
 	const vkey = "thelemail.com/keys+76ead63c+ASduViYkPgYHzuTuDnuTdEkjR/DIprnavuFA3vom4YZT"
-	plain, err := New(Config{Origin: "x", BaseURL: "https://example.invalid/", VKey: vkey})
+	plain, err := New(Config{Origin: "thelemail.com/keys", BaseURL: "https://example.invalid/", VKey: vkey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,11 +42,25 @@ func TestTierReflectsEntryVerification(t *testing.T) {
 		t.Fatalf("without entry verification the tier should be A, got %q", got)
 	}
 
-	full, err := New(Config{Origin: "x", BaseURL: "https://example.invalid/", VKey: vkey, VerifyEntries: true})
+	full, err := New(Config{Origin: "thelemail.com/keys", BaseURL: "https://example.invalid/", VKey: vkey, VerifyEntries: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := full.Tier().String(); !strings.HasPrefix(got, "B ") {
 		t.Fatalf("with entry verification the tier should be B, got %q", got)
+	}
+}
+
+// A verifier whose name differs from the configured origin must be refused.
+// The policy checks the origin line and the signature separately, so a mismatch
+// would let a correctly signed checkpoint be witnessed under another log's name.
+func TestVerifierNameMustMatchOrigin(t *testing.T) {
+	const vkey = "thelemail.com/keys+76ead63c+ASduViYkPgYHzuTuDnuTdEkjR/DIprnavuFA3vom4YZT"
+	_, err := New(Config{Origin: "someone.else/log", BaseURL: "https://example.invalid/", VKey: vkey})
+	if err == nil {
+		t.Fatal("a verifier named for a different log was accepted")
+	}
+	if !strings.Contains(err.Error(), "origin") {
+		t.Errorf("error should explain the mismatch, got: %v", err)
 	}
 }
