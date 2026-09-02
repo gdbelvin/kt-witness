@@ -18,9 +18,19 @@ import (
 type Tier int
 
 const (
-	// TierA attests only that the sequence of signed roots observed is
-	// append-only. This is split-view/equivocation detection.
-	TierA Tier = iota + 1
+	// Ordered weakest to strongest, so that numeric comparison matches
+	// assurance. Anything that ranks tiers should rely on this ordering rather
+	// than reintroducing its own.
+
+	// TierSignedHead is the weakest useful level: heads are authentic (carried
+	// by the log's own signature) and equivocation at a given size is
+	// detectable, but append-only between observations is NOT proven, because
+	// the deployment exposes no consistency proof we can check.
+	TierSignedHead Tier = iota + 1
+
+	// TierA attests that the sequence of signed roots observed is append-only.
+	// This is split-view/equivocation detection.
+	TierA
 
 	// TierAPlus additionally verifies root-chain continuity across the log's
 	// entire published history, where the log's layout makes that possible
@@ -30,13 +40,6 @@ const (
 	// TierB additionally replays the log's own construction proofs to attest
 	// the tree is correctly built.
 	TierB
-
-	// TierSignedHead is weaker than TierA: heads are authentic (carried by the
-	// log's own signature) and equivocation at a given size is detectable, but
-	// append-only between observations is NOT proven, because the deployment
-	// exposes no consistency proof we can check. Named separately so a
-	// published assertion cannot silently claim more than was verified.
-	TierSignedHead
 )
 
 func (t Tier) String() string {

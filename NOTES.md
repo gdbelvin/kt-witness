@@ -83,6 +83,17 @@ the same service root. That would give both an append-only proof and a strong
 three-way cross-check, without implementing VRF or the search-proof machinery.
 It needs Signal's log-tree hashing reimplemented, which is the real work.
 
+### Attribution in a Signal incident
+
+The three Signal auditors are witnessed as three separate origins, so a fork is
+recorded against whichever origin observed it. That is right when an *auditor*
+equivocates. But if Signal's *service* tree forked, the evidence would land on
+whichever auditor origin we happened to see it through, and `/forks` would read
+"auditor X forked" when the story is "Signal's tree forked, seen via auditor X".
+Before disclosing anything here, check whether the other two origins show the
+same contradiction — agreement across auditors points at the service, divergence
+points at the auditor.
+
 ## IETF keytrans: deliberately skipped
 
 draft-ietf-keytrans-protocol-05 specifies data structures and cryptographic
