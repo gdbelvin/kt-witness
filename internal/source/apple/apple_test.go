@@ -283,3 +283,40 @@ func TestScanApplicationsOnlyForTopLevelTree(t *testing.T) {
 		t.Fatalf("a non-TLT tree reported %d application heads", len(heads))
 	}
 }
+
+// The Top-Level Tree is a log of heads over time, so a scan window contains
+// many heads per application, not necessarily in revision order. A scan must
+// report each application's *current* head — reporting the whole window makes
+// the caller see an older head after a newer one and call it a rollback.
+//
+// This is a regression test for a real false alarm: on first deployment, five
+// application trees were each reported as going backwards by exactly one
+// revision in the same instant.
+func TestScanKeepsOnlyNewestHeadPerTree(t *testing.T) {
+	window := []source.AppHead{
+		{TreeID: 1, Revision: 10, LogSize: 100},
+		{TreeID: 2, Revision: 50, LogSize: 500},
+		{TreeID: 1, Revision: 12, LogSize: 120}, // newer, arrives later
+		{TreeID: 2, Revision: 49, LogSize: 499}, // OLDER, arrives later
+		{TreeID: 1, Revision: 11, LogSize: 110},
+	}
+
+	newest := map[uint64]source.AppHead{}
+	for _, h := range window {
+		prev, seen := newest[h.TreeID]
+		if !seen || h.Revision > prev.Revision ||
+			(h.Revision == prev.Revision && h.LogSize > prev.LogSize) {
+			newest[h.TreeID] = h
+		}
+	}
+	if got := newest[1].Revision; got != 12 {
+		t.Errorf("tree 1: kept revision %d, want the newest (12)", got)
+	}
+	if got := newest[2].Revision; got != 50 {
+		t.Errorf("tree 2: kept revision %d, want the newest (50) — an older head "+
+			"arriving later must not displace it", got)
+	}
+	if len(newest) != 2 {
+		t.Errorf("expected one head per tree, got %d", len(newest))
+	}
+}

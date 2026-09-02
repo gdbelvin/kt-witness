@@ -43,6 +43,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -444,7 +445,35 @@ func (s *Source) ScanApplications(ctx context.Context) ([]source.AppHead, error)
 			LeafIndex:      pbwire.Uint64(lf, 3),
 		})
 	}
-	return out, nil
+
+	// Reduce to the newest head per tree.
+	//
+	// The Top-Level Tree is a *log of heads over time*, so a 200-leaf window
+	// contains many heads for the same application at successive revisions, and
+	// they are not guaranteed to appear in revision order. Returning all of them
+	// makes the caller record an older head after a newer one, which reads as
+	// the application's log going backwards — a contradiction that never
+	// happened. On the first deployment this fired for five trees at once, each
+	// "backwards" by exactly one revision, which is the signature of a scan
+	// artifact rather than five simultaneous rollbacks.
+	//
+	// What an observation should say is what the application's head *is*, not
+	// replay how it got there.
+	newest := make(map[uint64]source.AppHead, len(out))
+	for _, h := range out {
+		prev, seen := newest[h.TreeID]
+		if !seen || h.Revision > prev.Revision ||
+			(h.Revision == prev.Revision && h.LogSize > prev.LogSize) {
+			newest[h.TreeID] = h
+		}
+	}
+	latest := make([]source.AppHead, 0, len(newest))
+	for _, h := range newest {
+		latest = append(latest, h)
+	}
+	// Deterministic order, so the published applications.json does not churn.
+	sort.Slice(latest, func(i, j int) bool { return latest[i].TreeID < latest[j].TreeID })
+	return latest, nil
 }
 
 // logLeavesRequest builds LogLeavesRequest{version, treeId, startIndex, endIndex,
