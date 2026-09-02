@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -421,11 +422,22 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 		// must not stall the witness loop's ability to detect equivocation.
 		go func() {
 			for {
+				// Audits across ecosystems are independent and dominated by
+				// download time, so they overlap. The sidecar itself is the
+				// serialisation point for CPU, which is what we want: memory
+				// peaks at ~3.7 GB per verification and running several at once
+				// would blow the container limit.
+				var awg sync.WaitGroup
 				for _, r := range resolvers {
-					if err := auditor.Run(ctx, r); err != nil && ctx.Err() == nil {
-						log.Warn("audit round", "origin", r.Origin(), "err", err)
-					}
+					awg.Add(1)
+					go func(r audit.Resolver) {
+						defer awg.Done()
+						if err := auditor.Run(ctx, r); err != nil && ctx.Err() == nil {
+							log.Warn("audit round", "origin", r.Origin(), "err", err)
+						}
+					}(r)
 				}
+				awg.Wait()
 				select {
 				case <-ctx.Done():
 					return
@@ -532,26 +544,54 @@ func scanApplications(ctx context.Context, db *store.Store, sources []source.Sou
 	}
 }
 
-func round(ctx context.Context, w *witness.Witness, sources []source.Source, log *slog.Logger) {
-	for _, src := range sources {
-		roundCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-		out, err := w.Process(roundCtx, src)
-		cancel()
+// roundConcurrency bounds how many logs are polled at once.
+//
+// Every source is network-bound and independent, so a sequential round takes as
+// long as the sum of every operator's latency — which at ten origins is already
+// most of a poll interval, and at ninety would exceed it outright. A log that is
+// polled late is a log where equivocation goes unnoticed for longer, so this is
+// a correctness property, not just speed.
+//
+// Bounded rather than unbounded: the store serialises writes anyway, and one
+// burst of ninety simultaneous TLS handshakes is a good way to look like an
+// attacker to somebody's rate limiter.
+const roundConcurrency = 8
 
-		switch {
-		case err != nil:
-			var fe *source.ForkError
-			if errors.As(err, &fe) {
-				// Already logged and persisted as evidence by the core. This
-				// log is now permanently un-cosignable until a human decides
-				// otherwise.
-				continue
+func round(ctx context.Context, w *witness.Witness, sources []source.Source, log *slog.Logger) {
+	sem := make(chan struct{}, roundConcurrency)
+	var wg sync.WaitGroup
+
+	for _, src := range sources {
+		wg.Add(1)
+		go func(src source.Source) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
 			}
-			log.Warn("withheld cosignature", "origin", src.Origin(), "err", err)
-		case out.Unchanged:
-			log.Debug("unchanged", "origin", out.Origin, "size", out.Size)
-		}
+
+			roundCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			out, err := w.Process(roundCtx, src)
+			cancel()
+
+			switch {
+			case err != nil:
+				var fe *source.ForkError
+				if errors.As(err, &fe) {
+					// Already logged and persisted as evidence by the core. This
+					// log is now permanently un-cosignable until a human decides
+					// otherwise.
+					return
+				}
+				log.Warn("withheld cosignature", "origin", src.Origin(), "err", err)
+			case out.Unchanged:
+				log.Debug("unchanged", "origin", out.Origin, "size", out.Size)
+			}
+		}(src)
 	}
+	wg.Wait()
 }
 
 func orDefault(v, def string) string {
