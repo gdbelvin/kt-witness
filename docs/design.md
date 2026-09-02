@@ -12,6 +12,7 @@ unique to that deployment:
 | [signal.md](signal.md) | Signal, the one with no published root |
 | [apple.md](apple.md) | Apple, the one with no published directory |
 | [landscape.md](landscape.md) | The whole transparency-log world: what exists, what is covered, what is deliberately excluded |
+| [cost.md](cost.md) | What it costs to run, measured per log, and what that means for funding |
 
 ## The problem
 

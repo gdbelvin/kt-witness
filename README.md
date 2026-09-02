@@ -17,7 +17,9 @@ deployment. One file per ecosystem covers what is unique to it:
 
 [`docs/landscape.md`](docs/landscape.md) surveys the whole transparency-log
 world: what exists, what is witnessed here, what is reachable, and what is
-deliberately excluded.
+deliberately excluded. [`docs/cost.md`](docs/cost.md) measures what running it
+actually costs — 0.27 cores and 1.2 TB/month for all ten origins — and what
+that implies for funding it.
 
 ## Assurance tiers
 
