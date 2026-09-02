@@ -620,3 +620,11 @@ func (s *Source) head(ctx context.Context, revision int64) (*treeState, error) {
 	}
 	return s.verifySignedHead(signedObj)
 }
+
+// Enum values from Apple's Transparency.proto, needed where a request must name
+// a log other than the Top-Level Tree.
+const (
+	statusOK       = 1
+	logTypeATLog   = 5
+	applicationPCC = 5
+)
