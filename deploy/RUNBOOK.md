@@ -149,10 +149,11 @@ Measured; the full model is in [docs/cost.md](../docs/cost.md).
   ~144 s CPU (it parallelises ~6×), so tier B needs real cores; on a single core
   it would miss the 120 s cadence.
 - **Memory**: one AKD verification peaks ~3.7 GB RSS; the compose limit is 6 GB.
-- **Disk**: ~153 GB total if Proton's tree is retained for the incremental audit
-  (not yet wired — see TODO). Without it, a few GB. The database grows
-  ~300 KB/day. `/tmp` needs ~1 GB for one proof in flight (compose mounts a
-  tmpfs).
+- **Disk**: **~45 GB**, of which ~40 GB is Proton's retained tree once the
+  incremental audit is wired (not yet — see TODO). Without it, a few GB. There
+  is no tile cache, so the 80 CT logs need no disk. Audit proofs are verified
+  and discarded, never retained. `/tmp` needs ~1 GB for one proof in flight
+  (compose mounts a tmpfs).
 
 ## Before anyone relies on this
 

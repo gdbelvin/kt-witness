@@ -23,14 +23,20 @@ Poll interval 60 s; tier-B sampling at 0.1 for the AKD logs.
 |---|---:|---:|---:|---:|---|
 | Meta / Messenger | 20.45 | 7.47 | 2.88 | 1 | 720 epochs/day × 284 MB, 10% sampled; 144 s CPU each |
 | WhatsApp v2 | 16.85 | 6.15 | 1.28 | 1 | 2,880 epochs/day × 58.5 MB, 10% sampled; 2.7 s wall each |
-| Proton | 0.03 | 0.01 | 1.90 | 28 | 6 epochs/day × 3.2 MB diff; 19 min rebuild; 13.6 GB tree ×2 retained |
+| Proton | 0.03 | 0.01 | 1.90 | 40 | 6 epochs/day × 3.2 MB diff; 19 min rebuild; 13.6 GB tree ×2 retained. *Prospective* — the audit is not yet in the witness loop, so this disk is not used today |
 | Signal | 0.71 | 0.26 | 0.05 | 1 | 490 KB per poll — the search proof rides in every response |
 | Apple KT + AT | 0.06 | 0.02 | 0.02 | 1 | 183 B heads plus consistency proofs |
 | thelemail | 0.07 | 0.03 | 0.02 | 1 | tiny log, every entry verified |
-| static CT × 80 | 1.97 | 0.72 | 0.30 | 120 | *modeled*: ~700 B checkpoint + ~2 × 8 KB tiles per poll |
-| **Total** | **40.1** | **14.7** | **6.45** | **153** | |
+| static CT × 80 | 1.97 | 0.72 | 0.30 | ~0 | *modeled*: ~700 B checkpoint + ~2 × 8 KB tiles per poll |
+| **Total** | **40.1** | **14.7** | **6.45** | **~45** | |
 
-**0.27 cores sustained. 1.2 TB/month.**
+**0.27 cores sustained. 1.2 TB/month. ~45 GB of disk.**
+
+An earlier draft of this table put CT storage at 120 GB, assuming a persistent
+tile cache. There is none — `NewTileFetcher` is used without `PermanentCache`,
+so tiles are fetched, used and discarded. Consistency proofs need only internal
+hash tiles, never the data tiles that hold certificates, so CT storage is
+effectively zero and the real total is about a third of what was stated.
 
 Three things worth noticing:
 
@@ -193,3 +199,75 @@ None of this is sellable while the witness has never run. Ten origins are
 verified; zero are operating. An operating record — uptime, published
 checkpoints, a verifier key others can pin — is the entire basis of any funding
 conversation, and it costs an afternoon.
+
+## Running only overnight
+
+Measured on the intended connection, 2026-09-02: **374 Mbps down, 42.5 Mbps up**,
+30 ms idle latency. Downlink responsiveness degrades to 103 ms under load and
+uplink to 517 ms — so saturating the link is noticeable, which is the reason to
+confine the heavy work to a window.
+
+The workload splits cleanly, because the two halves have opposite shapes.
+
+**Tier A polling must run continuously** — it is what makes the witness useful,
+since a checkpoint nobody watched between midnight and 8 a.m. cannot catch a
+split view at 3 a.m. It is also free: everything except the AKD tier-B work is
+**~2.9 GB/day, an average of 0.27 Mbps**, or under 0.1% of the downlink. It will
+never be noticed.
+
+**Tier B can be batched.** Meta's and WhatsApp's audit proofs stay in their
+buckets, so an epoch published at noon can be audited at 3 a.m. with the same
+proof and the same beacon-derived sampling decision. Nothing about the security
+argument depends on auditing promptly.
+
+Batching the 37.3 GB/day of tier B into an overnight window:
+
+| Window | Sample 10% | Sample 50% | Sample 100% |
+|---|---|---|---|
+| 6 hours | 13.8 Mbps · 0.7 cores | 69 Mbps · 3.5 cores | 138 Mbps · 6.9 cores |
+| **8 hours** | **10.4 Mbps · 0.5 cores** | 52 Mbps · 2.6 cores | 103 Mbps · 5.2 cores |
+| 10 hours | 8.3 Mbps · 0.4 cores | 41 Mbps · 2.1 cores | 83 Mbps · 4.2 cores |
+
+At the configured 10% rate an eight-hour window needs **10.4 Mbps — 2.8% of the
+measured downlink**. There is no meaningful contention even during the day.
+
+The more interesting result is the right-hand column. **A 374 Mbps connection
+can sustain 100% construction auditing of both Meta and WhatsApp inside an
+eight-hour window**, at 103 Mbps or 28% of capacity. Sampling was adopted
+because continuous full audit looked infeasible; on this link, overnight, it is
+not. The binding constraint becomes CPU — 41.6 CPU-hours/day compressed into
+eight hours needs about **5.2 cores sustained** — not bandwidth.
+
+That is worth knowing before buying anything: the upgrade that would raise
+assurance most is cores, not disks and not a faster line.
+
+## Disks
+
+Almost a non-issue, and worth stating plainly because it is easy to assume
+otherwise:
+
+| Need | Size |
+|---|---|
+| Database and published file mirror | <1 GB, growing ~1 GB/yr |
+| Tier-B scratch, one proof in flight | 1–2 GB (currently a tmpfs, so RAM) |
+| Proton tree, once the audit is in the loop | ~40 GB |
+| Static CT | ~0 — no tile cache |
+| **Total** | **~45 GB**, comfortably 100 GB with headroom |
+
+**Audit proofs are verified and discarded, never retained.** That is the
+assumption that would change the answer: keeping Meta's and WhatsApp's proofs
+would be ~136 TB/year at full rate, and there is no reason to. The evidence
+worth keeping — checkpoints, audit decisions, fork evidence — is kilobytes.
+
+So a single 1 TB NVMe drive is generous by a factor of twenty. Approximate
+retail, September 2026, and worth checking rather than trusting:
+
+| Drive | Approx. |
+|---|---|
+| 500 GB NVMe | $40–60 |
+| 1 TB NVMe | $60–90 |
+| 2 TB NVMe | $110–160 |
+
+**Recommendation: buy no disks yet.** ~45 GB almost certainly fits on the
+existing machine. If anything is worth spending on, it is cores — which is what
+would let sampling rise from 10% toward 100%.
