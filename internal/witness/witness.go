@@ -134,7 +134,7 @@ func (w *Witness) Process(ctx context.Context, src source.Source) (*Outcome, err
 				Origin: origin, Reason: msg, Prev: prev, Next: next,
 			})
 		case next.Size == prev.Size && next.Hash != prev.Hash:
-			msg := fmt.Sprintf("split view at size %d: witnessed root %x, now served %x", prev.Size, prev.Hash, next.Hash)
+			msg := fmt.Sprintf("split view at size %d: witnessed root %x, now served %x", prev.Size, prev.Hash[:], next.Hash[:])
 			if derived {
 				return nil, fmt.Errorf("witness: %s: %s; head is derived, not signed, so withholding rather than accusing", origin, msg)
 			}

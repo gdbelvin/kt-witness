@@ -103,8 +103,30 @@ wire. The draft's auditor is also a stateful push consumer that replays every
 log entry — a different shape from a pull-based witness. Revisit when a public
 deployment exists.
 
+## Apple: what would unlock tier A
+
+The Top-Level Tree is witnessable today at tier S. Two things block tier A, and
+one blocks witnessing iMessage at all:
+
+- `consistency_proof` returns INVALID_REQUEST for every size-to-size range
+  tried. Apple's own auditor rebuilds consistency from `log_leaves` plus a
+  revision tree instead. Working that out — or finding the accepted parameter
+  shape — is what would promote Apple from S to A.
+- `list_trees` exposes only the Top-Level Tree and the PRIVATE_CLOUD_COMPUTE
+  (application 5) trees. There is no IDS_MESSAGING (application 1) tree, and the
+  iMessage client endpoints require device attestation plus Apple ID auth. So
+  iMessage's own tree cannot be witnessed until Apple lists it.
+
+Also worth recording: the signing key is served by `list_trees`, the same
+endpoint that serves the heads. Trusting it from there is circular, so the DER
+is pinned in the adapter. Its SHA-256 equals the `signingKeySPKIHash` Apple puts
+in every signature, so the response field is used only to select a key, never to
+supply one.
+
+The request encoding has a trap. `revision` must be explicitly -1; omitting it
+defaults to 0 and the server answers HTTP 200 with a correctly signed head of the
+*empty* tree. The adapter rejects a zero size for exactly this reason.
+
 ## Blocked ecosystems
 
-- **Apple ACKV** — verification is client-only by design; public auditing was
-  described as "planned" in 2024 with no evidence it shipped. Nothing to witness.
 - **Google keytransparency** — archived 2024-10-11, no live deployment.

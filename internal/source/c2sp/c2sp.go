@@ -129,7 +129,7 @@ func (s *Source) VerifyConsistency(ctx context.Context, prev, next *source.Head)
 		return &source.ForkError{
 			Origin: s.origin,
 			Reason: fmt.Sprintf("consistency proof %d->%d failed: tree at size %d (root %x) does not extend witnessed size %d (root %x): %v",
-				prev.Size, next.Size, next.Size, next.Hash, prev.Size, prev.Hash, err),
+				prev.Size, next.Size, next.Size, next.Hash[:], prev.Size, prev.Hash[:], err),
 			Prev: prev, Next: next,
 		}
 	}

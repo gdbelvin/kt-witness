@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -360,5 +361,36 @@ func TestForkRaisedDuringFetchIsRecorded(t *testing.T) {
 	src.fetchErr = nil
 	if _, err := w.Process(context.Background(), src); !errors.As(err, &fe) {
 		t.Fatal("a poisoned log must stay refused")
+	}
+}
+
+// Fork reasons are published evidence, so the roots in them must be readable
+// hex. tlog.Hash has a String() method returning base64, and fmt's %x applies
+// the verb to that string rather than the bytes — so "%x" on a bare tlog.Hash
+// silently prints the hex of base64 text. Slicing avoids it.
+func TestForkReasonContainsReadableHex(t *testing.T) {
+	w, db := newTestWitness(t)
+	origin := "example.com/log"
+
+	src := &stubSource{origin: origin, head: head(t, origin, 10, hashOf(0xAB))}
+	if _, err := w.Process(context.Background(), src); err != nil {
+		t.Fatal(err)
+	}
+	src.head = head(t, origin, 10, hashOf(0xCD))
+	if _, err := w.Process(context.Background(), src); err == nil {
+		t.Fatal("expected a fork")
+	}
+
+	forks, _ := db.Forks()
+	if len(forks) != 1 {
+		t.Fatalf("want 1 fork, got %d", len(forks))
+	}
+	reason := forks[0].Reason
+	// hashOf(0xAB) is 32 repeated bytes, so its hex is "abab...".
+	if !strings.Contains(reason, strings.Repeat("ab", 32)) {
+		t.Errorf("witnessed root should appear as plain hex, got: %s", reason)
+	}
+	if !strings.Contains(reason, strings.Repeat("cd", 32)) {
+		t.Errorf("conflicting root should appear as plain hex, got: %s", reason)
 	}
 }

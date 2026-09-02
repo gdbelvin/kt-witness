@@ -362,7 +362,7 @@ func (s *Source) VerifyConsistency(ctx context.Context, prev, next *source.Head)
 		return &source.ForkError{
 			Origin: s.cfg.Origin,
 			Reason: fmt.Sprintf("chain walk to epoch %d ends at %s, but the tip published %x",
-				next.Size, expected, next.Hash),
+				next.Size, expected, next.Hash[:]),
 			Prev: prev, Next: next,
 		}
 	}

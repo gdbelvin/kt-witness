@@ -522,7 +522,7 @@ func (s *Source) VerifyConsistency(_ context.Context, prev, next *source.Head) e
 		return fmt.Errorf(
 			"signal: no valid consistency proof from size %d (root %x) to size %d (root %x): "+
 				"the proof supplied implies root %x; withholding",
-			prev.Size, prev.Hash, next.Size, next.Hash, derived)
+			prev.Size, prev.Hash[:], next.Size, next.Hash[:], derived[:])
 	}
 	return nil
 }

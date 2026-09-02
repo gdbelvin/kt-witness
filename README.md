@@ -19,7 +19,7 @@ overpromises, so the distinction is enforced in the type system
 | **A** — checkpoint witness | The sequence of signed roots is append-only (split-view detection) | Negligible |
 | **A+** — root-chain continuity | Additionally, continuity across the log's *entire* published history, where layout permits it from metadata alone | Negligible |
 | **B** — construction audit | Additionally, the tree is correctly built, by replaying the log's own proofs | Large (see below) |
-| **S** — signed head | Weaker than A: heads are authentic and equivocation at a given size is detectable, but append-only between observations is *not* proven. No adapter needs it today; kept because the distinction is worth naming | Negligible |
+| **S** — signed head | Weaker than A: heads are authentic and equivocation at a given size is detectable, but append-only between observations is *not* proven because the deployment exposes no usable consistency proof. Apple sits here | Negligible |
 
 ## Status
 
@@ -40,7 +40,12 @@ overpromises, so the distinction is enforced in the type system
   signature must verify over the result. Append-only across observations then
   follows from the `lastTreeHeadSize` consistency proof. Verified live at tree
   size 852,163,309.
-- **Apple** — no external verification surface; client-only by design.
+- **Apple, tier S — working.** Apple's promised public auditing was never
+  announced, but the infrastructure is live: `at_researcher/log_head` serves
+  ECDSA-signed tree heads to anyone. This witnesses the shared **Top-Level Tree**
+  that iMessage commits into — not iMessage's own tree, which is not publicly
+  listed. Append-only is unproven because `consistency_proof` rejects
+  size-to-size ranges.
 - **Google KT** — archived since 2024-10-11, no live deployment.
 - **IETF keytrans** — the draft deliberately specifies no transport, and no
   public deployment speaks it, so there is nothing to be conformant to on the

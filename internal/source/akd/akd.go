@@ -340,7 +340,7 @@ func (s *Source) Fetch(ctx context.Context, prev *source.Head) (*source.Head, er
 		if anchor.curr != pv.AnchorRoot {
 			// We cannot tell which party is wrong, so we sign neither.
 			return nil, fmt.Errorf("akd: epoch %d root mismatch: Cloudflare claims %x, Meta's store publishes %x",
-				pv.AnchorEpoch, pv.AnchorRoot, anchor.curr)
+				pv.AnchorEpoch, pv.AnchorRoot[:], anchor.curr[:])
 		}
 
 		if pv.LastVerified > hint {
@@ -421,7 +421,7 @@ func (s *Source) VerifyConsistency(ctx context.Context, prev, next *source.Head)
 			return &source.ForkError{
 				Origin: s.cfg.Origin,
 				Reason: fmt.Sprintf("root chain broken at epoch %d: object declares previous root %x, but epoch %d published current root %x",
-					epoch, l.prev, epoch-1, expected),
+					epoch, l.prev[:], epoch-1, expected[:]),
 				Prev: prev, Next: next,
 			}
 		}
@@ -432,7 +432,7 @@ func (s *Source) VerifyConsistency(ctx context.Context, prev, next *source.Head)
 		return &source.ForkError{
 			Origin: s.cfg.Origin,
 			Reason: fmt.Sprintf("chain walk to epoch %d ends at root %x, but the tip published %x",
-				next.Size, expected, next.Hash),
+				next.Size, expected[:], next.Hash[:]),
 			Prev: prev, Next: next,
 		}
 	}
@@ -535,7 +535,7 @@ func (s *Source) Backfill(ctx context.Context, log *slog.Logger) (*source.Backfi
 				Origin: s.cfg.Origin,
 				Reason: fmt.Sprintf(
 					"published history breaks at epoch %d: it follows root %x, but epoch %d published root %x",
-					cur.epoch, cur.prev, prev.epoch, prev.curr),
+					cur.epoch, cur.prev[:], prev.epoch, prev.curr[:]),
 			}
 		}
 	}

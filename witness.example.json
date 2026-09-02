@@ -33,6 +33,10 @@
       "type": "signal",
       "origin": "signal.org/kt",
       "min_auditors": 2
+    },
+    {
+      "type": "apple",
+      "origin": "apple.com/kt/top-level-tree"
     }
   ]
 }

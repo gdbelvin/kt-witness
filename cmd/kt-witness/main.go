@@ -22,6 +22,7 @@ import (
 	"github.com/gdbsecurity/kt-witness/internal/server"
 	"github.com/gdbsecurity/kt-witness/internal/source"
 	"github.com/gdbsecurity/kt-witness/internal/source/akd"
+	"github.com/gdbsecurity/kt-witness/internal/source/apple"
 	"github.com/gdbsecurity/kt-witness/internal/source/c2sp"
 	"github.com/gdbsecurity/kt-witness/internal/source/proton"
 	ktsignal "github.com/gdbsecurity/kt-witness/internal/source/signal"
@@ -69,6 +70,8 @@ type logConfig struct {
 	APIBase           string   `json:"api_base"`
 	Endpoint          string   `json:"endpoint"`
 	AuditorKeys       []string `json:"auditor_keys"`
+	TreeID            int64    `json:"tree_id"`
+	PublicKeyDER      string   `json:"public_key_der"`
 	MinAuditors       int      `json:"min_auditors"`
 	LogDirectory      string   `json:"log_directory"`
 	PlexiNamespaceURL string   `json:"plexi_namespace_url"`
@@ -93,6 +96,13 @@ func (l logConfig) build(log *slog.Logger) (source.Source, error) {
 			Origin:            l.Origin,
 			APIBase:           l.APIBase,
 			MaxEpochsPerRound: l.MaxEpochsPerRound,
+		})
+	case "apple":
+		return apple.New(apple.Config{
+			Origin:       l.Origin,
+			Endpoint:     l.Endpoint,
+			TreeID:       uint64(l.TreeID),
+			PublicKeyDER: l.PublicKeyDER,
 		})
 	case "signal":
 		return ktsignal.New(ktsignal.Config{
