@@ -60,15 +60,411 @@
     },
     {
       "type": "staticct",
-      "origin": "log.twig.ct.letsencrypt.org/2026h1",
-      "base_url": "https://mon.twig.ct.letsencrypt.org/2026h1/",
-      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE5xh2NJZD3AYbBgaMlzB/xrD2MDHNQPbm0SUzhXI+cMAcCknQoL1CA38su6Gi1TtXOGr+ntegPTWCf5SNILWSmQ=="
+      "origin": "parcelyard2027h1.prod.certificate.transparency.goog",
+      "base_url": "https://storage.googleapis.com/parcelyard2027h1.prod.certificate.transparency.goog/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEX7i7gYwmBxpiLXAlM/VLk4BFzspJRmZA86iReO7NVRlwGL1KWb/Dv5DRXJNBZd+9uREkNUTee5yBy2dRdRGa0w=="
     },
     {
       "type": "staticct",
-      "origin": "tuscolo2026h1.sunlight.geomys.org",
-      "base_url": "https://tuscolo2026h1.skylight.geomys.org/",
-      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEflxzMg2Ajjg7h1+ZIvQ9LV6yFvdj6uRi9YbvtRnSCgS2SamkH56WcPRaBTRYARPDIr5JwLqgJAVA/NvDxdJXOw=="
+      "origin": "parcelyard2027h2.prod.certificate.transparency.goog",
+      "base_url": "https://storage.googleapis.com/parcelyard2027h2.prod.certificate.transparency.goog/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE+CTFsoroxXi53eLT+x2T4gsMKOcqzYEhqSLjyF6uVfdgF8yBeyA2cDWsu6nmhKGhqyoohwLh3PPgXdltfPP3BA=="
+    },
+    {
+      "type": "staticct",
+      "origin": "plumbersarms2026h2.prod.certificate.transparency.goog",
+      "base_url": "https://storage.googleapis.com/plumbersarms2026h2.prod.certificate.transparency.goog/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAERcKG6mGyrCTtzkWBNT51LFFsM1lZ3ZPSIoXgVilDtnY0dyhwKSX7jomkXvdyqWr8DOP3HA6I6kzmREX5wpUvug=="
+    },
+    {
+      "type": "staticct",
+      "origin": "plumbersarms2027h1.prod.certificate.transparency.goog",
+      "base_url": "https://storage.googleapis.com/plumbersarms2027h1.prod.certificate.transparency.goog/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAKYYdjIeQwDP0RIY9mhAVntX5s2ObMc2F6u8cELSbhvavljWD/OesJZHUtqQjBXE5Ekbpiq6nchmaVnEHHpJmw=="
+    },
+    {
+      "type": "staticct",
+      "origin": "plumbersarms2027h2.prod.certificate.transparency.goog",
+      "base_url": "https://storage.googleapis.com/plumbersarms2027h2.prod.certificate.transparency.goog/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEHCu5hooSXlk8FAiSkoWiZJ5G9GzCiJhj3eoJ9p3F3ZzV2QgcgxWWI9f75vnFgygju+baK11dsf3bXHAo/+TL/Q=="
+    },
+    {
+      "type": "staticct",
+      "origin": "coachandhorses2026h2.staging.certificate.transparency.goog",
+      "base_url": "https://storage.googleapis.com/coachandhorses2026h2.staging.certificate.transparency.goog/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE4yJ0Wz+EaKTI1Ae2PXKMk1VYjy9bt6YhcYM8p+gLq47ETwSgjx925dLf7jGjUEiVT/Q2bN2q8R6m2bMI09tL7Q=="
+    },
+    {
+      "type": "staticct",
+      "origin": "coachandhorses2027h1.staging.certificate.transparency.goog",
+      "base_url": "https://storage.googleapis.com/coachandhorses2027h1.staging.certificate.transparency.goog/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEYRzG+Eugt1AOXUT9UpX1K71DCd9zOhVqjQ/DPDfqaIl/3UIrz4Gm1sFaNhcv9SqbMg7Imj+NbN6DR09mcmh8lQ=="
+    },
+    {
+      "type": "staticct",
+      "origin": "coachandhorses2027h2.staging.certificate.transparency.goog",
+      "base_url": "https://storage.googleapis.com/coachandhorses2027h2.staging.certificate.transparency.goog/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEc3Si5lBbzwec+dc+rf1kzMt6SmTjlzEXJe0YH7tbHCKhOiggbxL/q/Hime2H/FxjcBspBQCwAv0ocWJMA6ghyA=="
+    },
+    {
+      "type": "staticct",
+      "origin": "log.twig.ct.letsencrypt.org/2026h2",
+      "base_url": "https://mon.twig.ct.letsencrypt.org/2026h2/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEKM7Fje9bHCZbaJj65sHgw1FBDjLwD5rgUawPYMz4U3u4+g2S6XOWcr5h2NtmGOgore78IpDsg/jsXh+FyeibUg=="
+    },
+    {
+      "type": "staticct",
+      "origin": "log.twig.ct.letsencrypt.org/2027h1",
+      "base_url": "https://mon.twig.ct.letsencrypt.org/2027h1/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEGHGl4ihlmfbfwJyONqNpBaLsRNnInohynCns6HTZeWRGZ3WLGA8VhbUJhlY2oAHH93mtoU+Pvtj/3MD4OqEJ5w=="
+    },
+    {
+      "type": "staticct",
+      "origin": "log.twig.ct.letsencrypt.org/2027h2",
+      "base_url": "https://mon.twig.ct.letsencrypt.org/2027h2/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEr7GDfmQg4jsIQ7XjMicNTYLHdQKbkjhchr4QoXVEGa5lpl4ob0ObW2sDxcvAFLDQThX76XPd+BVBU6lDscD0uQ=="
+    },
+    {
+      "type": "staticct",
+      "origin": "log.sycamore.ct.letsencrypt.org/2026h2",
+      "base_url": "https://mon.sycamore.ct.letsencrypt.org/2026h2/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEwR1FtiiMbpvxR+sIeiZ5JSCIDIdTAPh7OrpdchcrCcyNVDvNUq358pqJx2qdyrOI+EjGxZ7UiPcN3bL3Q99FqA=="
+    },
+    {
+      "type": "staticct",
+      "origin": "log.sycamore.ct.letsencrypt.org/2027h1",
+      "base_url": "https://mon.sycamore.ct.letsencrypt.org/2027h1/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWrGdYyZYB7teCS4K/oKIsbV0yVBSgjlOwO22OOCoA6Y252QhFzC8Wg7oVXVKqfkWaSaM/n+3pfCBf4BAkpdx8g=="
+    },
+    {
+      "type": "staticct",
+      "origin": "log.sycamore.ct.letsencrypt.org/2027h2",
+      "base_url": "https://mon.sycamore.ct.letsencrypt.org/2027h2/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEK+2zy2UWRMIyC2jU46+rj8UsyMjLsQIr1Y/6ClbdpWGthUb8y3Maf4zfAZTWW+AH9wAWPLRL5vmtz7Zkh2f2nA=="
+    },
+    {
+      "type": "staticct",
+      "origin": "log.willow.ct.letsencrypt.org/2026h2",
+      "base_url": "https://mon.willow.ct.letsencrypt.org/2026h2/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEp8wH8R6zfM+UhsQq5un+lPdNTDkzcgkWLi1DwyqU6T00mtP5/CuGjvpw4mIz89I6KV5ZvhRHt5ZTF6qe24pqiA=="
+    },
+    {
+      "type": "staticct",
+      "origin": "log.willow.ct.letsencrypt.org/2027h1",
+      "base_url": "https://mon.willow.ct.letsencrypt.org/2027h1/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEzsMKtojO0BVB4t59lVyAhxtqObVA+wId5BpJGA8pZrw5GTjzuhpvLu/heQGi0hHCeislkDe34N/2D0SwEUBE0w=="
+    },
+    {
+      "type": "staticct",
+      "origin": "log.willow.ct.letsencrypt.org/2027h2",
+      "base_url": "https://mon.willow.ct.letsencrypt.org/2027h2/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEYbMDg0qQEEYjsTttdDlouTKhg3fRiMJYNE+Epr/2bXyeQdQOHKQNKv5sbIKxjtE/5Vqo9YjQbnaOeH4Wm4PhdQ=="
+    },
+    {
+      "type": "staticct",
+      "origin": "luoshu2027.trustasia.com/luoshu2027",
+      "base_url": "https://luoshu2027.trustasia.com/luoshu2027/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEumSYzy6dUQlwTckPzKMKApMRinqxHIBlLfmrvx1SdMH1RTACi1wb1V18ss8YjlaC7Pch2OQa8OfRevub4Y9BDQ=="
+    },
+    {
+      "type": "staticct",
+      "origin": "tuscolo2026h2.sunlight.geomys.org",
+      "base_url": "https://tuscolo2026h2.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaA6P0i7JTsd9XfzF1/76avRWA3XXI4NStsFO/aFtBp6SY7olDEMiPSFSxGzFQjKA1r9vgG/oFQwurlWMy9FQNw=="
+    },
+    {
+      "type": "staticct",
+      "origin": "tuscolo2027h1.sunlight.geomys.org",
+      "base_url": "https://tuscolo2027h1.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEOYwwGoaNpZ/SQW0VNGICP7wGRQsSeEowTRl4DPSdPjSkO/+ouvFH78I8sQTR3FWPZDScALbclBqnqL0ptY8beA=="
+    },
+    {
+      "type": "staticct",
+      "origin": "tuscolo2027h2.sunlight.geomys.org",
+      "base_url": "https://tuscolo2027h2.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEIAz2gOD7wIptaiLTnmR4k7AQwp5kFmqmGHY/8JmMJxaSHyAipoFA/YSBCTX7ZowxIkSKpZYGlqLtdLVcLWDS5w=="
+    },
+    {
+      "type": "staticct",
+      "origin": "navigli2026h2.sunlight.geomys.org",
+      "base_url": "https://navigli2026h2.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE35uLGxEy/DbYDRg6/078qvcc2D0GyS8Iu8xG1CU8Ab133mXVcYtUJL5XlKP8768znap35cwzLbQUgYsmBIOs3Q=="
+    },
+    {
+      "type": "staticct",
+      "origin": "navigli2027h1.sunlight.geomys.org",
+      "base_url": "https://navigli2027h1.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEhBvjicdGxE1X4PDDFXT08IUoMvHZ8716jPiw0F5xG+4Q7SO3La7uDlEeEzkek0ZlqAfKcrBg/Zp2noofn5/jAw=="
+    },
+    {
+      "type": "staticct",
+      "origin": "navigli2027h2.sunlight.geomys.org",
+      "base_url": "https://navigli2027h2.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE/X+10fVaeUuD/AambYvE2n40zMehkN2tM8NB+aYaUOYp6TWWWE7NCErYDehUQdiZ9vhMLR5X9zUWOPTm7PZVXQ=="
+    },
+    {
+      "type": "staticct",
+      "origin": "navigli2028h1.sunlight.geomys.org",
+      "base_url": "https://navigli2028h1.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEWzg2K3xKGP8OkqdRW6fAwBL6dDluyCtNk8u9zuJcRJPTJJoM5WlrIpORLExHZOVLWojJcEsVUZg1mg53t2QIag=="
+    },
+    {
+      "type": "staticct",
+      "origin": "navigli2028h2.sunlight.geomys.org",
+      "base_url": "https://navigli2028h2.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEH+NdiIi/aITbPgiLHMxczExSuy6DDUE1SNkvEa8xD3FI5fSgLV7s0qCXgww9SH0VoHbN1P8UwTurkK0hEDnyxQ=="
+    },
+    {
+      "type": "staticct",
+      "origin": "loreto2026h2.sunlight.geomys.org",
+      "base_url": "https://loreto2026h2.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEma/X8gFLvrdCvDdkgYCdPK5PPLpvsMCkpmQSb/kWN8dmvwdqsBZ7uCeZ4cROJN9Lq8+kK5l71D0Dhr3gfpHAWQ=="
+    },
+    {
+      "type": "staticct",
+      "origin": "loreto2027h1.sunlight.geomys.org",
+      "base_url": "https://loreto2027h1.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAERt6nJkLQjMtWAPu6MQbRv3CBHsZ7mdzLDrtwf3+gGAi35sm9KVI7EOo290+btG826UbBgPxaKkaxqKn2eziJDQ=="
+    },
+    {
+      "type": "staticct",
+      "origin": "loreto2027h2.sunlight.geomys.org",
+      "base_url": "https://loreto2027h2.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7YvrT5X933YQ5QfDT5ieUVccNxZ5Mh63fisDjlQLfhhIae1ngDsaypgQwvsdkDjoXwy3M3DHDzFU5JJPDyzV0w=="
+    },
+    {
+      "type": "staticct",
+      "origin": "loreto2028h1.sunlight.geomys.org",
+      "base_url": "https://loreto2028h1.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2Ney/nDA+O9+7RW9Is+dyI0Ij6NYSQhZ6F/KOlVQ/pIgcujprZMAuENLaDQvCLM/vK/JpDkV/PduZ2cOKqGgcw=="
+    },
+    {
+      "type": "staticct",
+      "origin": "loreto2028h2.sunlight.geomys.org",
+      "base_url": "https://loreto2028h2.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEO7Eab1Wrna/09SfplminqQMr8Ar6OFB+vDqJMhLTyd43Alg0bKwqofQJRm/Ue9efX+9HvBcL0CTiMSmJwWj6Uw=="
+    },
+    {
+      "type": "staticct",
+      "origin": "tuscolo2028h1.sunlight.geomys.org",
+      "base_url": "https://tuscolo2028h1.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEoCrY9Jw/QWI36H+7Y8UlXfNOxk2Atg3H3nXSqLKz52sV4RV9ERRq/IjD4uSP/k5xCT+4nHCjAL8kRjGUeslejw=="
+    },
+    {
+      "type": "staticct",
+      "origin": "tuscolo2028h2.sunlight.geomys.org",
+      "base_url": "https://tuscolo2028h2.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEFvXbrz+N3iRcf4pomNlyVokxas/fGQu1DqxIbZ9M34w9W98lDao2v6qV7mRDDDcoh2kSfyAe6GxLuBMrmRPEMg=="
+    },
+    {
+      "type": "staticct",
+      "origin": "trastevere2026h2.sunlight.geomys.org",
+      "base_url": "https://trastevere2026h2.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEEzFcfnR+P+xG2TA2LWjhkeMcQMTU62r6koepINb7hwcl/hitPLeUzD3vRDpNyvq+9Vrci1FEmctYDWH+iZ2hww=="
+    },
+    {
+      "type": "staticct",
+      "origin": "trastevere2027h1.sunlight.geomys.org",
+      "base_url": "https://trastevere2027h1.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEcGYiRUG5f1qpqGWsFjfXZZT5NqkWVUJdtRSsWyhKOXXryyIIlfsUtKhmqJSPJhkxS9U1hgPQZ5dzXDA5x/5pYA=="
+    },
+    {
+      "type": "staticct",
+      "origin": "trastevere2027h2.sunlight.geomys.org",
+      "base_url": "https://trastevere2027h2.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEJPGejk3XdRtqgzqM5SJPvN9Y6CpSincXJAFPzR4+/hP6KuWhmeL1GVCnbYJ2hFS94pE8k7feYNGB6tuYkvXw2Q=="
+    },
+    {
+      "type": "staticct",
+      "origin": "trastevere2028h1.sunlight.geomys.org",
+      "base_url": "https://trastevere2028h1.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE05RdO9dxuePFpoo+c/h8Aj9iOsl3dRzRJarigJiLWXEtm9JV9n0rs9M/fDVSSwGEh2p9PUO8RR1+6Bt77v2iLQ=="
+    },
+    {
+      "type": "staticct",
+      "origin": "trastevere2028h2.sunlight.geomys.org",
+      "base_url": "https://trastevere2028h2.skylight.geomys.org/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEB4h5MMLSgZuO0R2uMCvA/5WYIvsiYMcYLviqSqL6RNnpOnXiGlz49iWeo7n0R+v9CUj0Clv2In5EwnHwGK2/Tw=="
+    },
+    {
+      "type": "staticct",
+      "origin": "rennet2026h2.log.ct.ipng.ch",
+      "base_url": "https://rennet2026h2.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEDjJrRh/NjSFYybFPOmilmqVHySfQ4a8ctJKYhWDuRLBLNLwy2PXxqVWwQStfjHXv0JofEAC00Xfrbd4aVz/7Bw=="
+    },
+    {
+      "type": "staticct",
+      "origin": "rennet2027h1.log.ct.ipng.ch",
+      "base_url": "https://rennet2027h1.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAErtwy8ljIL7OS99Fq0QMnXkep69geGFwjlex7/Wrii2cT+SCFl7Nw8JIAZTp24a5+RDrfoETMtUrkELVgmVeCVA=="
+    },
+    {
+      "type": "staticct",
+      "origin": "rennet2027h2.log.ct.ipng.ch",
+      "base_url": "https://rennet2027h2.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEi6aOJ3BVylIR4qc3UHBMON1VrUUTJSx2RrLUAf8Fo3/KImSvQuEZKrQSanLqsvvox8ExlLK5mPetb8JCS/0TYA=="
+    },
+    {
+      "type": "staticct",
+      "origin": "lipase2026h2.log.ct.ipng.ch",
+      "base_url": "https://lipase2026h2.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEzbuyo3fveONSA2O1SGsO+FH+H3nKfkOBGeDYAUwvP9xVt4leZF5ATRrvyAq6fh1ryXrq3KpIGjVkZxetF4c3QQ=="
+    },
+    {
+      "type": "staticct",
+      "origin": "lipase2027h1.log.ct.ipng.ch",
+      "base_url": "https://lipase2027h1.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEk3QA2r+4a13klobghHrz4PYkYfvCFDw3sIYwtnLjQMRij9jFucMgoCca5KOv42tJh6JJpYt2JjG8I28AxlLk3g=="
+    },
+    {
+      "type": "staticct",
+      "origin": "lipase2027h2.log.ct.ipng.ch",
+      "base_url": "https://lipase2027h2.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1aNm1Y4mLoC1AiEtf9PebaUapA5jA0sEoNV8KmNgMEjdAvHXJRONdqVKD5e0rlLIc2UlZMwe5Qi3b+dtiPlCeA=="
+    },
+    {
+      "type": "staticct",
+      "origin": "halloumi2026h2a.log.ct.ipng.ch",
+      "base_url": "https://halloumi2026h2a.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEiGh4zMsdukTgrdk9iPIwz9OfU9TQVi4Mxufpmnlrzv3ivJcxVhrST4XQSeQoF5LlFVIU6PL4IzrYl12BUWn9rQ=="
+    },
+    {
+      "type": "staticct",
+      "origin": "halloumi2027h1.log.ct.ipng.ch",
+      "base_url": "https://halloumi2027h1.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEw5SUl2yfd5TFSqUGv7A+I5+TpLe+zEccmtWVQakQQtOHYKqH8TbycalFx5xaqE5PU4NEwwnAJ9FWeT/6QaovZw=="
+    },
+    {
+      "type": "staticct",
+      "origin": "halloumi2027h2.log.ct.ipng.ch",
+      "base_url": "https://halloumi2027h2.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAErmKbFkPG7QfQUARhbIik8vVbIkXhK+YMB6TvLZkyhnzv7wedn+l7VChqovZHKOQXmZEd4B+3ljovIpQz2HmyHA=="
+    },
+    {
+      "type": "staticct",
+      "origin": "gouda2026h2.log.ct.ipng.ch",
+      "base_url": "https://gouda2026h2.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEjayczmhUMNftWy6VjvYXcTUEpvL8LIAKcYcxrxx5xxQGZEVvhnZeCnXVlsMWhq1h9J55eZfQWM/dqIr6GmoN9Q=="
+    },
+    {
+      "type": "staticct",
+      "origin": "gouda2027h1.log.ct.ipng.ch",
+      "base_url": "https://gouda2027h1.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEOh11B2aRT9BiTqo+6kvQ7cSGf819Ait+jGc6AuHlGUXxWCX1YCQ9OFNnr6MUKStyw4sVin5FCvtbke1mctl3gQ=="
+    },
+    {
+      "type": "staticct",
+      "origin": "gouda2027h2.log.ct.ipng.ch",
+      "base_url": "https://gouda2027h2.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEPuxPH20sSqUzHGllZceceFvyoSffwBWgX4LKd8wk3A3ayZuwwh2pDuEOsimMxLXFh0IUYz73a9I7kxkUqM+N8w=="
+    },
+    {
+      "type": "staticct",
+      "origin": "gouda2028h1.log.ct.ipng.ch",
+      "base_url": "https://gouda2028h1.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE5mgCmJbPo4B+gxJf8U94HykKo0cBsGsqnSu/ycQ61WGS6b/XL2StiN28YF8/8I4GmLQBDUkz1sTOG4syBcKYMw=="
+    },
+    {
+      "type": "staticct",
+      "origin": "gouda2028h2.log.ct.ipng.ch",
+      "base_url": "https://gouda2028h2.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENtjPyH/uZmZuu4RQSJU0p+unP9ZZKv/Z4MLpQhdbiFGgUBIgBr6urLPCIzSFZuM4HhgnnwiI4aS7Wpi0kMEoNw=="
+    },
+    {
+      "type": "staticct",
+      "origin": "halloumi2028h1.log.ct.ipng.ch",
+      "base_url": "https://halloumi2028h1.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQVDEFJcCWS8jtF8M3uMfghI3wMo6VwH2Cpf/9P1x9/sv7aV8WSnrw7pq0EW1njmLo/6FBoCWHLpqoGKmBZKDVg=="
+    },
+    {
+      "type": "staticct",
+      "origin": "halloumi2028h2.log.ct.ipng.ch",
+      "base_url": "https://halloumi2028h2.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEEZvv84G/hcMbLeIokkLkT0JPzRkdV5VvAXpWGYJGwwETCO447iGSZScyW0ROuNbvsotXYjs02ADpW+6OTD0hXg=="
+    },
+    {
+      "type": "staticct",
+      "origin": "rennet2028h1.log.ct.ipng.ch",
+      "base_url": "https://rennet2028h1.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAErTXHRCxT39oYZ6+8AP6P36ZrEDCo4RjgMcFbdFC1/NXqUlhBxnlT0P0+xswd61GFhXpUU506ZdzV6oaMgk6oJQ=="
+    },
+    {
+      "type": "staticct",
+      "origin": "rennet2028h2.log.ct.ipng.ch",
+      "base_url": "https://rennet2028h2.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEgCHfJO2CZQCDOpjyZdQFsjj3gYYjYAwR2qvVlWusW88uFxvYGgqrWNCWXUPbOOFf24GRGrak6NeGEPq4IBW6EQ=="
+    },
+    {
+      "type": "staticct",
+      "origin": "lipase2028h1.log.ct.ipng.ch",
+      "base_url": "https://lipase2028h1.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEXyNhBrrDAZHX2lHjLjs8sEPs9o+MG6b+v4VRWmBqs6Iw1VkBfh/9XA7rK8tt5uhv93cRV1of7Q91whkwye8JZQ=="
+    },
+    {
+      "type": "staticct",
+      "origin": "lipase2028h2.log.ct.ipng.ch",
+      "base_url": "https://lipase2028h2.mon.ct.ipng.ch/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE4jCaz3K7lexB3bSze73pg+l3QMoXdLwLaBa33hKv5aTb0FtIdLGIZNgUgfTi4JWgZyRRDyFtis4zomgACAjF5g=="
+    },
+    {
+      "type": "staticct",
+      "origin": "eszigno2026h2.log.ct.e-szigno.hu",
+      "base_url": "https://eszigno2026h2.mon.ct.e-szigno.hu/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvBcE01QW9mpuRViHPCs6zNADkGj+nIM9hHSdqBlWPNIOZDr9Zb9hhUTB/9W5eqRlfynSmrnl1AKTPF836w3J6g=="
+    },
+    {
+      "type": "staticct",
+      "origin": "eszigno2027h1.log.ct.e-szigno.hu",
+      "base_url": "https://eszigno2027h1.mon.ct.e-szigno.hu/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEhuG9m7D8nlSquWGaAF0NXc0ClYZYpEipNa/NeThGlber9tzMoHLRQXncwNBBqcxbXOannRTI/+utdT7wP9S7Jw=="
+    },
+    {
+      "type": "staticct",
+      "origin": "eszigno2027h2.log.ct.e-szigno.hu",
+      "base_url": "https://eszigno2027h2.mon.ct.e-szigno.hu/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE/XDM4otADNamGuQ1qjcAy+VMdPw75EQtjCEZTBnmJy5QhzHpPReQjYGrLhKuWGXlQJ2AxeVl6/0vm/aRcpsBlg=="
+    },
+    {
+      "type": "staticct",
+      "origin": "eszigno2028h1.log.ct.e-szigno.hu",
+      "base_url": "https://eszigno2028h1.mon.ct.e-szigno.hu/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaYdzBFWDI3Mf74StObgh3wImAflYLO9aM62xwivJX5pAAXfMEEfImBihn/IfkknTuKOIqeHfxVd/sCAfiN5CLQ=="
+    },
+    {
+      "type": "staticct",
+      "origin": "eszigno2028h2.log.ct.e-szigno.hu",
+      "base_url": "https://eszigno2028h2.mon.ct.e-szigno.hu/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEFNithqA5EW7rjf1HswV8jLvzqWZeA4kM4UMvR8PMrOtY6izw7fO159pjewHRu36fEsbcjUf/q2ujFbnpJavWaQ=="
+    },
+    {
+      "type": "staticct",
+      "origin": "ct-log-api.godaddy.com/aquamarine2026h2",
+      "base_url": "https://ct-log-api.godaddy.com/aquamarine2026h2/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEMTyKhqKtqQBhdnxqQIiyXSX4/Zm4ejW8LrvCxxXLJ8UrchT0A7ZeXnc8vZEVV5oeelR0wOKLtDPLDh6nshBHcw=="
+    },
+    {
+      "type": "staticct",
+      "origin": "ct-log-api.godaddy.com/aquamarine2027h1",
+      "base_url": "https://ct-log-api.godaddy.com/aquamarine2027h1/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEDMQ0K5rmCd7krvHQytXOSmsQqRcDZRnbo6brb2ctD4QKL+XQr0CGU47OfQ2q08zRtKRiXZ6SDGKKHamcpL9t+Q=="
+    },
+    {
+      "type": "staticct",
+      "origin": "ct-log-api.godaddy.com/aquamarine2027h2",
+      "base_url": "https://ct-log-api.godaddy.com/aquamarine2027h2/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQ54z+CumfMd4Ts18GjnllfUZoCjFFYQUGAeQ1KkuX7eNdxNEPyjXJrMaqRr5F6lYtT6XFkAohz/fkguaIhU51w=="
+    },
+    {
+      "type": "staticct",
+      "origin": "ct-log-api.godaddy.com/aquamarine2028h1",
+      "base_url": "https://ct-log-api.godaddy.com/aquamarine2028h1/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAELFHjZjQhWW0TDbKFi9smkN42jZIkWW94f0tCpbJkxYLqKeZGxWr9xHl/BMDvqSseBwOrkXUOnXkzenI7tJli+Q=="
+    },
+    {
+      "type": "staticct",
+      "origin": "ct-log-api.godaddy.com/aquamarine2028h2",
+      "base_url": "https://ct-log-api.godaddy.com/aquamarine2028h2/",
+      "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEOZA5sbbVjTlj60DpI6u9AKO/79QvNB7mIq/det2cLZnhV9N4pygpZ1rArRxzn80Y4ydFh+bKOqk7gWnrYfDuqA=="
     }
   ]
 }

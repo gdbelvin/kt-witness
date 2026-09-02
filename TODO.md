@@ -9,9 +9,10 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
       is acceptable for a first unattended run and not acceptable once others
       list the key in a trust policy. Ecosystem norm is a TKey or Armored-Witness
       class device.
-- [ ] **Pin the `tlog-witness` origin-hash encoding.** `internal/server`
-      currently answers to *both* hex and unpadded base64url of SHA-256(origin)
-      because the spec text was never confirmed. Decide, drop the other.
+- [x] **Pin the `tlog-witness` origin-hash encoding.** Resolved by checking:
+      c2sp.org/tlog-witness specifies only `POST <submission prefix>/add-checkpoint`
+      and never defines what the prefix contains, so there is nothing to pin to.
+      Accepting both encodings is the considered design, and now says so.
 - [ ] **Publish the verifier key** at a stable location and get it into consumer
       trust policies. Deliberately last of these three: publishing is what
       invites people to depend on us.
@@ -29,7 +30,8 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
       Watch the init bag for `at-researcher-log-leaves-for-revision`: it is
       declared in Apple's proto but absent from the live bag, and its response
       carries leaves *with* inclusion proofs, which would solve this outright.
-- [ ] **Apple: witness the PCC Apple Transparency log.** Newly reachable and
+- [x] **Apple: witness the PCC Apple Transparency log.** Done — `apple.com/at/pcc`
+      is the seventh origin, verified live through the Source interface. Newly reachable and
       fully validated — signed head under its own key, consistency proofs, leaf
       reads, and inclusion proofs, all verified live with negative controls
       (`internal/source/apple/atlog_live_test.go`). It would be the strongest
@@ -52,7 +54,8 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
       hash of every entry a verified search opens and refuses a later proof that
       contradicts one. This is the only Signal check that can see an entry's
       contents change.
-- [ ] **Persist the Signal entry ledger.** It lives in memory, so a restart
+- [x] **Persist the Signal entry ledger.** Done — a `log_entries` bucket, loaded
+      once on first use, bounded at 65,536 per origin keeping the lowest ids. It lives in memory, so a restart
       loses it and between-snapshot coverage is per-process — and deployment
       restarts containers. It belongs in the store alongside the heads.
 - [ ] **Promote a contradicted Signal entry to a fork.** The ledger currently
@@ -93,18 +96,22 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
       deselects. Either pin the canonical round as a function of the epoch, or —
       more likely better — solve it by gossip between witnesses, which also makes
       coverage compose. See NOTES.md.
-- [ ] **Retention for the `audits` bucket.** Grows ~300 KB/day forever. Fine for
+- [x] **Retention for the `audits` bucket.** Done — 200,000 decisions per origin,
+      oldest dropped first. Grows ~300 KB/day forever. Fine for
       years; still unbounded. Note bbolt does not reclaim space without
       compaction.
-- [ ] **Alert on sustained withholding.** A log that never verifies is currently
+- [x] **Alert on sustained withholding.** Done — escalates to ERROR after 20
+      consecutive failures, exports `kt_witness_consecutive_withheld`, and a
+      Grafana alert fires on it. A log that never verifies is currently
       only visible as repeated log lines. Withholding is the enforcement
       mechanism, so a persistent one is exactly what a human should see.
 - [ ] **Export the search-proof and ledger state.** The file mirror in
       `internal/export` publishes heads, audits and forks but says nothing about
       what the Signal search proofs opened. A witness's product is evidence other
       people can read, so state that only exists in log lines is half-published.
-- [ ] **Second-writer safety.** The store assumes a single writer. Two containers
-      on one volume would corrupt state; nothing currently prevents it.
+- [x] **Second-writer safety.** Already safe: bbolt takes an exclusive flock, so
+      a second process blocks rather than corrupting. The opaque "timeout" it
+      produced now names the actual cause.
 
 ## Ecosystem
 
@@ -119,10 +126,13 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
       (`Disabled`). Tier B verified feasible: one real proof through the
       existing sidecar in 2.7 s. Cost differs from Messenger — 30 s epochs at
       ~58.5 MB, so ~17 GB/day at the 0.1 sample rate.
-- [ ] **Witness the remaining 77 static CT logs.** All 80 in Google's list
-      verify; three are configured. Pure configuration from here, but the load
-      and the question of whether more CT witnesses are wanted are operational
-      decisions. See [docs/landscape.md](docs/landscape.md).
+- [x] **Witness the static CT logs.** Done — `cmd/kt-ctconfig` generates the
+      config from Google's list and verifies each checkpoint signature before
+      including it. 80 tiled logs → **69 witnessed**, 11 excluded (5 `rejected`,
+      6 past their temporal window), 0 verification failures.
+      It also caught that two of the three hand-picked logs were already dead:
+      Geomys Tuscolo2026h1 is `rejected` and LE Twig2026h1's window ended
+      2026-06-16, so we had been cosigning heads that can never move.
 - [ ] **Go checksum database.** Serves a C2SP note and is the single point of
       trust for the whole Go module ecosystem, with few independent witnesses.
       Needs two small changes: its checkpoint is at `/latest` rather than
