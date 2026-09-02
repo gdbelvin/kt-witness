@@ -6,8 +6,11 @@ differently than expected. Written to be read cold.
 ## Status
 
 Five Key Transparency deployments witnessed by one process, verified live
-against production. ~5,000 lines of Go plus a Rust sidecar, ~2,300 lines of
-tests, 79 tests, 13 commits.
+against production. ~6,346 lines of Go plus a Rust sidecar, ~3,187 lines of
+tests, 125 tests, 19 commits.
+
+Three of the five are construction audited — the tier that can see an illegal
+mutation. Two are head-consistency only.
 
 | Log | Tier | What is proven |
 |---|---|---|
@@ -106,6 +109,12 @@ verification, ~300 KB/day of database growth.
 
 ## Next
 
-See [TODO.md](TODO.md). The two that would most change what we can claim are
-binding Apple's iMessage heads to the verified root, and moving the signing key
-into hardware before anyone pins it.
+See [TODO.md](TODO.md). Three things would most change what we can claim:
+
+- **Signal's prefix-tree audit.** The largest remaining assurance gap, and now
+  half-built: ECVRF is done and validated against a live Signal proof, and
+  `MonitorProof` — "proves that a single key has been correctly managed in the
+  log" — is served unauthenticated.
+- **Apple's iMessage heads**, still observations because the binding to the
+  verified root needs an RPC Apple has not deployed.
+- **The signing key into hardware**, before anyone pins it.
