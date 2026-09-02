@@ -18,7 +18,7 @@ overpromises, so the distinction is enforced in the type system
 |---|---|---|
 | **A** — checkpoint witness | The sequence of signed roots is append-only (split-view detection) | Negligible |
 | **A+** — root-chain continuity | Additionally, continuity across the log's *entire* published history, where layout permits it from metadata alone | Negligible |
-| **B** — construction audit | Additionally, the tree is correctly built, by replaying the log's own proofs | Large (see below) |
+| **B** — construction audit | Additionally, the tree is **correctly built** — the only tier that can see an illegal mutation | Large (see below) |
 | **S** — signed head | Weaker than A: heads are authentic and equivocation at a given size is detectable, but append-only between observations is *not* proven because the deployment exposes no usable consistency proof. Apple sits here | Negligible |
 
 ## Status
@@ -31,8 +31,11 @@ overpromises, so the distinction is enforced in the type system
   live by walking Meta's published root chain. Verified against the real log at
   epoch 624,730.
 - **Meta tier B** — feasibility established by spike (see below); not yet wired.
-- **Proton, tier A+ — working.** Walks the epoch chain and verifies the WebPKI
-  certificate that commits to each chain hash. No account, no coordination.
+- **Proton, tier A+ and B — working.** Walks the epoch chain and verifies the
+  WebPKI certificate committing to each chain hash. `kt-proton-audit`
+  additionally rebuilds the entire key directory from its published leaves and
+  checks it against the signed tree hash — verified against production at epoch
+  6709: **200,714,006 leaves, exact match**.
 - **Signal, tier A — working.** Signal's KT client endpoints are unauthenticated
   *by design* (sending credentials is an error). Signal never serves its tree
   root, so we **derive** it: each auditor's signed root plus its consistency
@@ -225,6 +228,52 @@ Consistency proofs are keyed by revision but a witnessed head is identified by
 size, and the mapping is not derivable. Rather than carry state a restart would
 lose, the revision is recovered by binary search over `log_head` — about twenty
 requests, and it always works from cold.
+
+## Why head-consistency is not enough
+
+Tiers A and A+ prove the operator did not *rewrite the sequence* of commitments.
+They cannot prove that each tree was derived from the previous one by legal
+mutations — because a key directory is a **mutable map**. An operator can remove
+a binding, overwrite one without bumping its revision, or insert at a skipped
+revision, and every published epoch hash stays perfectly consistent throughout.
+Every consistency proof still verifies. This is why KEYTRANS defines a
+third-party auditor at all.
+
+That is not hypothetical. A single Proton epoch (6709) contains **36,520
+additions and 9,337 removals**. A fifth of the mutations in one epoch are
+deletions, and nothing in the epoch chain reveals that they happened.
+
+Only tier B closes it, by rebuilding the tree from its published leaves:
+
+```sh
+go build ./cmd/kt-proton-audit && ./kt-proton-audit
+```
+
+```
+epoch 6709
+  published tree hash b18dc51c789386cf34fa7fd497128260986aee8ea6e9082074a602f93352db8c
+  13.65 GB in 9m17s · 200714006 leaves
+  recomputed        b18dc51c789386cf34fa7fd497128260986aee8ea6e9082074a602f93352db8c
+  MATCH
+```
+
+### What makes it affordable
+
+Proton's tree is 256 levels deep and an empty subtree hashes to zero at *every*
+depth, so a lonely leaf is still hashed against zero once per level: ~200M leaves
+cost **~46 billion SHA-256 compressions**. Proton's own auditor is a C program
+wanting ~16 GB of RAM for exactly this reason.
+
+Two things rescue it. The dump is published **sorted by label**, so the tree
+rebuilds by recursive range-splitting over a memory-mapped file in constant
+memory, sharded across cores — measured at 16 minutes on ten cores. And each
+epoch publishes a **~3 MB delta** rather than a new 13.6 GB dump, so only the
+first audit is expensive.
+
+`ApplyDiff` merges those deltas and reports the mutations rather than folding
+them silently into a new root: removals, in-place overwrites, and removals of
+absent labels are each counted and surfaced, because those are the events the
+epoch chain cannot show you.
 
 ## Observations vs attestations
 

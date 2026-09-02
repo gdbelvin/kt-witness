@@ -26,12 +26,22 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
       researcher bag; its response carries leaves *with* inclusion proofs and
       would solve this outright. The tree is RFC 6962, so folding a proof needs
       no new cryptography.
-- [ ] **Signal: prefix-tree audit (tier B).** Verifies that individual
+- [ ] **Signal: prefix-tree audit (tier B).** Now the largest remaining gap,
+      since Signal is tier A only — head-consistency, which cannot see an
+      illegal mutation. Verifies that individual
       identifier-to-key bindings sit where they should. Needs ECVRF and the
       combined-tree search proof. Note the sampling argument does not carry over:
       Signal's proofs are per-*label*, not per-epoch.
-- [ ] **Proton: tree re-verification (tier B).** Proton's own §3.11 external
-      audit. ~13.6 GB initial dump plus ~4 MB per epoch, ~16 GB RAM.
+- [x] **Proton: tree re-verification (tier B).** Done — `kt-proton-audit`
+      rebuilds all 200,714,006 leaves and matches the signed tree hash.
+- [ ] **Run Proton tier B continuously.** The pieces exist (`ApplyDiff` merges
+      the ~3 MB per-epoch delta), but the loop is not wired: it needs the 13.6 GB
+      tree kept on disk between epochs, and an end-to-end run of
+      dump &rarr; diff &rarr; rebuild against a *later* epoch's signed hash. Only
+      the one-shot full audit has been validated against production so far.
+- [ ] **Judge Proton's removals.** Epoch 6709 alone removed 9,337 leaves.
+      Proton permits deletion within a ~90-day window, so the audit should check
+      each removal against that window rather than merely counting it.
 - [ ] **Proton: confirm certificates in a CT log** rather than trusting their
       embedded SCTs. Proton's whole design leans on CT as the equivocation
       channel, so this closes the loop it was built around.

@@ -182,3 +182,30 @@ inclusion proof, folding it needs no new code beyond `tlog.CheckRecord`.
 ## Blocked ecosystems
 
 - **Google keytransparency** — archived 2024-10-11, no live deployment.
+
+## Why construction auditing is the one that matters
+
+Worth stating plainly, because tiers A and A+ look reassuring and are not
+sufficient on their own.
+
+A consistent chain of epoch hashes proves the operator did not rewrite the
+*sequence* of commitments. It says nothing about whether each tree was derived
+from the previous one legally, because a key directory is a mutable map. Removing
+a binding, overwriting one without bumping its revision, or inserting at a
+skipped revision all leave the epoch chain perfectly consistent and every
+consistency proof valid.
+
+Proton epoch 6709: 36,520 additions and **9,337 removals**. Roughly a fifth of a
+single epoch's mutations are deletions, invisible from the chain.
+
+Only tier B sees any of it. Today that is Meta (sampled) and Proton (one-shot,
+validated). Signal, Apple and thelemail are head-consistency only, and Signal is
+the most consequential gap.
+
+Two things about Proton's tree that are easy to get wrong and were confirmed
+against its C verifier rather than assumed: path bits are read **MSB-first**
+(the header comment in merklenode.h says LSB-first and is wrong — the code in
+node_is_next_sibling keeps the top bits), and an empty subtree is **32 zero
+bytes at every depth** rather than a per-depth empty hash. The second is why a
+lonely leaf costs one hash per level, and why the rebuild is ~46 billion
+compressions.
