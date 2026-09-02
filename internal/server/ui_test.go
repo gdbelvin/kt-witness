@@ -131,3 +131,40 @@ func TestStatusPageEscapesOrigins(t *testing.T) {
 		t.Fatal("an origin injected raw markup into the status page")
 	}
 }
+
+// The metrics endpoint must expose the series alerts are written against, and
+// must stay parseable when an origin contains exposition-reserved characters.
+func TestMetricsEndpoint(t *testing.T) {
+	s := testServer(t)
+	Init("test")
+	w := httptest.NewRecorder()
+	s.metricsHandler(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Errorf("Content-Type %q, want the Prometheus text format", ct)
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		"# TYPE kt_witness_log_size gauge",
+		"# TYPE kt_witness_withheld_total counter",
+		`kt_witness_build_info{version="test"} 1`,
+		`origin="example.org/log"`,
+		`tier="A+ (root-chain continuity)"`,
+		"kt_witness_logs_total 1",
+		"kt_witness_entries_attested 4321",
+		"kt_witness_forks_total 0",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("metrics missing %q", want)
+		}
+	}
+	// Every line is either a comment or "name{labels} value".
+	for _, line := range strings.Split(strings.TrimSpace(body), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if !strings.Contains(line, " ") {
+			t.Errorf("malformed exposition line: %q", line)
+		}
+	}
+}

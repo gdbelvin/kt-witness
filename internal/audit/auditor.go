@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"fmt"
+	"github.com/gdbsecurity/kt-witness/internal/metrics"
 	"log/slog"
 	"time"
 
@@ -177,6 +178,11 @@ func (a *Auditor) Run(ctx context.Context, r Resolver) error {
 
 		a.Log.Info("epoch verified", "origin", origin, "epoch", epoch,
 			"ms", ar.DurationMS, "mb", ar.Bytes/(1<<20))
+
+		lbl := map[string]string{"origin": origin}
+		metrics.Inc("kt_witness_audit_verified_total", lbl)
+		metrics.Add("kt_witness_audit_bytes_total", lbl, float64(ar.Bytes))
+		metrics.Add("kt_witness_audit_duration_seconds_sum", lbl, float64(ar.DurationMS)/1000)
 
 		if err := a.Store.SetAuditProgress(origin, epoch); err != nil {
 			return err

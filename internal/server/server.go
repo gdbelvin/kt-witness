@@ -54,6 +54,7 @@ func (s *Server) Handler() http.Handler {
 	// the suffix; ServeMux cannot express the variable prefix directly.
 	mux.HandleFunc("/", s.index)
 	mux.HandleFunc("/status.json", s.statusJSON)
+	mux.HandleFunc("/metrics", s.metricsHandler)
 	mux.HandleFunc("/.well-known/tlog-witness-key", s.key)
 	mux.HandleFunc("/forks", s.forks)
 	mux.HandleFunc("/audits", s.audits)

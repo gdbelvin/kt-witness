@@ -23,6 +23,7 @@ import (
 	"filippo.io/torchwood"
 	"github.com/gdbsecurity/kt-witness/internal/audit"
 	"github.com/gdbsecurity/kt-witness/internal/export"
+	"github.com/gdbsecurity/kt-witness/internal/metrics"
 	"github.com/gdbsecurity/kt-witness/internal/server"
 	"github.com/gdbsecurity/kt-witness/internal/source"
 	"github.com/gdbsecurity/kt-witness/internal/source/akd"
@@ -318,6 +319,7 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 	// The tier each origin is witnessed at, so the status page can publish it.
 	// Taken from the sources themselves rather than the config, because the
 	// source is what actually decides.
+	server.Init(version)
 	tiers := make(map[string]string, len(sources))
 	for _, src := range sources {
 		tiers[src.Origin()] = src.Tier().String()
@@ -580,26 +582,36 @@ func round(ctx context.Context, w *witness.Witness, sources []source.Source, log
 				return
 			}
 
+			origin := map[string]string{"origin": src.Origin()}
 			roundCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			started := time.Now()
 			out, err := w.Process(roundCtx, src)
 			cancel()
+			metrics.Add(server.MFetchSeconds, origin, time.Since(started).Seconds())
+			metrics.Inc(server.MFetchCount, origin)
 
 			switch {
 			case err != nil:
 				var fe *source.ForkError
 				if errors.As(err, &fe) {
+					metrics.Inc(server.MForkDetected, origin)
 					// Already logged and persisted as evidence by the core. This
 					// log is now permanently un-cosignable until a human decides
 					// otherwise.
 					return
 				}
+				metrics.Inc(server.MWithheld, origin)
 				log.Warn("withheld cosignature", "origin", src.Origin(), "err", err)
 			case out.Unchanged:
 				log.Debug("unchanged", "origin", out.Origin, "size", out.Size)
+				metrics.Inc(server.MCosigned, origin)
+			default:
+				metrics.Inc(server.MCosigned, origin)
 			}
 		}(src)
 	}
 	wg.Wait()
+	metrics.Inc(server.MRounds, nil)
 }
 
 func orDefault(v, def string) string {
