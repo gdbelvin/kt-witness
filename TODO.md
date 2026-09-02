@@ -31,14 +31,10 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
       declared in Apple's proto but absent from the live bag, and its response
       carries leaves *with* inclusion proofs, which would solve this outright.
 - [x] **Apple: witness the PCC Apple Transparency log.** Done — `apple.com/at/pcc`
-      is the seventh origin, verified live through the Source interface. Newly reachable and
-      fully validated — signed head under its own key, consistency proofs, leaf
-      reads, and inclusion proofs, all verified live with negative controls
-      (`internal/source/apple/atlog_live_test.go`). It would be the strongest
-      Apple assertion available, stronger than what we publish for the Top-Level
-      Tree. It is *software* transparency rather than key transparency, so
-      whether it belongs in a KT witness's cosigning set is a positioning call,
-      not a technical one.
+      is the seventh origin: signed head under its own key, consistency proofs,
+      leaf reads and inclusion proofs, all verified live with negative controls
+      (`internal/source/apple/atlog_live_test.go`). It is the strongest Apple
+      assertion available — stronger than what we publish for the Top-Level Tree.
 - [x] **ECVRF-EDWARDS25519-SHA512-TAI (RFC 9381).** Done — `internal/vrf`,
       verification only. Passes all three RFC 9381 vectors including the
       intermediate hash-to-curve point, and verifies a live proof from Signal's
@@ -55,9 +51,8 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
       contradicts one. This is the only Signal check that can see an entry's
       contents change.
 - [x] **Persist the Signal entry ledger.** Done — a `log_entries` bucket, loaded
-      once on first use, bounded at 65,536 per origin keeping the lowest ids. It lives in memory, so a restart
-      loses it and between-snapshot coverage is per-process — and deployment
-      restarts containers. It belongs in the store alongside the heads.
+      once on first use, bounded at 65,536 per origin keeping the lowest ids —
+      those are the entries a search revisits, while the frontier churns.
 - [ ] **Promote a contradicted Signal entry to a fork.** The ledger currently
       withholds. The evidence would justify accusing — two proofs, both rooted in
       heads Signal signed, disagreeing about an immutable log position — but the
@@ -97,14 +92,12 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
       more likely better — solve it by gossip between witnesses, which also makes
       coverage compose. See NOTES.md.
 - [x] **Retention for the `audits` bucket.** Done — 200,000 decisions per origin,
-      oldest dropped first. Grows ~300 KB/day forever. Fine for
-      years; still unbounded. Note bbolt does not reclaim space without
-      compaction.
+      oldest dropped first. bbolt never returns freed pages to the filesystem,
+      so an unbounded bucket was a slow leak.
 - [x] **Alert on sustained withholding.** Done — escalates to ERROR after 20
       consecutive failures, exports `kt_witness_consecutive_withheld`, and a
-      Grafana alert fires on it. A log that never verifies is currently
-      only visible as repeated log lines. Withholding is the enforcement
-      mechanism, so a persistent one is exactly what a human should see.
+      Grafana alert fires on it. Occasional withholding is the system working;
+      sustained withholding was indistinguishable from it in a stream of WARNs.
 - [ ] **Export the search-proof and ledger state.** The file mirror in
       `internal/export` publishes heads, audits and forks but says nothing about
       what the Signal search proofs opened. A witness's product is evidence other
