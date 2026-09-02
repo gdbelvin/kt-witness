@@ -67,7 +67,16 @@ type Record struct {
 type Store struct{ db *bolt.DB }
 
 func Open(path string) (*Store, error) {
+	// bbolt takes an exclusive flock on the file, so a second writer cannot
+	// corrupt the database — it blocks. Without a timeout it would block
+	// forever, and with one it reports a bare "timeout", which is a miserable
+	// thing to debug at 3am. Name the actual cause.
 	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: 5 * time.Second})
+	if errors.Is(err, bolt.ErrTimeout) {
+		return nil, fmt.Errorf("store: %s is already open by another kt-witness process; "+
+			"only one writer may use a database at a time (a second one would sign "+
+			"conflicting checkpoints for the same log)", path)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
@@ -263,14 +272,44 @@ func auditKey(origin string, epoch int64) []byte {
 	return []byte(fmt.Sprintf("%s|%020d", origin, epoch))
 }
 
+// maxAuditsPerOrigin bounds retained sampling decisions per origin.
+//
+// The audit trail is what makes coverage auditable rather than asserted, so it
+// cannot simply be discarded — but it also cannot grow forever, and bbolt does
+// not return freed pages to the filesystem. The oldest decisions are dropped
+// first: recent coverage is what anyone checking would ask about, and the file
+// mirror in internal/export keeps a copy outside the database anyway.
+const maxAuditsPerOrigin = 200_000
+
 func (s *Store) RecordAudit(a *Audit) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketAudits)
 		enc, err := json.Marshal(a)
 		if err != nil {
 			return err
 		}
-		return tx.Bucket(bucketAudits).Put(auditKey(a.Origin, a.Epoch), enc)
+		if err := b.Put(auditKey(a.Origin, a.Epoch), enc); err != nil {
+			return err
+		}
+		return trimAudits(b, a.Origin)
 	})
+}
+
+// trimAudits drops the oldest decisions for one origin once the cap is passed.
+func trimAudits(b *bolt.Bucket, origin string) error {
+	prefix := []byte(origin + "|")
+	var keys [][]byte
+	c := b.Cursor()
+	for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = c.Next() {
+		keys = append(keys, append([]byte(nil), k...))
+	}
+	// Keys embed a zero-padded epoch, so this is oldest-first.
+	for i := 0; i+maxAuditsPerOrigin < len(keys); i++ {
+		if err := b.Delete(keys[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Audits returns recorded audit decisions for an origin, most recent first,

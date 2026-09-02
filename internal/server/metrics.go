@@ -28,15 +28,16 @@ const (
 	MScrapeSeconds = "kt_witness_metrics_scrape_duration_seconds"
 
 	// Counters maintained by the witness loop rather than derived from storage.
-	MRounds        = "kt_witness_rounds_total"
-	MCosigned      = "kt_witness_cosignatures_total"
-	MWithheld      = "kt_witness_withheld_total"
-	MForkDetected  = "kt_witness_forks_detected_total"
-	MFetchSeconds  = "kt_witness_fetch_duration_seconds_sum"
-	MFetchCount    = "kt_witness_fetch_duration_seconds_count"
-	MAuditVerified = "kt_witness_audit_verified_total"
-	MAuditBytes    = "kt_witness_audit_bytes_total"
-	MAuditSeconds  = "kt_witness_audit_duration_seconds_sum"
+	MRounds              = "kt_witness_rounds_total"
+	MCosigned            = "kt_witness_cosignatures_total"
+	MWithheld            = "kt_witness_withheld_total"
+	MConsecutiveWithheld = "kt_witness_consecutive_withheld"
+	MForkDetected        = "kt_witness_forks_detected_total"
+	MFetchSeconds        = "kt_witness_fetch_duration_seconds_sum"
+	MFetchCount          = "kt_witness_fetch_duration_seconds_count"
+	MAuditVerified       = "kt_witness_audit_verified_total"
+	MAuditBytes          = "kt_witness_audit_bytes_total"
+	MAuditSeconds        = "kt_witness_audit_duration_seconds_sum"
 )
 
 // Init declares every metric up front.
@@ -64,6 +65,7 @@ func Init(version string) {
 
 	d(MRounds, metrics.Counter, "Witness rounds completed.")
 	d(MCosigned, metrics.Counter, "Cosignatures issued, by origin.")
+	d(MConsecutiveWithheld, metrics.Gauge, "Consecutive rounds a log has failed to verify. Resets to 0 on success. Alert above ~20: withholding is the enforcement mechanism, so occasional is healthy and sustained is not.")
 	d(MWithheld, metrics.Counter, "Cosignatures withheld because something could not be verified. Withholding is the enforcement mechanism, so a steady rate for one origin is the signal to look at.")
 	d(MForkDetected, metrics.Counter, "Forks detected, by origin.")
 	d(MFetchSeconds, metrics.Counter, "Cumulative seconds spent fetching heads, by origin.")

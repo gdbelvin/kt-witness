@@ -567,6 +567,37 @@ func scanApplications(ctx context.Context, db *store.Store, sources []source.Sou
 // attacker to somebody's rate limiter.
 const roundConcurrency = 8
 
+// sustainedWithholding is how many consecutive failed rounds for one log turn a
+// routine warning into something that demands attention. At a 60 s poll that is
+// roughly twenty minutes of a log not being witnessed at all.
+const sustainedWithholding = 20
+
+// withholding tracks consecutive failures per origin, so a persistent problem
+// is distinguishable from the ordinary transient one.
+var withholding = &failureTracker{n: map[string]int{}}
+
+type failureTracker struct {
+	mu sync.Mutex
+	n  map[string]int
+}
+
+func (f *failureTracker) fail(origin string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.n[origin]++
+	metrics.Set(server.MConsecutiveWithheld, map[string]string{"origin": origin}, float64(f.n[origin]))
+	return f.n[origin]
+}
+
+func (f *failureTracker) ok(origin string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.n[origin] != 0 {
+		f.n[origin] = 0
+	}
+	metrics.Set(server.MConsecutiveWithheld, map[string]string{"origin": origin}, 0)
+}
+
 func round(ctx context.Context, w *witness.Witness, sources []source.Source, log *slog.Logger) {
 	sem := make(chan struct{}, roundConcurrency)
 	var wg sync.WaitGroup
@@ -601,11 +632,23 @@ func round(ctx context.Context, w *witness.Witness, sources []source.Source, log
 					return
 				}
 				metrics.Inc(server.MWithheld, origin)
-				log.Warn("withheld cosignature", "origin", src.Origin(), "err", err)
+				if n := withholding.fail(src.Origin()); n >= sustainedWithholding {
+					// Withholding is the enforcement mechanism, so one is the
+					// system working. A log that has not verified for this long
+					// is different: either the operator is broken or we are, and
+					// nobody finds out from a WARN in a stream of WARNs.
+					log.Error("SUSTAINED WITHHOLDING — no cosignature issued for this log in "+
+						"consecutive rounds; this needs a human",
+						"origin", src.Origin(), "consecutive_failures", n, "err", err)
+				} else {
+					log.Warn("withheld cosignature", "origin", src.Origin(), "err", err)
+				}
 			case out.Unchanged:
+				withholding.ok(src.Origin())
 				log.Debug("unchanged", "origin", out.Origin, "size", out.Size)
 				metrics.Inc(server.MCosigned, origin)
 			default:
+				withholding.ok(src.Origin())
 				metrics.Inc(server.MCosigned, origin)
 			}
 		}(src)

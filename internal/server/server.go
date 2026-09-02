@@ -34,12 +34,17 @@ type Server struct {
 	Tiers map[string]string
 }
 
-// originHashes returns the identifiers a log may be addressed by. The spec
-// identifies a log by a hash of its origin string; we accept both hex and
-// unpadded base64url so that clients using either convention interoperate.
+// originHashes returns the identifiers a log may be addressed by.
 //
-// TODO: pin this to the exact encoding in c2sp.org/tlog-witness and drop the
-// other. Accepting both is a compatibility hedge, not a considered design.
+// This was carried as a TODO to "pin the encoding to the spec". Checked, and
+// there is nothing to pin to: c2sp.org/tlog-witness specifies only
+// "POST <submission prefix>/add-checkpoint" and never defines what the
+// submission prefix contains. The path is deliberately opaque and
+// operator-chosen.
+//
+// So accepting both lowercase hex and unpadded base64url of SHA-256(origin) is
+// the considered design rather than a hedge: it costs one extra map entry and
+// makes us reachable by either convention a client might have inferred.
 func originHashes(origin string) []string {
 	sum := sha256.Sum256([]byte(origin))
 	return []string{
