@@ -103,81 +103,41 @@ wire. The draft's auditor is also a stateful push consumer that replays every
 log entry — a different shape from a pull-based witness. Revisit when a public
 deployment exists.
 
-## Apple: binding iMessage heads to the verified root
+## Apple: inclusion proofs (superseded — see docs/apple.md)
 
-The Top-Level Tree's leaves carry per-application heads, including IDS_MESSAGING.
-We read and track them, but two links are missing before they could be attested
-rather than merely observed:
+This section previously concluded, at length, that `at_researcher/log_inclusion_proof`
+"does not accept any inclusion request we can construct" and that Apple's auditor
+service "has no generic log-inclusion RPC". **Both claims were wrong**, and the
+correction is worth keeping visible rather than quietly deleting, because of how
+the mistake was made.
 
-1. **Leaf-to-root binding.** `log_inclusion_proof` is live but rejects every
-   request shape tried; its request message is not in the protos Apple ships
-   (only `PaclInclusionProofRequest` is). `LogLeavesForRevision` would give
-   leaves *with* inclusion proofs against a signed head — exactly what is needed
-   — but that endpoint 404s on the researcher API. Finding either would bind an
-   iMessage head into a root Apple signs with the key we already pin, which is
-   the whole game: it needs no per-application key at all.
-2. **The hash construction.** Apple's `Auditor.swift` uses `SHA256.leaf(data:)`
-   and a `MerkleTree<SHA256>`, but `MerkleTree.swift` was not captured. RFC 6962
-   hashing (`H(0x00||leaf)`, `H(0x01||l||r)`) is the obvious hypothesis and is
-   cheap to test once a proof can be fetched: fold it and compare against the
-   signed root.
+The endpoint takes `ATLogInclusionProofRequest{version, application, identifier}`
+from `ATResearcherApi.proto` — a message the earlier hunt never tried, having
+concentrated on `RevisionLogInclusionProofRequest`. And `application` must be
+`PRIVATE_CLOUD_COMPUTE (5)`. The earlier probes swept values 0–3, so they missed
+the one that works by two.
 
-Per-application signing keys are a dead end by comparison: `list_trees` omits the
-IDS trees, `log_head` and `log_leaves` return INVALID_REQUEST for them by id, and
-`PerApplicationTreeConfigNode` (which holds the key) lives at index 0 of a tree
-we cannot read.
+It is verified live: a leaf read from the PCC Apple Transparency log, a proof
+requested by SHA-256 of its raw data, and a 16-hash path checked against a head
+verified under that log's own key — with a negative control. Consistency proofs
+work too. Apple hashes RFC 6962 style, as the old note correctly guessed.
 
-## Apple: iMessage heads are still observations
+The old note also treated `logLeavesForRevision`'s 404 as unexplained. It is
+explained: Apple publishes an unauthenticated init bag listing the deployed
+researcher endpoints, and that endpoint is not in it. **Apple's protos describe a
+superset of what is deployed** — read the bag, not the schema.
 
-Apple's Top-Level Tree is witnessed at tier A. What remains is binding the
-per-application heads inside it — iMessage among them — to the root we verify.
-After a thorough search this looks blocked by a missing *capability*, not by a
-missing encoding, which is worth writing down so nobody repeats the hunt.
+iMessage is still not attestable, but now for a stated reason rather than a
+symptom: `list_trees` returns the same three trees for every application value,
+none of them IDS_MESSAGING, and `log_inclusion_proof` rejects
+`application=IDS_MESSAGING` with `INVALID_REQUEST`.
 
-**The auditor service has no generic log-inclusion RPC.** `KtAuditorApi` in
-`AuditorApi.proto` declares exactly nine RPCs, and the only inclusion one is
-`paclInclusionProof(PaclInclusionProofRequest)` — which takes `repeated
-SignedObject smts`, i.e. Signed Mutation Timestamps for the PACL, not a leaf
-position in the Top-Level Tree. There is no message anywhere in the three protos
-Apple ships that corresponds to `at_researcher/log_inclusion_proof`.
+Full detail, including every endpoint and identifier, is in
+[docs/apple.md](docs/apple.md).
 
-**What was tried against `at_researcher/log_inclusion_proof`** — all return
-`status 6 (INVALID_REQUEST)`, never a parse error, so the shape is simply not
-recognised:
-
-- `RevisionLogInclusionProofRequest` `{version, application, logType, revision}`
-  from KtClientApi.proto (which AuditorApi imports, and which is the semantically
-  right message: for `logType = TOP_LEVEL_TREE` the revisions are the
-  per-application tree's), across protocol versions 1/2/3, packed and unpacked
-  repeated revisions, one and two revisions, with and without `application`, with
-  `logType` PAT and TLT, and with a `requestUuid`.
-- `LogLeavesRequest`-shaped variants keyed by `treeId` plus index and merge group.
-- `PaclInclusionProofRequest`-shaped variants.
-- Degenerate bodies (version only, application only, logType only).
-
-Crucially this fails identically for **PRIVATE_CLOUD_COMPUTE**, whose tree *is*
-listed and directly readable. So the rejection is not about IDS trees being
-unlisted — the endpoint does not accept any inclusion request we can construct.
-
-**Other routes checked and closed:**
-
-- `logLeavesForRevision` — an actual RPC on the service, and its response carries
-  leaves *with* inclusion proofs against a signed head, which is precisely what is
-  needed. It is not in the live researcher bag and `at_researcher/log_leaves_for_revision`
-  returns 404. This is the single most promising thing to re-check periodically:
-  if Apple ever exposes it, the problem is solved outright.
-- `at_client` — probed for `revision_inclusion_proof`, `log_inclusion_proof`,
-  `inclusion_proof`, `log_leaves`, `log_head`, `list_trees`,
-  `log_leaves_for_revision`: all 404. It serves exactly one useful endpoint,
-  `consistency_proof`. (Its bag also lists `public_keys` and
-  `fetch_milestone_roots`, both of which 404 in practice.)
-- `kt_client/revision_inclusion_proof` — the route that does work, on the device
-  plane, behind BAA attestation plus Apple ID.
-
-**The good news:** none of the remaining work is cryptographic. The Top-Level
-Tree is RFC 6962 (established by verifying a production consistency proof with
-`golang.org/x/mod/sumdb/tlog`), so the moment any endpoint yields a leaf
-inclusion proof, folding it needs no new code beyond `tlog.CheckRecord`.
+The generalisable lesson: a negative result about an API is only as good as the
+input space that was swept, and "we tried many shapes and all failed" is much
+weaker evidence than it feels like at the time.
 
 ## Blocked ecosystems
 
