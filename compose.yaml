@@ -17,8 +17,11 @@ services:
     tmpfs:
       - /tmp:size=1g
 
+    # Host port is configurable because 8080 is heavily contested — on the
+    # first host this was deployed to, hashtopolis already held it. The
+    # container port stays 8080; only the outside changes.
     ports:
-      - "8080:8080"
+      - "${KT_WITNESS_PORT:-8080}:8080"
 
     # One AKD verification peaks around 3.7 GB RSS. The limit is above that with
     # headroom, and deliberately not far above: exceeding it should kill the

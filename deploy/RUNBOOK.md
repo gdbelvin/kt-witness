@@ -92,6 +92,8 @@ anchor from, and neither serves proofs from a size we have not already witnessed
 ## 6. Run
 
 ```sh
+# 8080 is often taken. Pick a free host port; the container port is unchanged.
+echo "KT_WITNESS_PORT=8088" > .env
 docker compose up -d
 docker compose logs -f
 ```
