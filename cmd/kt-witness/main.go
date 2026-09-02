@@ -20,6 +20,7 @@ import (
 
 	"filippo.io/torchwood"
 	"github.com/gdbsecurity/kt-witness/internal/audit"
+	"github.com/gdbsecurity/kt-witness/internal/export"
 	"github.com/gdbsecurity/kt-witness/internal/server"
 	"github.com/gdbsecurity/kt-witness/internal/source"
 	"github.com/gdbsecurity/kt-witness/internal/source/akd"
@@ -43,6 +44,10 @@ type config struct {
 	PollInterval    string `json:"poll_interval"`
 	MaxSignDelay    string `json:"max_sign_delay"`
 	RefreshInterval string `json:"refresh_interval"`
+
+	// ExportDir mirrors state as plain files beside the database, so evidence
+	// can be read without this binary. Empty disables it.
+	ExportDir string `json:"export_dir"`
 
 	// Audit configures tier B: replaying construction proofs for a sampled
 	// subset of epochs. Disabled unless sidecar_path is set.
@@ -354,10 +359,29 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 		runBackfill(ctx, db, sources, log)
 	}
 
+	var exporter *export.Exporter
+	if cfg.ExportDir != "" {
+		exporter = &export.Exporter{
+			Dir: cfg.ExportDir, Store: db, VKey: vkey, Version: version,
+		}
+		log.Info("exporting state as files", "dir", cfg.ExportDir)
+	}
+	mirror := func() {
+		if exporter == nil {
+			return
+		}
+		// Never fatal: the mirror is derived, and failing to write it must not
+		// stop the witness from witnessing.
+		if err := exporter.Run(time.Now()); err != nil {
+			log.Warn("export", "err", err)
+		}
+	}
+
 	// Witness once before auditing starts. The auditor works from what we have
 	// already attested, so launching it first would spend its opening pass on an
 	// empty store and then sleep a full interval before doing anything useful.
 	round(ctx, w, sources, log)
+	mirror()
 	if once {
 		return nil
 	}
@@ -395,6 +419,7 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 		}
 		round(ctx, w, sources, log)
 		scanApplications(ctx, db, sources, log)
+		mirror()
 	}
 }
 
