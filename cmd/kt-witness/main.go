@@ -130,6 +130,19 @@ func (l logConfig) build(log *slog.Logger, entries source.EntryStore) (source.So
 			// serves entries at tile/entries with a different encoding from
 			// tlog-tiles' tile/data, so the c2sp entry reader does not apply.
 		})
+	case "sumdb":
+		// The Go checksum database predates c2sp.org/tlog-tiles: it serves the
+		// same signed note at "latest" rather than "checkpoint", and addresses
+		// tiles by the go.dev/design/25530-sumdb scheme. Neither difference
+		// touches what is proven, so it is the ordinary c2sp adapter with the
+		// two paths pointed elsewhere. Its origin line ("go.sum database tree")
+		// is not its signer name ("sum.golang.org"), which the adapter allows
+		// and pins independently.
+		return c2sp.New(c2sp.Config{
+			Origin: l.Origin, BaseURL: l.BaseURL, VKey: l.VKey,
+			CheckpointPath: "latest", TileLayout: "sumdb",
+			VerifyEntries: l.VerifyEntries,
+		})
 	case "proton":
 		return proton.New(proton.Config{
 			Origin:            l.Origin,

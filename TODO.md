@@ -126,11 +126,14 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
       It also caught that two of the three hand-picked logs were already dead:
       Geomys Tuscolo2026h1 is `rejected` and LE Twig2026h1's window ended
       2026-06-16, so we had been cosigning heads that can never move.
-- [ ] **Go checksum database.** Serves a C2SP note and is the single point of
-      trust for the whole Go module ecosystem, with few independent witnesses.
-      Needs two small changes: its checkpoint is at `/latest` rather than
-      `/checkpoint`, and its tiles use the older sumdb layout rather than
-      `tlog-tiles`.
+- [x] **Go checksum database.** Done — witnessed at `go.sum database tree`.
+      torchwood already covered the sumdb tile layout (`WithTilePath` plus
+      `ReadSumDBEntry`), so no custom reader was needed; the adapter gained a
+      configurable checkpoint path and tile layout. Verified live at size
+      61,921,367 including all 1,000 new entries, with a negative control that
+      is refused as a `ForkError`.
+      Configured at tier A on purpose: at that size a first-observation entry
+      sweep would read ~242k data tiles.
 - [ ] **Sigstore Rekor.** `/api/v2/checkpoint` answers 200 and v1 serves a
       signed tree head; verify one through the adapter and it is likely
       configuration. Witnessing Rekor covers npm and PyPI attestations

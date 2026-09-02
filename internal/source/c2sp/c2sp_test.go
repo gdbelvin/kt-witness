@@ -8,7 +8,7 @@ import (
 func TestSplitEntries(t *testing.T) {
 	// Two records: "ab" and "xyz", each behind a two-byte big-endian length.
 	raw := []byte{0, 2, 'a', 'b', 0, 3, 'x', 'y', 'z'}
-	got, err := splitEntries(raw)
+	got, err := splitTileEntries(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestSplitEntriesRejectsTruncated(t *testing.T) {
 		"cut length prefix": {0},
 		"length past end":   {0, 9, 'a', 'b'},
 	} {
-		if _, err := splitEntries(raw); err == nil {
+		if _, err := splitTileEntries(raw); err == nil {
 			t.Errorf("%s: must be rejected", name)
 		}
 	}

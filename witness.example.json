@@ -14,6 +14,12 @@
   },
   "logs": [
     {
+      "type": "sumdb",
+      "origin": "go.sum database tree",
+      "base_url": "https://sum.golang.org/",
+      "vkey": "sum.golang.org+033de0ae+Ac4zctda0e5eza+HJyk9SxEdh+s3Ux18htTTAD8OuAn8"
+    },
+    {
       "origin": "thelemail.com/keys",
       "base_url": "https://tlog.thelemail.com/",
       "vkey": "thelemail.com/keys+76ead63c+ASduViYkPgYHzuTuDnuTdEkjR/DIprnavuFA3vom4YZT"

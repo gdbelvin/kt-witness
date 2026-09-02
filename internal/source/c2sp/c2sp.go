@@ -1,5 +1,6 @@
 // Package c2sp adapts any log that serves c2sp.org/tlog-checkpoint checkpoints
-// and c2sp.org/tlog-tiles tiles.
+// and tiles, whether laid out per c2sp.org/tlog-tiles or per the older
+// go.dev/design/25530-sumdb scheme the Go checksum database still uses.
 //
 // Consistency is proven the strong way: we fetch tiles for the NEW tree and let
 // tlog.TileHashReader validate every tile against the new root hash, then
@@ -26,6 +27,10 @@ type Source struct {
 	policy   torchwood.Policy
 	fetcher  *torchwood.TileFetcher
 	verifier note.Verifier
+
+	// tilePath and splitEntries follow Config.TileLayout; see New.
+	tilePath     func(tlog.Tile) string
+	splitEntries func([]byte) ([][]byte, error)
 }
 
 // Config describes one log to witness.
@@ -34,7 +39,7 @@ type Config struct {
 	// differs is rejected even if correctly signed.
 	Origin string
 
-	// BaseURL serves both "checkpoint" and "tile/...".
+	// BaseURL serves both the checkpoint (see CheckpointPath) and "tile/...".
 	BaseURL string
 
 	// VKey is the log's note verifier key, in name+keyid+base64 form. It is
@@ -50,9 +55,31 @@ type Config struct {
 	// of an entry the log publishes. For an append-only entry log that is the
 	// construction check; it costs one data tile read per 256 new entries.
 	VerifyEntries bool
+
+	// CheckpointPath is the path under BaseURL that serves the signed
+	// checkpoint. It defaults to "checkpoint", which is what
+	// c2sp.org/tlog-checkpoint specifies, but predates-the-spec deployments
+	// differ: the Go checksum database serves the same signed note at "latest".
+	// The endpoint name is transport, not trust — what is fetched is still a
+	// note the log signed — so a log that only moved the path needs no other
+	// concession.
+	CheckpointPath string
+
+	// TileLayout selects how tile coordinates become URLs. The empty string
+	// and "tlog-tiles" mean the flat c2sp.org/tlog-tiles scheme; "sumdb" means
+	// the older go.dev/design/25530-sumdb scheme, which splits N into "xNNN"
+	// path elements and suffixes partial tiles with ".p/<W>". The tree maths is
+	// identical either way, so this is purely how the same tiles are addressed.
+	TileLayout string
 }
 
+// sumDBLayout names the go.dev/design/25530-sumdb tile scheme.
+const sumDBLayout = "sumdb"
+
 func New(cfg Config) (*Source, error) {
+	if cfg.CheckpointPath == "" {
+		cfg.CheckpointPath = "checkpoint"
+	}
 	v := cfg.Verifier
 	if v == nil {
 		var err error
@@ -67,16 +94,34 @@ func New(cfg Config) (*Source, error) {
 	// pins both independently, which is what actually matters — a checkpoint is
 	// accepted only if its origin line is exactly cfg.Origin *and* it carries a
 	// signature from v.
-	f, err := torchwood.NewTileFetcher(cfg.BaseURL,
-		torchwood.WithUserAgent("kt-witness/0.1 (+https://github.com/gdbsecurity/kt-witness)"))
+
+	// The tile path function and the data tile framing are two halves of one
+	// layout choice, so they are decided together and never mixed: a sumdb data
+	// tile parsed with tlog-tiles framing would not fail loudly, it would
+	// produce nonsense entries.
+	tilePath, splitEntries := torchwood.TilePath, splitTileEntries
+	switch cfg.TileLayout {
+	case "", "tlog-tiles":
+	case sumDBLayout:
+		tilePath, splitEntries = tlog.Tile.Path, splitSumDBEntries
+	default:
+		return nil, fmt.Errorf("c2sp: unknown tile layout %q for %s", cfg.TileLayout, cfg.Origin)
+	}
+	opts := []torchwood.TileFetcherOption{
+		torchwood.WithUserAgent("kt-witness/0.1 (+https://github.com/gdbsecurity/kt-witness)"),
+		torchwood.WithTilePath(tilePath),
+	}
+	f, err := torchwood.NewTileFetcher(cfg.BaseURL, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("c2sp: tile fetcher for %s: %w", cfg.Origin, err)
 	}
 	return &Source{
-		cfg:      cfg,
-		origin:   cfg.Origin,
-		verifier: v,
-		fetcher:  f,
+		cfg:          cfg,
+		origin:       cfg.Origin,
+		tilePath:     tilePath,
+		splitEntries: splitEntries,
+		verifier:     v,
+		fetcher:      f,
 		// Both the origin and the log's own signature must check out.
 		policy: torchwood.ThresholdPolicy(2,
 			torchwood.OriginPolicy(cfg.Origin),
@@ -108,7 +153,7 @@ func (s *Source) DerivedHead() bool { return false }
 // Fetch ignores prev: a checkpoint is cheap and a consistency proof over any
 // gap is computed locally from tiles, so there is no need to step forward.
 func (s *Source) Fetch(ctx context.Context, _ *source.Head) (*source.Head, error) {
-	raw, err := s.fetcher.ReadEndpoint(ctx, "checkpoint")
+	raw, err := s.fetcher.ReadEndpoint(ctx, s.cfg.CheckpointPath)
 	if err != nil {
 		return nil, fmt.Errorf("c2sp: fetch checkpoint: %w", err)
 	}
@@ -215,14 +260,14 @@ func (s *Source) verifyNewEntries(ctx context.Context, from, to int64, tree tlog
 			tileEnd = to
 		}
 
-		// Level -1 is the data tile in c2sp.org/tlog-tiles.
+		// Level -1 is the data tile in both layouts.
 		t := tlog.Tile{H: torchwood.TileHeight, L: -1, N: tileIdx, W: int(tileEnd - tileStart)}
-		raw, err := s.fetcher.ReadEndpoint(ctx, torchwood.TilePath(t))
+		raw, err := s.fetcher.ReadEndpoint(ctx, s.tilePath(t))
 		if err != nil {
 			return fmt.Errorf("c2sp: read entries tile %d: %w", tileIdx, err)
 		}
 
-		entries, err := splitEntries(raw)
+		entries, err := s.splitEntries(raw)
 		if err != nil {
 			return fmt.Errorf("c2sp: entries tile %d: %w", tileIdx, err)
 		}
@@ -260,9 +305,27 @@ func (s *Source) verifyNewEntries(ctx context.Context, from, to int64, tree tlog
 	return nil
 }
 
-// splitEntries parses a tlog-tiles data tile: each record is a two-byte
+// splitSumDBEntries parses a go.dev/design/25530-sumdb data tile, where records
+// are newline-terminated blocks separated by a blank line rather than
+// length-prefixed. The framing is torchwood's, not ours, so a tile the Go
+// checksum database serves and a tile torchwood's own client would accept are
+// the same thing by construction.
+func splitSumDBEntries(raw []byte) ([][]byte, error) {
+	var out [][]byte
+	for len(raw) > 0 {
+		entry, _, rest, err := torchwood.ReadSumDBEntry(raw)
+		if err != nil {
+			return nil, fmt.Errorf("entry %d: %w", len(out), err)
+		}
+		out = append(out, entry)
+		raw = rest
+	}
+	return out, nil
+}
+
+// splitTileEntries parses a tlog-tiles data tile: each record is a two-byte
 // big-endian length followed by that many bytes.
-func splitEntries(raw []byte) ([][]byte, error) {
+func splitTileEntries(raw []byte) ([][]byte, error) {
 	var out [][]byte
 	for i := 0; i < len(raw); {
 		if i+2 > len(raw) {
