@@ -63,6 +63,36 @@ verifiable form), the AKD adapter should verify it and `DerivedHead()` should
 become false for that source — which would also restore the stronger conclusive
 treatment of head regressions in the witness core.
 
+## Signal: append-only is not proven
+
+The Signal adapter verifies each auditor's Ed25519 signature over its tree head,
+which gives authenticity and same-size equivocation detection — but not an
+append-only proof between two observations (hence tier S rather than A).
+
+The missing piece is a consistency proof between two auditor tree sizes.
+Signal's public API supplies consistency proofs only against the *service* tree,
+whose root is not served directly and must be reconstructed from the
+combined-tree search proof in the distinguished response.
+
+There is a promising shortcut worth trying: each `FullAuditorTreeHead` carries
+both a signed `root_value` at the auditor's size and a `consistency` proof from
+that size up to the service size. An RFC6962-style consistency proof lets you
+*recompute* the newer root from the older one, so the service root should be
+derivable from any single auditor's head — and all three auditors should derive
+the same service root. That would give both an append-only proof and a strong
+three-way cross-check, without implementing VRF or the search-proof machinery.
+It needs Signal's log-tree hashing reimplemented, which is the real work.
+
+## IETF keytrans: deliberately skipped
+
+draft-ietf-keytrans-protocol-05 specifies data structures and cryptographic
+computations but explicitly *no transport* (§2.1), and no public service speaks
+it. Every real deployment invents its own binding (Signal: gRPC/protobuf+mTLS;
+Cloudflare plexi: REST/JSON), so there is nothing to be conformant to on the
+wire. The draft's auditor is also a stateful push consumer that replays every
+log entry — a different shape from a pull-based witness. Revisit when a public
+deployment exists.
+
 ## Blocked ecosystems
 
 - **Apple ACKV** — verification is client-only by design; public auditing was

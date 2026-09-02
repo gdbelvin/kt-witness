@@ -24,6 +24,7 @@ import (
 	"github.com/gdbsecurity/kt-witness/internal/source/akd"
 	"github.com/gdbsecurity/kt-witness/internal/source/c2sp"
 	"github.com/gdbsecurity/kt-witness/internal/source/proton"
+	ktsignal "github.com/gdbsecurity/kt-witness/internal/source/signal"
 	"github.com/gdbsecurity/kt-witness/internal/store"
 	"github.com/gdbsecurity/kt-witness/internal/witness"
 )
@@ -64,8 +65,10 @@ type logConfig struct {
 	BaseURL string `json:"base_url"`
 	VKey    string `json:"vkey"`
 
-	// akd / proton
+	// akd / proton / signal
 	APIBase           string `json:"api_base"`
+	Endpoint          string `json:"endpoint"`
+	AuditorKey        string `json:"auditor_key"`
 	LogDirectory      string `json:"log_directory"`
 	PlexiNamespaceURL string `json:"plexi_namespace_url"`
 	StartEpoch        int64  `json:"start_epoch"`
@@ -89,6 +92,12 @@ func (l logConfig) build() (source.Source, error) {
 			Origin:            l.Origin,
 			APIBase:           l.APIBase,
 			MaxEpochsPerRound: l.MaxEpochsPerRound,
+		})
+	case "signal":
+		return ktsignal.New(ktsignal.Config{
+			Origin:     l.Origin,
+			Endpoint:   l.Endpoint,
+			AuditorKey: l.AuditorKey,
 		})
 	default:
 		return nil, fmt.Errorf("log %q: unknown type %q", l.Origin, l.Type)

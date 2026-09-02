@@ -19,6 +19,7 @@ overpromises, so the distinction is enforced in the type system
 | **A** — checkpoint witness | The sequence of signed roots is append-only (split-view detection) | Negligible |
 | **A+** — root-chain continuity | Additionally, continuity across the log's *entire* published history, where layout permits it from metadata alone | Negligible |
 | **B** — construction audit | Additionally, the tree is correctly built, by replaying the log's own proofs | Large (see below) |
+| **S** — signed head | Weaker than A: heads are authentic and equivocation at a given size is detectable, but append-only between observations is *not* proven, because the deployment exposes no consistency proof we can check | Negligible |
 
 ## Status
 
@@ -30,9 +31,19 @@ overpromises, so the distinction is enforced in the type system
   live by walking Meta's published root chain. Verified against the real log at
   epoch 624,730.
 - **Meta tier B** — feasibility established by spike (see below); not yet wired.
-- **Signal, Proton** — blocked on operator coordination / spec work.
+- **Proton, tier A+ — working.** Walks the epoch chain and verifies the WebPKI
+  certificate that commits to each chain hash. No account, no coordination.
+- **Signal, tier S — working.** Signal's KT client endpoints are unauthenticated
+  *by design* (sending credentials is an error), so
+  `GET /v1/key-transparency/distinguished` yields signed tree heads to anyone.
+  Each of Signal's three auditors is witnessed as its own log, with its Ed25519
+  signature verified over libsignal's exact preimage — which also makes lag and
+  divergence between them visible.
 - **Apple** — no external verification surface; client-only by design.
 - **Google KT** — archived since 2024-10-11, no live deployment.
+- **IETF keytrans** — the draft deliberately specifies no transport, and no
+  public deployment speaks it, so there is nothing to be conformant to on the
+  wire yet. Deliberately skipped; see NOTES.md.
 
 ## How consistency is verified
 

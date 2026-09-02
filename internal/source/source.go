@@ -30,6 +30,13 @@ const (
 	// TierB additionally replays the log's own construction proofs to attest
 	// the tree is correctly built.
 	TierB
+
+	// TierSignedHead is weaker than TierA: heads are authentic (carried by the
+	// log's own signature) and equivocation at a given size is detectable, but
+	// append-only between observations is NOT proven, because the deployment
+	// exposes no consistency proof we can check. Named separately so a
+	// published assertion cannot silently claim more than was verified.
+	TierSignedHead
 )
 
 func (t Tier) String() string {
@@ -40,6 +47,8 @@ func (t Tier) String() string {
 		return "A+ (root-chain continuity)"
 	case TierB:
 		return "B (construction audit)"
+	case TierSignedHead:
+		return "S (signed head; equivocation detected, append-only unproven)"
 	}
 	return "unknown"
 }
