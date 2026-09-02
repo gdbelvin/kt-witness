@@ -50,6 +50,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/.well-known/tlog-witness-key", s.key)
 	mux.HandleFunc("/forks", s.forks)
 	mux.HandleFunc("/audits", s.audits)
+	mux.HandleFunc("/history", s.history)
 	return mux
 }
 
@@ -108,6 +109,13 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	for _, rec := range recs {
 		fmt.Fprintf(w, "\n  origin: %s\n  size:   %d\n  path:   /%s/checkpoint\n  seen:   %s\n",
 			rec.Origin, rec.Size, originHashes(rec.Origin)[0], rec.WitnessedAt.Format("2006-01-02T15:04:05Z"))
+	}
+	if hs, err := s.Store.Histories(); err == nil && len(hs) > 0 {
+		fmt.Fprintf(w, "\nbackfilled history:\n")
+		for _, h := range hs {
+			fmt.Fprintf(w, "  %s: %d..%d (%d entries, %d gaps)\n",
+				h.Origin, h.From, h.To, h.Epochs, len(h.Gaps))
+		}
 	}
 	forks, err := s.Store.Forks()
 	if err == nil && len(forks) > 0 {
@@ -179,5 +187,26 @@ func (s *Server) audits(w http.ResponseWriter, r *http.Request) {
 			"chain continuity is verified for every epoch. Recompute selection as " +
 			"first 8 bytes of SHA-256(beacon_randomness || \":\" || big-endian uint64 epoch) < rate * 2^64.",
 		"audits": records,
+	})
+}
+
+// history publishes what backfill established about each log's past.
+//
+// Worth publishing separately from the live head: it is a different claim, over
+// a range we did not observe as it happened, and gaps in it are normal rather
+// than suspicious.
+func (s *Server) history(w http.ResponseWriter, r *http.Request) {
+	hs, err := s.Store.Histories()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	enc.Encode(map[string]any{
+		"note": "verified published history, from a backfill pass. Gaps are recorded, " +
+			"not treated as evidence: retention limits and partial writes both produce them.",
+		"histories": hs,
 	})
 }

@@ -29,6 +29,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -366,4 +367,71 @@ func (s *Source) VerifyConsistency(ctx context.Context, prev, next *source.Head)
 		}
 	}
 	return nil
+}
+
+// Backfill verifies Proton's retained epoch history.
+//
+// Proton keeps roughly 90 days (StartEpochID on any epoch names the oldest
+// retained one), so this is a few hundred requests rather than a bulk download.
+// Certificates are not re-checked: they live ~90 days and expire on the same
+// schedule as retention, so demanding validity on historical epochs would report
+// ordinary expiry as a problem. The chain hashes are what carry the history.
+func (s *Source) Backfill(ctx context.Context, log *slog.Logger) (*source.BackfillResult, error) {
+	var latest struct {
+		Epochs []epoch `json:"Epochs"`
+	}
+	if err := s.get(ctx, "/kt/v1/epochs", &latest); err != nil {
+		return nil, err
+	}
+	if len(latest.Epochs) == 0 {
+		return nil, fmt.Errorf("proton: no epochs returned")
+	}
+	tip := latest.Epochs[0]
+	for _, e := range latest.Epochs {
+		if e.EpochID > tip.EpochID {
+			tip = e
+		}
+	}
+
+	from := tip.StartEpochID
+	if from <= 0 {
+		from = 1
+	}
+
+	res := &source.BackfillResult{From: from, To: tip.EpochID}
+	var expected string
+	for id := from; id <= tip.EpochID; id++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		e, err := s.epochAt(ctx, id)
+		if err != nil {
+			// Absence is not evidence; note it and resume linking from the next
+			// epoch we can read.
+			res.Gaps = append(res.Gaps, fmt.Sprintf("%d unreadable", id))
+			expected = ""
+			continue
+		}
+		res.Epochs++
+
+		if err := e.verifyChainHash(); err != nil {
+			return nil, &source.ForkError{Origin: s.cfg.Origin, Reason: err.Error()}
+		}
+		if expected != "" && e.PrevChainHash != expected {
+			return nil, &source.ForkError{
+				Origin: s.cfg.Origin,
+				Reason: fmt.Sprintf("published history breaks at epoch %d: it follows %s, but epoch %d published %s",
+					id, e.PrevChainHash, id-1, expected),
+			}
+		}
+		expected = e.ChainHash
+
+		if log != nil && res.Epochs%100 == 0 {
+			log.Info("backfill", "origin", s.cfg.Origin, "epoch", id, "verified", res.Epochs)
+		}
+	}
+	return res, nil
 }

@@ -111,7 +111,15 @@ func main() {
 	cfgPath := flag.String("config", "witness.json", "path to config file")
 	genkey := flag.Bool("genkey", false, "generate a witness signing key and exit")
 	once := flag.Bool("once", false, "run a single round and exit (for testing)")
+	backfill := flag.Bool("backfill", false, "verify each log's published history before witnessing")
+	showVersion := flag.Bool("version", false, "print version and exit")
+	healthcheck := flag.Bool("healthcheck", false, "probe the local monitoring endpoint and exit non-zero if it is not serving")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -119,6 +127,17 @@ func main() {
 	if err != nil {
 		log.Error("config", "err", err)
 		os.Exit(1)
+	}
+
+	if *healthcheck {
+		// The monitoring endpoint is what makes our cosignatures usable by
+		// anyone else, so "healthy" means it is serving — not merely that the
+		// process exists.
+		if err := probe(cfg.Listen); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	if *genkey {
@@ -129,10 +148,32 @@ func main() {
 		return
 	}
 
-	if err := run(cfg, log, *once); err != nil {
+	if err := run(cfg, log, *once, *backfill); err != nil {
 		log.Error("fatal", "err", err)
 		os.Exit(1)
 	}
+}
+
+// probe checks the monitoring endpoint from inside the container, so the image
+// needs no curl.
+func probe(listen string) error {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return fmt.Errorf("healthcheck: bad listen address %q: %w", listen, err)
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	c := &http.Client{Timeout: 5 * time.Second}
+	resp, err := c.Get("http://" + net.JoinHostPort(host, port) + "/")
+	if err != nil {
+		return fmt.Errorf("healthcheck: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("healthcheck: HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func loadConfig(path string) (*config, error) {
@@ -189,7 +230,7 @@ func loadSigner(cfg *config) (*torchwood.CosignatureSigner, error) {
 	return torchwood.NewCosignatureSigner(cfg.Name, ed25519.NewKeyFromSeed(seed))
 }
 
-func run(cfg *config, log *slog.Logger, once bool) error {
+func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 	signer, err := loadSigner(cfg)
 	if err != nil {
 		return err
@@ -294,6 +335,10 @@ func run(cfg *config, log *slog.Logger, once bool) error {
 		srv.Shutdown(shutdownCtx)
 	}()
 
+	if backfill {
+		runBackfill(ctx, db, sources, log)
+	}
+
 	// Witness once before auditing starts. The auditor works from what we have
 	// already attested, so launching it first would spend its opening pass on an
 	// empty store and then sleep a full interval before doing anything useful.
@@ -329,6 +374,48 @@ func run(cfg *config, log *slog.Logger, once bool) error {
 		case <-time.After(pollInterval):
 		}
 		round(ctx, w, sources, log)
+	}
+}
+
+// runBackfill verifies each log's published history. It is best-effort: a log
+// that cannot be backfilled is reported and skipped, because refusing to witness
+// the present over a problem in the past would be the wrong trade.
+func runBackfill(ctx context.Context, db *store.Store, sources []source.Source, log *slog.Logger) {
+	for _, src := range sources {
+		b, ok := src.(source.Backfiller)
+		if !ok {
+			continue
+		}
+		log.Info("backfill starting", "origin", src.Origin())
+		start := time.Now()
+
+		res, err := b.Backfill(ctx, log)
+		if err != nil {
+			var fe *source.ForkError
+			if errors.As(err, &fe) {
+				// A contradiction in published history is as conclusive as one
+				// found live, and must poison the log the same way.
+				log.Error("FORK DETECTED IN PUBLISHED HISTORY",
+					"origin", src.Origin(), "reason", fe.Reason)
+				db.RecordFork(&store.Fork{
+					Origin: src.Origin(), Reason: fe.Reason, DetectedAt: time.Now().UTC(),
+				})
+				continue
+			}
+			log.Warn("backfill failed", "origin", src.Origin(), "err", err)
+			continue
+		}
+
+		h := &store.History{
+			Origin: src.Origin(), From: res.From, To: res.To,
+			Epochs: res.Epochs, Gaps: res.Gaps, VerifiedAt: time.Now().UTC(),
+		}
+		if err := db.RecordHistory(h); err != nil {
+			log.Warn("recording backfill", "origin", src.Origin(), "err", err)
+		}
+		log.Info("backfill complete", "origin", src.Origin(),
+			"from", res.From, "to", res.To, "epochs", res.Epochs,
+			"gaps", len(res.Gaps), "took", time.Since(start).Round(time.Second).String())
 	}
 }
 

@@ -36,7 +36,10 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	neturl "net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -453,4 +456,155 @@ func (s *Source) ResolveEpoch(ctx context.Context, epoch int64) (*audit.EpochRef
 		PrevRoot:     hex.EncodeToString(l.prev[:]),
 		CurrRoot:     hex.EncodeToString(l.curr[:]),
 	}, nil
+}
+
+// Backfill verifies Meta's entire published root chain.
+//
+// Trust-on-first-use leaves everything before we showed up unattested, which for
+// this log is hundreds of thousands of epochs. They can all be checked from
+// listing metadata alone, because each object key names both the epoch's
+// previous and current roots — no proof blob is downloaded.
+//
+// The bulk listing is what makes this affordable: paging 1,000 keys at a time is
+// ~625 requests for ~625,000 epochs, rather than one request each.
+func (s *Source) Backfill(ctx context.Context, log *slog.Logger) (*source.BackfillResult, error) {
+	links := make(map[int64]*link, 1<<20)
+
+	var token string
+	pages := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		page, next, err := s.listPage(ctx, token)
+		if err != nil {
+			return nil, err
+		}
+		for _, l := range page {
+			// Two objects for one epoch would be two published histories at the
+			// same point. Reported rather than accused: confirming it means
+			// fetching both keys deliberately.
+			if prior, ok := links[l.epoch]; ok && (prior.prev != l.prev || prior.curr != l.curr) {
+				return nil, fmt.Errorf("akd: epoch %d has two differing objects", l.epoch)
+			}
+			links[l.epoch] = l
+		}
+		pages++
+		if log != nil && pages%50 == 0 {
+			log.Info("backfill listing", "origin", s.cfg.Origin, "pages", pages, "epochs", len(links))
+		}
+		if next == "" {
+			break
+		}
+		token = next
+	}
+
+	if len(links) == 0 {
+		return nil, fmt.Errorf("akd: no published history found")
+	}
+
+	epochs := make([]int64, 0, len(links))
+	for e := range links {
+		epochs = append(epochs, e)
+	}
+	slices.Sort(epochs)
+
+	res := &source.BackfillResult{
+		Epochs: len(epochs),
+		From:   epochs[0],
+		To:     epochs[len(epochs)-1],
+	}
+	for i := 1; i < len(epochs); i++ {
+		prev, cur := links[epochs[i-1]], links[epochs[i]]
+
+		if epochs[i] != epochs[i-1]+1 {
+			// Missing epochs. Not evidence: retention limits and partial writes
+			// both look like this, and linkage cannot be checked across a hole.
+			res.Gaps = append(res.Gaps,
+				fmt.Sprintf("%d..%d missing", epochs[i-1]+1, epochs[i]-1))
+			continue
+		}
+
+		if cur.prev != prev.curr {
+			// Adjacent epochs that do not link. This cannot be absence or a
+			// stale read: both objects exist and their names disagree.
+			return nil, &source.ForkError{
+				Origin: s.cfg.Origin,
+				Reason: fmt.Sprintf(
+					"published history breaks at epoch %d: it follows root %x, but epoch %d published root %x",
+					cur.epoch, cur.prev, prev.epoch, prev.curr),
+			}
+		}
+	}
+	return res, nil
+}
+
+// listPage fetches one page of the object listing.
+func (s *Source) listPage(ctx context.Context, token string) ([]*link, string, error) {
+	nonce := make([]byte, 8)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, "", err
+	}
+	url := fmt.Sprintf("%s/?list-type=2&max-keys=1000&cb=%s", s.cfg.LogDirectory, hex.EncodeToString(nonce))
+	if token != "" {
+		url += "&continuation-token=" + neturl.QueryEscape(token)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("akd: list page: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("akd: list page: HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if err != nil {
+		return nil, "", err
+	}
+
+	var lr struct {
+		Contents []struct {
+			Key string `xml:"Key"`
+		} `xml:"Contents"`
+		IsTruncated bool   `xml:"IsTruncated"`
+		NextToken   string `xml:"NextContinuationToken"`
+	}
+	if err := xml.Unmarshal(body, &lr); err != nil {
+		return nil, "", fmt.Errorf("akd: parse listing page: %w", err)
+	}
+
+	out := make([]*link, 0, len(lr.Contents))
+	for _, c := range lr.Contents {
+		parts := strings.Split(c.Key, "/")
+		if len(parts) != 3 {
+			continue
+		}
+		epoch, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil {
+			continue
+		}
+		prev, err := parseHash(parts[1])
+		if err != nil {
+			continue
+		}
+		curr, err := parseHash(parts[2])
+		if err != nil {
+			continue
+		}
+		out = append(out, &link{epoch: epoch, prev: prev, curr: curr})
+	}
+
+	next := ""
+	if lr.IsTruncated {
+		next = lr.NextToken
+	}
+	return out, next, nil
 }

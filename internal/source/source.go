@@ -7,6 +7,7 @@ package source
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"golang.org/x/mod/sumdb/note"
@@ -128,4 +129,33 @@ type ForkError struct {
 
 func (e *ForkError) Error() string {
 	return "FORK DETECTED for " + e.Origin + ": " + e.Reason
+}
+
+// BackfillResult summarises a historical verification pass.
+type BackfillResult struct {
+	// From and To bound the contiguous, verified range.
+	From int64
+	To   int64
+
+	// Epochs is how many entries were examined.
+	Epochs int
+
+	// Gaps are points where history is missing. A gap is not misbehaviour on its
+	// own — retention limits and partial writes both produce one — so it is
+	// reported rather than treated as evidence.
+	Gaps []string
+}
+
+// Backfiller is implemented by sources whose published history can be verified
+// backwards from the tip, rather than only forwards from first observation.
+//
+// This matters because trust-on-first-use otherwise leaves everything before we
+// showed up unattested, and for logs that publish their whole history that is a
+// large amount of evidence left on the table.
+type Backfiller interface {
+	Source
+
+	// Backfill verifies published history. It must return *ForkError only for a
+	// positive contradiction, never for absence.
+	Backfill(ctx context.Context, log *slog.Logger) (*BackfillResult, error)
 }

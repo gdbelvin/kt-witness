@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -25,6 +26,22 @@ type fakeStore struct {
 func (f *fakeStore) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		prefix := r.URL.Query().Get("prefix")
+		if prefix == "" {
+			// Bulk listing, as used by Backfill. One page is enough for tests.
+			w.Header().Set("Content-Type", "application/xml")
+			fmt.Fprint(w, `<?xml version="1.0"?><ListBucketResult>`)
+			epochs := make([]int64, 0, len(f.links))
+			for e := range f.links {
+				epochs = append(epochs, e)
+			}
+			slices.Sort(epochs)
+			for _, e := range epochs {
+				l := f.links[e]
+				fmt.Fprintf(w, `<Contents><Key>%d/%s/%s</Key></Contents>`, e, l[0], l[1])
+			}
+			fmt.Fprint(w, `<IsTruncated>false</IsTruncated></ListBucketResult>`)
+			return
+		}
 		epoch, err := strconv.ParseInt(strings.TrimSuffix(prefix, "/"), 10, 64)
 		if err != nil {
 			http.Error(w, "bad prefix", http.StatusBadRequest)
@@ -223,5 +240,60 @@ func TestFetchReportsTipWhenClose(t *testing.T) {
 	}
 	if got.Size != 50 {
 		t.Fatalf("want tip 50, got %d", got.Size)
+	}
+}
+
+// Backfill exists because trust-on-first-use leaves the whole past unattested.
+// It must verify a continuous chain across everything published.
+func TestBackfillVerifiesWholeHistory(t *testing.T) {
+	s := newTestSource(t, chain(1, 500))
+
+	res, err := s.Backfill(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("a continuous history should verify: %v", err)
+	}
+	if res.From != 1 || res.To != 500 || res.Epochs != 500 {
+		t.Fatalf("want 1..500 over 500 epochs, got %d..%d over %d", res.From, res.To, res.Epochs)
+	}
+	if len(res.Gaps) != 0 {
+		t.Fatalf("unexpected gaps: %v", res.Gaps)
+	}
+}
+
+// A break between two epochs that both exist cannot be absence or a stale read:
+// their names disagree, which is conclusive.
+func TestBackfillBrokenLinkIsFork(t *testing.T) {
+	links := chain(1, 100)
+	links[60] = [2]string{h(200), h(60)} // no longer follows epoch 59
+	s := newTestSource(t, links)
+
+	_, err := s.Backfill(context.Background(), nil)
+	var fe *source.ForkError
+	if !errors.As(err, &fe) {
+		t.Fatalf("want ForkError, got %v", err)
+	}
+	if !strings.Contains(fe.Reason, "epoch 60") {
+		t.Errorf("reason should name the epoch, got %q", fe.Reason)
+	}
+}
+
+// A hole is recorded, not accused: retention limits and partial writes both
+// produce one, and linkage simply cannot be checked across it.
+func TestBackfillGapIsRecordedNotAccused(t *testing.T) {
+	links := chain(1, 100)
+	for e := int64(40); e <= 45; e++ {
+		delete(links, e)
+	}
+	s := newTestSource(t, links)
+
+	res, err := s.Backfill(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("a gap must not fail the backfill: %v", err)
+	}
+	if len(res.Gaps) != 1 || !strings.Contains(res.Gaps[0], "40..45") {
+		t.Fatalf("want the gap recorded, got %v", res.Gaps)
+	}
+	if res.Epochs != 94 {
+		t.Fatalf("want 94 epochs examined, got %d", res.Epochs)
 	}
 }

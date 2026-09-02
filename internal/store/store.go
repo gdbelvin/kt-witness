@@ -30,6 +30,9 @@ var (
 	// bucketProgress tracks how far auditing has advanced per origin.
 	bucketAudits   = []byte("audits")
 	bucketProgress = []byte("audit_progress")
+
+	// bucketHistory holds the result of backfilling a log's published history.
+	bucketHistory = []byte("history")
 )
 
 // ErrRaced means the stored head changed between verification and persistence,
@@ -57,7 +60,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bucketHeads, bucketForks, bucketPoisoned, bucketAudits, bucketProgress} {
+		for _, b := range [][]byte{bucketHeads, bucketForks, bucketPoisoned, bucketAudits, bucketProgress, bucketHistory} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -325,4 +328,43 @@ func (s *Store) GetAudit(origin string, epoch int64) (*Audit, error) {
 		return nil, fmt.Errorf("store: get audit %s/%d: %w", origin, epoch, err)
 	}
 	return a, nil
+}
+
+// History records a verified historical range, so a backfill's result survives
+// restarts and can be published.
+type History struct {
+	Origin     string    `json:"origin"`
+	From       int64     `json:"from"`
+	To         int64     `json:"to"`
+	Epochs     int       `json:"epochs"`
+	Gaps       []string  `json:"gaps,omitempty"`
+	VerifiedAt time.Time `json:"verified_at"`
+}
+
+func (s *Store) RecordHistory(h *History) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		enc, err := json.Marshal(h)
+		if err != nil {
+			return err
+		}
+		return tx.Bucket(bucketHistory).Put([]byte(h.Origin), enc)
+	})
+}
+
+func (s *Store) Histories() ([]*History, error) {
+	var out []*History
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketHistory).ForEach(func(_, raw []byte) error {
+			h := new(History)
+			if err := json.Unmarshal(raw, h); err != nil {
+				return err
+			}
+			out = append(out, h)
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: histories: %w", err)
+	}
+	return out, nil
 }
