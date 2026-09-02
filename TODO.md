@@ -20,24 +20,50 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
 
 - [ ] **Apple: bind per-application heads to the verified root.** iMessage heads
       are read from Top-Level Tree leaves but are only *observations* — signed by
-      keys Apple does not publish, and not tied to the root we verify. Blocked on
-      a capability, not an encoding: Apple's auditor service declares no generic
-      log-inclusion RPC. Watch for `logLeavesForRevision` appearing in the
-      researcher bag; its response carries leaves *with* inclusion proofs and
-      would solve this outright. The tree is RFC 6962, so folding a proof needs
-      no new cryptography.
+      keys Apple does not publish, and not tied to the root we verify.
+      Blocked, and now for a documented reason rather than a symptom:
+      `list_trees` returns the same three trees for every application value and
+      none of them is IDS_MESSAGING, and `log_inclusion_proof` rejects
+      `application=IDS_MESSAGING` with `INVALID_REQUEST`. See
+      [docs/apple.md](docs/apple.md).
+      Watch the init bag for `at-researcher-log-leaves-for-revision`: it is
+      declared in Apple's proto but absent from the live bag, and its response
+      carries leaves *with* inclusion proofs, which would solve this outright.
+- [ ] **Apple: witness the PCC Apple Transparency log.** Newly reachable and
+      fully validated — signed head under its own key, consistency proofs, leaf
+      reads, and inclusion proofs, all verified live with negative controls
+      (`internal/source/apple/atlog_live_test.go`). It would be the strongest
+      Apple assertion available, stronger than what we publish for the Top-Level
+      Tree. It is *software* transparency rather than key transparency, so
+      whether it belongs in a KT witness's cosigning set is a positioning call,
+      not a technical one.
 - [x] **ECVRF-EDWARDS25519-SHA512-TAI (RFC 9381).** Done — `internal/vrf`,
       verification only. Passes all three RFC 9381 vectors including the
       intermediate hash-to-curve point, and verifies a live proof from Signal's
       production service.
-- [ ] **Signal: prefix-tree audit (tier B).** The largest remaining assurance
-      gap, since Signal is tier A only — head-consistency, which cannot see an
-      illegal mutation. The VRF half is done; what remains is the prefix tree and
-      the combined-tree search proof, both of which arrive in the same
-      unauthenticated `distinguished` response (field 2, ~300 KB).
-      Note the sampling argument does not carry over: Signal's proofs are
-      per-*label*, not per-epoch, so a third party can only audit labels it can
-      name. Full coverage still needs the operator's auditor feed.
+- [x] **Signal: search-proof verification.** Done — every fetch opens the
+      `distinguished` key and checks VRF, prefix tree, batch inclusion and
+      commitment down to a root three auditors and Signal's signature already
+      agree on. Validated live with six negative controls.
+      The tier stays A deliberately: Signal's proofs are per-*label*, so a third
+      party can only audit labels it can name, and no number of spot checks is a
+      construction audit. Full coverage still needs the operator's auditor feed.
+- [x] **Signal: between-snapshot check.** Done — `entryLedger` records the leaf
+      hash of every entry a verified search opens and refuses a later proof that
+      contradicts one. This is the only Signal check that can see an entry's
+      contents change.
+- [ ] **Persist the Signal entry ledger.** It lives in memory, so a restart
+      loses it and between-snapshot coverage is per-process — and deployment
+      restarts containers. It belongs in the store alongside the heads.
+- [ ] **Promote a contradicted Signal entry to a fork.** The ledger currently
+      withholds. The evidence would justify accusing — two proofs, both rooted in
+      heads Signal signed, disagreeing about an immutable log position — but the
+      tree math is a fresh reimplementation and a fork is permanent and public.
+      Promote once this has a production record.
+- [ ] **Signal: monitor proofs.** Not reachable by a witness. `/monitor` is
+      unauthenticated but requires an ACI: it rejects `distinguished` at the
+      parser (HTTP 422) and returns 403 for a well-formed but unknown ACI. Would
+      need an account. The entry ledger stands in for it.
 - [x] **Proton: tree re-verification (tier B).** Done — `kt-proton-audit`
       rebuilds all 200,714,006 leaves and matches the signed tree hash.
 - [x] **Proton between-snapshot audit.** Done and validated end to end:
@@ -73,6 +99,10 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
 - [ ] **Alert on sustained withholding.** A log that never verifies is currently
       only visible as repeated log lines. Withholding is the enforcement
       mechanism, so a persistent one is exactly what a human should see.
+- [ ] **Export the search-proof and ledger state.** The file mirror in
+      `internal/export` publishes heads, audits and forks but says nothing about
+      what the Signal search proofs opened. A witness's product is evidence other
+      people can read, so state that only exists in log lines is half-published.
 - [ ] **Second-writer safety.** The store assumes a single writer. Two containers
       on one volume would corrupt state; nothing currently prevents it.
 

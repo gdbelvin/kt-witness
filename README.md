@@ -8,6 +8,13 @@ Sunlight, sigsum, transparency-dev — cannot consume CONIKS/AKD-family KT epoch
 at all. `kt-witness` is a protocol-agnostic verify → cosign → publish core with
 per-ecosystem adapters, intended to be *operated*, not just published.
 
+## Documentation
+
+[`docs/design.md`](docs/design.md) is how the witness works, independent of any
+deployment. One file per ecosystem covers what is unique to it:
+[c2sp](docs/c2sp.md) · [meta](docs/meta.md) · [proton](docs/proton.md) ·
+[signal](docs/signal.md) · [apple](docs/apple.md).
+
 ## Assurance tiers
 
 Every published assertion names its tier. Conflating them is how a witness
@@ -19,7 +26,7 @@ overpromises, so the distinction is enforced in the type system
 | **A** — checkpoint witness | The sequence of signed roots is append-only (split-view detection) | Negligible |
 | **A+** — root-chain continuity | Additionally, continuity across the log's *entire* published history, where layout permits it from metadata alone | Negligible |
 | **B** — construction audit | Additionally, the tree is **correctly built** — the only tier that can see an illegal mutation | Large (see below) |
-| **S** — signed head | Weaker than A: heads are authentic and equivocation at a given size is detectable, but append-only between observations is *not* proven because the deployment exposes no usable consistency proof. Apple sits here | Negligible |
+| **S** — signed head | Weaker than A: heads are authentic and equivocation at a given size is detectable, but append-only between observations is *not* proven. Nothing ships here; it exists so an adapter under development cannot silently imply more | Negligible |
 
 ## Status
 

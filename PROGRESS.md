@@ -6,18 +6,18 @@ differently than expected. Written to be read cold.
 ## Status
 
 Five Key Transparency deployments witnessed by one process, verified live
-against production. ~6,346 lines of Go plus a Rust sidecar, ~3,187 lines of
-tests, 125 tests, 19 commits.
+against production. Design and per-ecosystem detail is in [docs/](docs/).
 
 Three of the five are construction audited — the tier that can see an illegal
-mutation. Two are head-consistency only.
+mutation. Signal is head-consistency plus a per-label spot check verified on
+every poll; Apple is head-consistency only.
 
 | Log | Tier | What is proven |
 |---|---|---|
 | `thelemail.com/keys` | **B** | Signed checkpoint, append-only via locally computed consistency proof, and every added leaf checked against the entry the log publishes |
 | `meta.messenger.kt/v1` | **A+** | Root-chain continuity across all published history |
 | `proton.me/kt/v1` | **A+ / B** | Epoch hash chain, the WebPKI certificate committing to each chain hash, and a full construction audit: 200,714,006 leaves rebuilt, and the step between two epochs replayed from the published diff |
-| `signal.org/kt` | **A** | Service root derived from three auditors, confirmed by Signal's signature, append-only across observations |
+| `signal.org/kt` | **A** | Service root derived from three auditors, confirmed by Signal's signature, append-only across observations — plus a full search proof for `distinguished` on every poll (VRF → prefix tree → batch inclusion → commitment) and a cross-observation check that no log entry changed contents |
 | `apple.com/kt/top-level-tree` | **A** | ECDSA-signed head, append-only via Apple's consistency proofs |
 
 Plus seven Apple per-application trees tracked as **observations** — including
@@ -47,6 +47,16 @@ Apple's promised public auditing was indeed never announced, but the
 infrastructure is live and open: signed tree heads and consistency proofs, both
 unauthenticated. Then the Top-Level Tree turned out to be a *log of
 per-application heads*, which is the only public route to iMessage's KT state.
+
+**Apple's inclusion proofs were blocked.** This one was *our own* documented
+conclusion, and it was half wrong. Apple publishes an unauthenticated init bag
+listing its researcher endpoints; it names `at-researcher-log-inclusion-proof`,
+which had never been tried, and it does *not* name
+`at-researcher-log-leaves-for-revision`, which is declared in Apple's proto.
+Inclusion proofs work — verified live against the PCC Apple Transparency log —
+and the proto/deployment gap is the real explanation for the 404s. iMessage is
+still blocked, but now for a reason rather than a symptom. See
+[docs/apple.md](docs/apple.md).
 
 ## Bugs worth remembering
 
@@ -111,10 +121,16 @@ verification, ~300 KB/day of database growth.
 
 See [TODO.md](TODO.md). Three things would most change what we can claim:
 
-- **Signal's prefix-tree audit.** The largest remaining assurance gap, and now
-  half-built: ECVRF is done and validated against a live Signal proof, and
-  `MonitorProof` — "proves that a single key has been correctly managed in the
-  log" — is served unauthenticated.
-- **Apple's iMessage heads**, still observations because the binding to the
-  verified root needs an RPC Apple has not deployed.
+- **Proton's audit inside the witness loop.** It works as a command and is
+  validated end to end; it needs the 13.6 GB tree kept between epochs and a
+  scheduler tolerating a 19-minute job against a 4-hour cadence. Plumbing, not
+  cryptography, and the nearest available increase in assurance.
 - **The signing key into hardware**, before anyone pins it.
+- **Persisting the Signal entry ledger.** It is in memory, so a restart loses
+  it and between-snapshot coverage is per-process — and deployment restarts
+  containers.
+- **Apple's iMessage heads**, still observations. Not for want of an encoding:
+  `list_trees` lists no IDS_MESSAGING tree at all.
+
+Note the deployment bundle is staged and has never been run, and the built image
+is several commits stale. Nothing here has an operating record yet.
