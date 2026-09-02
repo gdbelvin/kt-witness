@@ -129,21 +129,55 @@ we cannot read.
 
 ## Apple: iMessage heads are still observations
 
-Apple's Top-Level Tree is now witnessed at tier A. What remains is binding the
+Apple's Top-Level Tree is witnessed at tier A. What remains is binding the
 per-application heads inside it — iMessage among them — to the root we verify.
+After a thorough search this looks blocked by a missing *capability*, not by a
+missing encoding, which is worth writing down so nobody repeats the hunt.
 
-`RevisionLogInclusionProofRequest` (KtClientApi.proto) is the right shape:
-`{version, application, logType, repeated revision}`, and for logType
-TOP_LEVEL_TREE the revisions are the *per-application* tree's, returning proof of
-that application head's leaf in the TLT. That is exactly the missing link. But
-`at_researcher/log_inclusion_proof` still returns INVALID_REQUEST for it, and the
-client-plane equivalent (`kt_client/revision_inclusion_proof`) requires device
-attestation. The `at_client` surface, which unlocked consistency proofs, is worth
-probing for an inclusion-proof path too — that is the obvious next thing to try,
-since `at_client` is where consistency turned out to live.
+**The auditor service has no generic log-inclusion RPC.** `KtAuditorApi` in
+`AuditorApi.proto` declares exactly nine RPCs, and the only inclusion one is
+`paclInclusionProof(PaclInclusionProofRequest)` — which takes `repeated
+SignedObject smts`, i.e. Signed Mutation Timestamps for the PACL, not a leaf
+position in the Top-Level Tree. There is no message anywhere in the three protos
+Apple ships that corresponds to `at_researcher/log_inclusion_proof`.
 
-The hashing is no longer a question: the Top-Level Tree is RFC 6962, so once a
-proof can be fetched, folding it needs no new cryptography.
+**What was tried against `at_researcher/log_inclusion_proof`** — all return
+`status 6 (INVALID_REQUEST)`, never a parse error, so the shape is simply not
+recognised:
+
+- `RevisionLogInclusionProofRequest` `{version, application, logType, revision}`
+  from KtClientApi.proto (which AuditorApi imports, and which is the semantically
+  right message: for `logType = TOP_LEVEL_TREE` the revisions are the
+  per-application tree's), across protocol versions 1/2/3, packed and unpacked
+  repeated revisions, one and two revisions, with and without `application`, with
+  `logType` PAT and TLT, and with a `requestUuid`.
+- `LogLeavesRequest`-shaped variants keyed by `treeId` plus index and merge group.
+- `PaclInclusionProofRequest`-shaped variants.
+- Degenerate bodies (version only, application only, logType only).
+
+Crucially this fails identically for **PRIVATE_CLOUD_COMPUTE**, whose tree *is*
+listed and directly readable. So the rejection is not about IDS trees being
+unlisted — the endpoint does not accept any inclusion request we can construct.
+
+**Other routes checked and closed:**
+
+- `logLeavesForRevision` — an actual RPC on the service, and its response carries
+  leaves *with* inclusion proofs against a signed head, which is precisely what is
+  needed. It is not in the live researcher bag and `at_researcher/log_leaves_for_revision`
+  returns 404. This is the single most promising thing to re-check periodically:
+  if Apple ever exposes it, the problem is solved outright.
+- `at_client` — probed for `revision_inclusion_proof`, `log_inclusion_proof`,
+  `inclusion_proof`, `log_leaves`, `log_head`, `list_trees`,
+  `log_leaves_for_revision`: all 404. It serves exactly one useful endpoint,
+  `consistency_proof`. (Its bag also lists `public_keys` and
+  `fetch_milestone_roots`, both of which 404 in practice.)
+- `kt_client/revision_inclusion_proof` — the route that does work, on the device
+  plane, behind BAA attestation plus Apple ID.
+
+**The good news:** none of the remaining work is cryptographic. The Top-Level
+Tree is RFC 6962 (established by verifying a production consistency proof with
+`golang.org/x/mod/sumdb/tlog`), so the moment any endpoint yields a leaf
+inclusion proof, folding it needs no new code beyond `tlog.CheckRecord`.
 
 ## Blocked ecosystems
 

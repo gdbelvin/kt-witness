@@ -236,9 +236,12 @@ carry heads for applications whose own trees are not publicly served —
 is the only public route to iMessage's Key Transparency state.
 
 But those heads are signed by per-application keys Apple does not publish (the
-leaf carries only the key's hash), and they are not yet bound to the Top-Level
-Tree root we do verify, because the inclusion-proof request schema is absent from
-Apple's published protos and could not be determined by probing.
+leaf carries only the key's hash), and they are not bound to the Top-Level Tree
+root we do verify. That binding turns out to be blocked by a missing capability
+rather than a missing encoding: Apple's auditor service declares no generic
+log-inclusion RPC at all, and the one endpoint the bag advertises for it rejects
+every request shape derivable from the protos Apple ships — including for a tree
+that *is* listed. NOTES.md records the full search.
 
 So they are recorded as observations and served at `/applications` with that
 stated plainly. What they still support is real and needs no signature: a
