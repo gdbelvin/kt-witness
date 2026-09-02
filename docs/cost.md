@@ -7,7 +7,7 @@ a timed run recorded in this repository.
 
 **Infrastructure is not the cost.** Witnessing ten origins — including Meta,
 WhatsApp, Signal, Apple, Proton and 80 CT logs — needs about **a quarter of one
-CPU core, 1.2 TB/month of ingress, and 153 GB of disk.** That is roughly $1,900
+CPU core, 1.2 TB/month of ingress, and ~45 GB of disk.** That is roughly $1,900
 a year of real hardware, and near zero on a machine you already own.
 
 The cost is **engineering and attention**: adapters that break when providers
