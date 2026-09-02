@@ -65,16 +65,20 @@ treatment of head regressions in the witness core.
 
 ## Signal: what remains after tier A
 
-Append-only is now proven (see the README), by deriving the service root from the
-auditors' consistency proofs. What is still unverified is the **prefix tree**:
-that each identifier-to-key binding sits where it should. That needs ECVRF
-evaluation and the combined-tree search proof from `SearchResponse`, and is the
-Signal analogue of tier B — the point at which we would be auditing construction
-rather than witnessing heads.
+Append-only is proven by deriving the service root from the auditors'
+consistency proofs, and the **prefix tree is now verified too** — every poll
+opens the `distinguished` key and checks VRF, prefix proof, batch inclusion and
+commitment against that same root. See [docs/signal.md](docs/signal.md).
 
-Worth knowing before starting it: unlike Meta's AKD proofs, Signal's search
-proofs are per-label, so a construction audit would sample *labels*, not epochs,
-and the sampling argument would need rethinking from scratch.
+The tier stays A anyway, and the reason is the thing to remember: unlike Meta's
+AKD proofs, Signal's search proofs are **per-label**, and the VRF exists
+precisely so a third party cannot enumerate labels. So the sampling argument
+that makes Meta's tier B meaningful does not transfer — sampling epochs is not
+sampling labels — and no number of spot checks adds up to coverage. Full
+coverage needs Signal's auditor feed, which is bilateral.
+
+What remains reachable without Signal's cooperation is mostly durability:
+the cross-observation entry ledger is in memory and should live in the store.
 
 ### Attribution in a Signal incident
 
