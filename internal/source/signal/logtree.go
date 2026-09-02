@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"math/bits"
+	"slices"
 )
 
 // Signal's log tree, reimplemented from libsignal (rust/keytrans/src/log.rs and
@@ -80,6 +81,12 @@ func rightStep(x uint64) (uint64, error) {
 		return 0, fmt.Errorf("signal/logtree: leaf node %d has no children", x)
 	}
 	return x ^ (3 << (k - 1)), nil
+}
+
+func parentStep(x uint64) uint64 {
+	k := uint(level(x))
+	b := (x >> (k + 1)) & 1
+	return (x | (1 << k)) ^ (b << (k + 1))
 }
 
 func nodeWidth(n uint64) uint64 {
@@ -230,6 +237,147 @@ func (c *rootCalculator) root() (hash, error) {
 		}
 	}
 	return acc.value, nil
+}
+
+// --- batch inclusion ---------------------------------------------------------
+
+// parent is the parent of x in a tree of n leaves, skipping past node ids that
+// the partially filled right side does not actually contain.
+func parent(x, n uint64) (uint64, error) {
+	if x == treeRoot(n) {
+		return 0, fmt.Errorf("signal/logtree: root node %d has no parent", x)
+	}
+	w := nodeWidth(n)
+	p := parentStep(x)
+	for p >= w {
+		p = parentStep(p)
+	}
+	return p, nil
+}
+
+func sibling(x, n uint64) (uint64, error) {
+	p, err := parent(x, n)
+	if err != nil {
+		return 0, err
+	}
+	if x < p {
+		return rightChild(p, n)
+	}
+	return leftChild(p)
+}
+
+// batchCopath lists the nodes needed to reconstruct the root from a *set* of
+// leaves at once. Where two requested leaves are siblings, neither sibling is
+// needed — which is why a batch proof is much smaller than one inclusion proof
+// per leaf, and why the proof length is fully determined by the leaf indices.
+// That last property is what makes the check meaningful: the server cannot pad
+// the proof to make an arbitrary root come out.
+//
+// leaves are leaf indices (not node ids) and must be sorted and distinct.
+func batchCopath(leaves []uint64, n uint64) ([]uint64, error) {
+	nodes := make([]uint64, len(leaves))
+	for i, x := range leaves {
+		nodes[i] = 2 * x
+	}
+
+	var out []uint64
+	root := treeRoot(n)
+	for !(len(nodes) == 1 && nodes[0] == root) {
+		var next []uint64
+		for len(nodes) > 1 {
+			p, err := parent(nodes[0], n)
+			if err != nil {
+				return nil, err
+			}
+			r, err := rightChild(p, n)
+			if err != nil {
+				return nil, err
+			}
+			if r == nodes[1] {
+				nodes = nodes[2:] // both children present; no sibling needed
+			} else {
+				s, err := sibling(nodes[0], n)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, s)
+				nodes = nodes[1:]
+			}
+			next = append(next, p)
+		}
+		if len(nodes) == 1 {
+			p, err := parent(nodes[0], n)
+			if err != nil {
+				return nil, err
+			}
+			if len(next) > 0 && level(p) > level(next[0]) {
+				// Carrying a node up unchanged: its parent is higher than the
+				// level we are assembling, so it joins the next level as is.
+				next = append(next, nodes[0])
+			} else {
+				s, err := sibling(nodes[0], n)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, s)
+				next = append(next, p)
+			}
+		}
+		nodes = next
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+// evaluateBatchProof returns the root implied by a batch inclusion proof for the
+// given leaf indices and their leaf hashes.
+func evaluateBatchProof(leaves []uint64, n uint64, values, proof []hash) (hash, error) {
+	var zero hash
+	if len(leaves) != len(values) {
+		return zero, fmt.Errorf("signal/logtree: %d leaf ids but %d values", len(leaves), len(values))
+	}
+	if len(leaves) == 0 {
+		return zero, fmt.Errorf("signal/logtree: empty batch inclusion proof")
+	}
+	for i := 1; i < len(leaves); i++ {
+		if leaves[i-1] >= leaves[i] {
+			return zero, fmt.Errorf("signal/logtree: leaf ids must be sorted and distinct")
+		}
+	}
+	if leaves[len(leaves)-1] >= n {
+		return zero, fmt.Errorf("signal/logtree: leaf id %d is beyond tree size %d",
+			leaves[len(leaves)-1], n)
+	}
+
+	copath, err := batchCopath(leaves, n)
+	if err != nil {
+		return zero, err
+	}
+	if len(proof) != len(copath) {
+		return zero, fmt.Errorf("signal/logtree: batch proof has %d hashes, expected %d",
+			len(proof), len(copath))
+	}
+
+	// Both sequences are sorted by node id, so a merge visits every node in
+	// left-to-right order, which is what the calculator requires.
+	calc := &rootCalculator{}
+	i, j := 0, 0
+	for i < len(leaves) && j < len(copath) {
+		if 2*leaves[i] < copath[j] {
+			calc.insert(0, values[i])
+			i++
+		} else {
+			calc.insert(level(copath[j]), proof[j])
+			j++
+		}
+	}
+	for ; i < len(leaves); i++ {
+		calc.insert(0, values[i])
+	}
+	for ; j < len(copath); j++ {
+		calc.insert(level(copath[j]), proof[j])
+	}
+	return calc.root()
 }
 
 // --- consistency -------------------------------------------------------------

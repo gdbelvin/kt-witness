@@ -34,10 +34,20 @@
 // follows from the consistency proof the endpoint returns for lastTreeHeadSize —
 // which is what makes this tier A rather than merely a signed-head observation.
 //
-// What is still not verified here is the *prefix* tree: that individual
-// identifier-to-key bindings are correctly placed, which needs VRF evaluation
-// and the search-proof machinery. That is the analogue of tier B and is not
-// done.
+// # What is opened, and what is not
+//
+// Every fetch also verifies a full search proof for the well-known
+// "distinguished" key — VRF, prefix tree, batch inclusion, commitment — and
+// requires the root it implies to equal the one the auditors and Signal's
+// signature agree on. See search.go. That is the only check here that looks
+// inside the log rather than at its shape, and it ships in the same response as
+// the tree head, so it costs nothing extra.
+//
+// It remains a spot check. Signal's proofs are per-label and the VRF exists
+// precisely so a third party cannot enumerate labels, so no amount of search
+// proofs adds up to a construction audit of the directory. This source
+// therefore stays at tier A and does not claim tier B; full coverage needs
+// Signal's auditor feed, which is bilateral.
 package signal
 
 import (
@@ -60,6 +70,7 @@ import (
 
 	"filippo.io/torchwood"
 	"github.com/gdbsecurity/kt-witness/internal/source"
+	"github.com/gdbsecurity/kt-witness/internal/vrf"
 	"golang.org/x/mod/sumdb/note"
 	"golang.org/x/mod/sumdb/tlog"
 )
@@ -96,7 +107,12 @@ type Source struct {
 	client   *http.Client
 	sigKey   []byte
 	vrfKey   []byte
+	vrfPub   *vrf.PublicKey
 	auditors [][]byte
+
+	// lastSearch records the most recent verified search proof, so the witness
+	// loop can report what it opened without re-running the check.
+	lastSearch *SearchResult
 
 	// lastProof is the consistency proof carried by the most recent Fetch, for
 	// the VerifyConsistency call that follows it. The witness core always pairs
@@ -127,10 +143,21 @@ type Config struct {
 	SigningKey string
 	VRFKey     string
 
+	// SkipSearchProof disables opening the "distinguished" key. The proof ships
+	// in the same response as the tree head, so verifying it is free and on by
+	// default; this exists for tests that build synthetic tree heads.
+	SkipSearchProof bool
+
 	// Log, if set, reports each auditor's tree size so lag between them stays
 	// observable.
 	Log *slog.Logger
 }
+
+// DistinguishedKey is the well-known search key Signal publishes for every
+// client to anchor on. It is the one label a third party can name without
+// knowing anybody's identifier, which is what makes it the witness's handle on
+// the log's contents.
+var DistinguishedKey = []byte("distinguished")
 
 func New(cfg Config) (*Source, error) {
 	if cfg.Origin == "" {
@@ -164,6 +191,9 @@ func New(cfg Config) (*Source, error) {
 	}
 	if s.vrfKey, err = decodeKey(cfg.VRFKey, "VRF"); err != nil {
 		return nil, err
+	}
+	if s.vrfPub, err = vrf.NewPublicKey(s.vrfKey); err != nil {
+		return nil, fmt.Errorf("signal: %w", err)
 	}
 	for _, k := range cfg.AuditorKeys {
 		raw, err := decodeKey(k, "auditor")
@@ -202,8 +232,20 @@ func decodeKey(hexKey, kind string) ([]byte, error) {
 	return raw, nil
 }
 
-func (s *Source) Origin() string    { return s.cfg.Origin }
+func (s *Source) Origin() string { return s.cfg.Origin }
+
+// Tier is A, and deliberately not promoted by the search-proof verification.
+//
+// Tier B means the tree is checked to be *correctly built*, which for Proton
+// means rebuilding 200 million published leaves. Signal publishes no leaf set
+// and its proofs answer only about labels the asker can name — the VRF exists
+// to make enumeration impossible — so verifying every proof we can obtain still
+// examines a vanishing fraction of the directory. Calling that tier B would
+// claim coverage we do not have.
 func (s *Source) Tier() source.Tier { return source.TierA }
+
+// LastSearch returns the most recently verified search proof, or nil.
+func (s *Source) LastSearch() *SearchResult { return s.lastSearch }
 
 // DerivedHead is false: the head carries Signal's own Ed25519 signature over
 // the root, so a contradiction is Signal contradicting its own key.
@@ -472,6 +514,38 @@ func (s *Source) verifyResponse(pb []byte) (uint64, hash, []hash, error) {
 	if verified == 0 {
 		return 0, zero, nil, fmt.Errorf(
 			"signal: no service signature verifies over the derived root at size %d", serviceSize)
+	}
+
+	// Step 4: open the "distinguished" key against the root just established.
+	//
+	// The response already carries a full search proof — VRF, prefix tree, batch
+	// inclusion, commitment — so this costs no extra request. It is the only
+	// check here that looks inside the log rather than at its shape, and its
+	// root must match the one three auditors and Signal's own signature agree
+	// on, which is a demanding thing for a wrong proof to manage.
+	//
+	// A failure withholds and never accuses. We cannot distinguish a malformed
+	// proof from a dishonest one, and the accusation would be permanent.
+	if !s.cfg.SkipSearchProof {
+		condensed := first(top, 2)
+		if condensed == nil {
+			return 0, zero, nil, fmt.Errorf("signal: response carries no distinguished search proof")
+		}
+		res, err := verifySearch(s.vrfPub, DistinguishedKey, nil, parse(condensed), serviceSize)
+		if err != nil {
+			return 0, zero, nil, err
+		}
+		if res.Root != root {
+			return 0, zero, nil, fmt.Errorf(
+				"signal: the distinguished search proof implies root %x, but the signed tree head at "+
+					"size %d has root %x; withholding", res.Root[:], serviceSize, root[:])
+		}
+		s.lastSearch = res
+		if s.cfg.Log != nil {
+			s.cfg.Log.Info("signal search proof verified",
+				"key", string(DistinguishedKey), "index", hex.EncodeToString(res.Index[:8]),
+				"first_position", res.Pos, "version", res.Version, "entries_opened", res.Entries)
+		}
 	}
 
 	// FullTreeHead.distinguished (field 3) is the consistency proof against the

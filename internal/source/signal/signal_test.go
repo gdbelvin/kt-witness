@@ -163,6 +163,10 @@ func newFake(t *testing.T, serviceSize uint64, auditorSizes ...uint64) (*Source,
 		AuditorKeys: keys,
 		MinAuditors: 1,
 		SigningKey:  hex.EncodeToString(svcPub),
+		// These fixtures forge tree heads, not directory contents: they have no
+		// VRF key and no prefix tree, so there is no search proof to open. The
+		// search path has its own tests, against live production proofs.
+		SkipSearchProof: true,
 	})
 	if err != nil {
 		t.Fatal(err)
