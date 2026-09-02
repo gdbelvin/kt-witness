@@ -1,12 +1,33 @@
 # Deploying witness.kt.gdbsecurity.com
 
-Prepared, not deployed. Run these on the server. It is amd64, so the Rust stage
-builds natively and quickly.
+Run these on the server. It is amd64, so the Rust stage builds natively and
+quickly — a cross-build from an arm64 laptop works but goes through QEMU and is
+much slower.
 
-## 1. Build
+## 1. Get the source onto the server
+
+There is no git remote configured, so clone over SSH from the machine holding
+the repository:
 
 ```sh
-git clone <this repo> kt-witness && cd kt-witness
+# on the server
+git clone ssh://<you>@<laptop>/Users/<user>/dev/kt-witness kt-witness && cd kt-witness
+```
+
+or push from the laptop into a bare repo on the server:
+
+```sh
+# on the server
+git init --bare ~/kt-witness.git
+# on the laptop
+git remote add server ssh://<server>/~/kt-witness.git && git push server master
+# on the server
+git clone ~/kt-witness.git kt-witness && cd kt-witness
+```
+
+## 2. Build
+
+```sh
 docker build -t kt-witness:latest .
 ```
 
@@ -21,14 +42,14 @@ echo '{"log_directory":"http://127.0.0.1:1","epoch":1,"prev_root":"aa","curr_roo
 Expect JSON with `"kind":"fetch"`. Anything else — especially a library error —
 means tier B would be silently dead.
 
-## 2. State directory
+## 3. State directory
 
 ```sh
 mkdir -p data && cp deploy/witness.json data/witness.json
 sudo chown -R 65532:65532 data      # the image runs as distroless nonroot
 ```
 
-## 3. Generate the signing key, on this machine
+## 4. Generate the signing key, on this machine
 
 The key is the witness's published identity. Generating it here means the
 private key never leaves the server.
@@ -48,7 +69,7 @@ Then back up `data/witness.key`. Losing it means coming back as a different
 witness, and anyone who pinned the old key stops seeing you. Losing the database
 only costs history.
 
-## 4. Backfill
+## 5. Backfill
 
 Verifies published history before witnessing starts, so everything before today
 is attested rather than trusted-on-first-use. Takes about three minutes.
@@ -68,7 +89,7 @@ backfill complete origin=proton.me/kt/v1     from=6206  to=6707   epochs=501    
 Signal and Apple cannot be backfilled: both need a historical signed root to
 anchor from, and neither serves proofs from a size we have not already witnessed.
 
-## 5. Run
+## 6. Run
 
 ```sh
 docker compose up -d
@@ -77,19 +98,23 @@ docker compose logs -f
 
 ## What healthy looks like
 
-Five logs cosigned on the first round:
+**Ten logs** cosigned on the first round:
 
-| Origin | Tier |
-|---|---|
-| `thelemail.com/keys` | A |
-| `meta.messenger.kt/v1` | A+ |
-| `proton.me/kt/v1` | A+ |
-| `signal.org/kt` | A |
-| `apple.com/kt/top-level-tree` | A |
+| Origin | Tier | Advances |
+|---|---|---|
+| `thelemail.com/keys` | B | rarely |
+| `meta.messenger.kt/v1` | A+ | every ~2 min |
+| `whatsapp.kt/v2` | A+ | every ~30 s |
+| `proton.me/kt/v1` | A+ | every ~4 h |
+| `signal.org/kt` | A | every round |
+| `apple.com/kt/top-level-tree` | A | steadily |
+| `apple.com/at/pcc` | A | slowly |
+| `parcelyard2026h2.prod.certificate.transparency.goog` | A | constantly |
+| `log.twig.ct.letsencrypt.org/2026h1` | A | constantly |
+| `tuscolo2026h1.sunlight.geomys.org` | A | constantly |
 
-Then mostly quiet: Signal advances every round, Meta every ~2 min, Apple
-steadily, Proton every ~4 h, thelemail rarely (it re-cosigns hourly to keep its
-timestamp a liveness signal).
+Unchanged logs are re-cosigned hourly, so their timestamp stays a liveness
+signal.
 
 | Log line | Meaning |
 |---|---|
@@ -98,6 +123,7 @@ timestamp a liveness signal).
 | `FORK DETECTED` | Conclusive misbehaviour. That log is permanently refused; evidence at `/forks`. |
 | `epoch verified` | A tier-B construction audit passed (~277 MB, ~30 s native). |
 | `signal auditor` | Per-auditor sizes and lag. |
+| `signal search proof verified` | The `distinguished` key was opened and checked end to end — VRF, prefix tree, inclusion, commitment. |
 | `CONTRADICTION IN OBSERVED APPLICATION HEAD` | An Apple per-application head (possibly iMessage) contradicted itself. Not signature-verified, so it is for a human to judge, not grounds to refuse. |
 
 ## Endpoints
@@ -114,13 +140,19 @@ timestamp a liveness signal).
 
 ## Expected load
 
-- **Bandwidth**: ~20 GB/day, essentially all tier B at `sample_rate` 0.1. Raising
-  it to 1.0 means ~204 GB/day — check any cap first.
+Measured; the full model is in [docs/cost.md](../docs/cost.md).
+
+- **Bandwidth**: **~40 GB/day** (~1.2 TB/month), essentially all tier B at
+  `sample_rate` 0.1 — ~20 GB Meta, ~17 GB WhatsApp. Raising the rate to 1.0
+  means ~372 GB/day; check any cap first. Almost all of it is *ingress*.
+- **CPU**: ~0.27 cores sustained, but bursty. One Meta epoch is ~24 s wall and
+  ~144 s CPU (it parallelises ~6×), so tier B needs real cores; on a single core
+  it would miss the 120 s cadence.
 - **Memory**: one AKD verification peaks ~3.7 GB RSS; the compose limit is 6 GB.
-- **CPU**: ~24 s wall per epoch but ~144 s of CPU — it parallelises ~6x, so tier B
-  needs real cores. On one core it would miss the 120 s epoch cadence.
-- **Disk**: the database grows ~300 KB/day. `/tmp` needs ~1 GB for one proof in
-  flight (compose mounts a tmpfs).
+- **Disk**: ~153 GB total if Proton's tree is retained for the incremental audit
+  (not yet wired — see TODO). Without it, a few GB. The database grows
+  ~300 KB/day. `/tmp` needs ~1 GB for one proof in flight (compose mounts a
+  tmpfs).
 
 ## Before anyone relies on this
 
