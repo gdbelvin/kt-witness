@@ -82,6 +82,8 @@ type logConfig struct {
 	MinAuditors       int      `json:"min_auditors"`
 	LogDirectory      string   `json:"log_directory"`
 	PlexiNamespaceURL string   `json:"plexi_namespace_url"`
+	LogType           uint64   `json:"log_type"`
+	Application       uint64   `json:"application"`
 	StartEpoch        int64    `json:"start_epoch"`
 	MaxEpochsPerRound int64    `json:"max_epochs_per_round"`
 }
@@ -113,6 +115,8 @@ func (l logConfig) build(log *slog.Logger) (source.Source, error) {
 			Endpoint:     l.Endpoint,
 			TreeID:       uint64(l.TreeID),
 			PublicKeyDER: l.PublicKeyDER,
+			LogType:      l.LogType,
+			Application:  l.Application,
 		})
 	case "signal":
 		return ktsignal.New(ktsignal.Config{

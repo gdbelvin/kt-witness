@@ -117,6 +117,15 @@ type Config struct {
 	// ClientEndpoint is the at_client surface, which serves consistency proofs.
 	// Defaults to the at_client path on the same host as Endpoint.
 	ClientEndpoint string
+
+	// LogType and Application name the tree in consistency requests, which are
+	// keyed by those rather than by TreeID. They default to the Top-Level Tree.
+	//
+	// Getting these wrong does not fail: Apple answers about whichever tree the
+	// request names, so a stale LogType returns a perfectly valid proof about
+	// the wrong log. That is why they are explicit rather than inferred.
+	LogType     uint64
+	Application uint64
 }
 
 func New(cfg Config) (*Source, error) {
@@ -131,6 +140,14 @@ func New(cfg Config) (*Source, error) {
 	}
 	if cfg.PublicKeyDER == "" {
 		cfg.PublicKeyDER = TopLevelTreePublicKey
+	}
+	if cfg.LogType == 0 {
+		cfg.LogType = logTypeTopLevelTree
+	}
+	if cfg.TreeID != TopLevelTreeID && cfg.Application == 0 {
+		// Only the Top-Level Tree is application-agnostic; every other tree must
+		// say which application it belongs to or the request is rejected.
+		return nil, fmt.Errorf("apple: tree %d needs an application", cfg.TreeID)
 	}
 	cfg.Endpoint = strings.TrimSuffix(cfg.Endpoint, "/")
 
@@ -502,7 +519,11 @@ func (s *Source) consistencyRequest(startRev, endRev uint64) []byte {
 	b = pbwire.AppendVarint(b, uint64(len(sub)))
 	b = append(b, sub...)
 	b = pbwire.AppendTag(b, 3, 0)
-	b = pbwire.AppendVarint(b, logTypeTopLevelTree)
+	b = pbwire.AppendVarint(b, s.cfg.LogType)
+	if s.cfg.Application != 0 {
+		b = pbwire.AppendTag(b, 4, 0)
+		b = pbwire.AppendVarint(b, s.cfg.Application)
+	}
 	return b
 }
 
@@ -624,7 +645,20 @@ func (s *Source) head(ctx context.Context, revision int64) (*treeState, error) {
 // Enum values from Apple's Transparency.proto, needed where a request must name
 // a log other than the Top-Level Tree.
 const (
-	statusOK       = 1
-	logTypeATLog   = 5
-	applicationPCC = 5
+	statusOK = 1
+
+	// LogTypeATLog and ApplicationPCC name Apple's Transparency log for Private
+	// Cloud Compute, which is the one Apple tree a third party can verify
+	// inclusion proofs against. See docs/apple.md.
+	LogTypeATLog   = 5
+	ApplicationPCC = 5
+)
+
+// The PCC Apple Transparency log, from at_researcher/list_trees. Its signing
+// key is not the Top-Level Tree's, so both must be configured together.
+const (
+	ATLogTreeID    = 5296182921832599
+	ATLogPublicKey = "3059301306072a8648ce3d020106082a8648ce3d03010703420004" +
+		"c4ad1582c97e1a89371e10051e815b87abdb1473394a4ddae7ff0892a50be59b" +
+		"105547a637f0ca875bd8927f810169ca5e6fa1fe0f2819aeadd76a9a909fc31e"
 )

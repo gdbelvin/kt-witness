@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/gdbsecurity/kt-witness/internal/pbwire"
+	"github.com/gdbsecurity/kt-witness/internal/source"
 	"golang.org/x/mod/sumdb/tlog"
 )
 
@@ -30,20 +31,12 @@ import (
 // No IDS_MESSAGING tree is listed, which is why iMessage heads remain
 // observations: they are visible inside Top-Level Tree leaves, but Apple
 // publishes no per-application surface to bind them to.
-const (
-	// ATLogTreeID is the PCC Apple Transparency log.
-	ATLogTreeID = 5296182921832599
-
-	// ATLogPublicKey is that log's signing key, as served by list_trees. It is
-	// a different key from the Top-Level Tree's.
-	ATLogPublicKey = "3059301306072a8648ce3d020106082a8648ce3d03010703420004" +
-		"c4ad1582c97e1a89371e10051e815b87abdb1473394a4ddae7ff0892a50be59b" +
-		"105547a637f0ca875bd8927f810169ca5e6fa1fe0f2819aeadd76a9a909fc31e"
-)
-
 func atLogSource(t *testing.T) *Source {
 	t.Helper()
-	s, err := New(Config{Origin: "apple.com/at/pcc", TreeID: ATLogTreeID, PublicKeyDER: ATLogPublicKey})
+	s, err := New(Config{
+		Origin: "apple.com/at/pcc", TreeID: ATLogTreeID, PublicKeyDER: ATLogPublicKey,
+		LogType: LogTypeATLog, Application: ApplicationPCC,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +91,7 @@ func TestLiveATLogInclusion(t *testing.T) {
 	// Application must be PRIVATE_CLOUD_COMPUTE (5); IDS_MESSAGING (1) is
 	// rejected with INVALID_REQUEST, which is the whole story for iMessage.
 	ir := varintField(nil, 1, requestVersion)
-	ir = varintField(ir, 2, applicationPCC)
+	ir = varintField(ir, 2, ApplicationPCC)
 	ir = pbwire.AppendTag(ir, 3, 2)
 	ir = pbwire.AppendVarint(ir, uint64(len(id)))
 	ir = append(ir, id[:]...)
@@ -171,17 +164,8 @@ func TestLiveATLogConsistency(t *testing.T) {
 		t.Fatalf("earlier head: %v", err)
 	}
 
-	var sub []byte
-	sub = varintField(sub, 3, prev.revision)
-	sub = varintField(sub, 4, head.revision)
-	req := varintField(nil, 1, requestVersion)
-	req = pbwire.AppendTag(req, 2, 2)
-	req = pbwire.AppendVarint(req, uint64(len(sub)))
-	req = append(req, sub...)
-	req = varintField(req, 3, logTypeATLog)
-	req = varintField(req, 4, applicationPCC)
-
-	body, err := s.postTo(ctx, s.clientBase(), consistencyEndpoint, req)
+	body, err := s.postTo(ctx, s.clientBase(), consistencyEndpoint,
+		s.consistencyRequest(prev.revision, head.revision))
 	if err != nil {
 		t.Fatalf("consistency_proof: %v", err)
 	}
@@ -201,5 +185,46 @@ func TestLiveATLogConsistency(t *testing.T) {
 		prev.revision, head.revision, len(resp[5]), end.size)
 	if end.size < prev.size {
 		t.Errorf("end head is smaller than the start head")
+	}
+}
+
+// TestLiveATLogAsSource exercises the AT log through the Source interface the
+// witness core actually calls, rather than through its pieces. This is what
+// makes it a witnessable origin rather than something we can merely read.
+//
+// Requires network; run with KT_WITNESS_LIVE=1.
+func TestLiveATLogAsSource(t *testing.T) {
+	if os.Getenv("KT_WITNESS_LIVE") == "" {
+		t.Skip("set KT_WITNESS_LIVE=1 to run against production")
+	}
+	s := atLogSource(t)
+	ctx := context.Background()
+
+	head, err := s.Fetch(ctx, nil)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	t.Logf("%s: size %d, root %x", head.Origin, head.Size, head.Hash[:])
+	if head.Size == 0 {
+		t.Fatal("fetched the empty tree — revision was probably not sent explicitly")
+	}
+
+	// An earlier head of the same log, to prove append-only across a real gap.
+	older, err := s.head(ctx, int64(s.latest.revision)-100)
+	if err != nil {
+		t.Fatalf("earlier head: %v", err)
+	}
+	prev := &source.Head{Origin: head.Origin, Size: int64(older.size), Hash: older.root}
+
+	if err := s.VerifyConsistency(ctx, prev, head); err != nil {
+		t.Fatalf("VerifyConsistency %d -> %d: %v", prev.Size, head.Size, err)
+	}
+	t.Logf("append-only proven from size %d to %d", prev.Size, head.Size)
+
+	// Negative control: a root that was never this log's must not verify.
+	bogus := *prev
+	bogus.Hash[0] ^= 0x01
+	if err := s.VerifyConsistency(ctx, &bogus, head); err == nil {
+		t.Fatal("consistency verified against a root this log never had")
 	}
 }
