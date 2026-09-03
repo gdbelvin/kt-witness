@@ -12,14 +12,18 @@ import (
 func TestRoundAtIsDeterministicAndStrictlyAfter(t *testing.T) {
 	genesis := time.Unix(quicknetGenesis, 0)
 
-	// At genesis exactly, round 1 is being emitted; the next unpredictable one
-	// is 2.
-	if got := RoundAt(genesis); got != 2 {
-		t.Errorf("RoundAt(genesis) = %d, want 2", got)
+	// At genesis, round 1 is the current one.
+	if got := RoundAt(genesis); got != 1 {
+		t.Errorf("RoundAt(genesis) = %d, want 1", got)
 	}
-	// One period later, round 2 is out; the next is 3.
-	if got := RoundAt(genesis.Add(quicknetPeriod * time.Second)); got != 3 {
-		t.Errorf("RoundAt(genesis+period) = %d, want 3", got)
+	// One period later, round 2 is current.
+	if got := RoundAt(genesis.Add(quicknetPeriod * time.Second)); got != 2 {
+		t.Errorf("RoundAt(genesis+period) = %d, want 2", got)
+	}
+	// The round must already exist, or it cannot be fetched. A round derived
+	// from "now" must never be in the future.
+	if RoundAt(time.Now()) > RoundAt(time.Now().Add(quicknetPeriod*time.Second)) {
+		t.Error("RoundAt(now) reaches into the future and would 500")
 	}
 	// Determinism: the same instant must always give the same round.
 	at := genesis.Add(123456 * time.Second)

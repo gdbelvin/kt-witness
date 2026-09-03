@@ -42,7 +42,8 @@ const (
 	quicknetPeriod  = 3
 )
 
-// RoundAt returns the first beacon round emitted strictly AFTER t.
+// RoundAt returns the beacon round current at t — the most recent round
+// emitted at or before it.
 //
 // This closes a grinding hole. Selection used to use whichever round happened
 // to be current when the decision was made, and rounds are three seconds apart,
@@ -53,15 +54,17 @@ const (
 // time we publish alongside every decision, a third party recomputes exactly
 // which round we were required to use, and any other round is visibly wrong.
 //
-// Strictly after, not at-or-after, because the round must not be predictable
-// when the epoch was published: a round emitted at the same instant might
-// already have been known.
+// It must be a round that has ALREADY been emitted, or it cannot be fetched:
+// an earlier version of this reached two periods into the future and every
+// request returned HTTP 500. Unpredictability comes from when the decision is
+// made, not from reaching forward — we only decide after observing an epoch,
+// so the current round already postdates that epoch's publication.
 func RoundAt(t time.Time) uint64 {
 	elapsed := t.Unix() - quicknetGenesis
 	if elapsed < 0 {
 		return 1
 	}
-	return uint64(elapsed/quicknetPeriod) + 2
+	return uint64(elapsed/quicknetPeriod) + 1
 }
 
 // Round is one beacon output, retained as evidence of how a sample was chosen.
