@@ -51,6 +51,7 @@
 package signal
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/tls"
@@ -127,6 +128,11 @@ type Source struct {
 	// VerifyConsistency refuses to use it against any other.
 	lastProof     []hash
 	lastProofFrom uint64
+
+	// lastAccountAt rate-limits the optional account search; lastAccountSearch
+	// retains its most recent verified proof.
+	lastAccountAt     time.Time
+	lastAccountSearch *SearchResult
 }
 
 type Config struct {
@@ -157,6 +163,26 @@ type Config struct {
 	// in the same response as the tree head, so verifying it is free and on by
 	// default; this exists for tests that build synthetic tree heads.
 	SkipSearchProof bool
+
+	// AccountACI and AccountIdentityKey, if both set, enable monitoring of one
+	// real account alongside the distinguished entry.
+	//
+	// Signal's proofs are per-label: they answer about identifiers the asker can
+	// already name, and the VRF exists so a third party cannot enumerate the
+	// rest. So this adds a SECOND label out of hundreds of millions. It is a
+	// genuine independent exercise of the VRF, prefix tree, inclusion and
+	// commitment path — valuable as a cross-check — and it is not coverage. It
+	// does not raise the tier.
+	//
+	// The ACI identifies a real person, so it is never published: see
+	// AccountLabel, which is what appears in logs and exported state.
+	AccountACI         string
+	AccountIdentityKey string
+
+	// AccountInterval is how often the account is searched. Defaults to 15
+	// minutes: the endpoint is rate limited per IP, and a witness that polls a
+	// courtesy endpoint every round is a witness that gets blocked.
+	AccountInterval time.Duration
 
 	// Log, if set, reports each auditor's tree size so lag between them stays
 	// observable.
@@ -355,6 +381,13 @@ func (s *Source) Fetch(ctx context.Context, prev *source.Head) (*source.Head, er
 		return nil, err
 	}
 
+	// The optional second label. Rate-limited internally, and deliberately
+	// after the tree head is verified: it is checked against this same round's
+	// root, and there is no point spending a request on an unverifiable head.
+	if err := s.maybeSearchAccount(ctx, size); err != nil {
+		return nil, err
+	}
+
 	s.lastProof = proof
 	s.lastProofFrom = 0
 	if prev != nil {
@@ -382,6 +415,17 @@ func (s *Source) Fetch(ctx context.Context, prev *source.Head) (*source.Head, er
 // and returns the verified service tree size, its root, and the consistency
 // proof against our previously witnessed size.
 func (s *Source) verifyResponse(pb []byte) (uint64, hash, []hash, error) {
+	return s.verifyResponseFor(pb, DistinguishedKey)
+}
+
+// verifyResponseFor is verifyResponse with the search key made explicit.
+//
+// Every KT response of this shape carries a search proof in field 2, but WHICH
+// key that proof is about depends on what was asked: the distinguished endpoint
+// answers about "distinguished", a /search answers about the identifier
+// searched. Verifying with the wrong key fails at the VRF, so the key has to be
+// passed in rather than assumed.
+func (s *Source) verifyResponseFor(pb []byte, searchKey []byte) (uint64, hash, []hash, error) {
 	var zero hash
 
 	top := parse(pb)
@@ -545,16 +589,17 @@ func (s *Source) verifyResponse(pb []byte) (uint64, hash, []hash, error) {
 	if !s.cfg.SkipSearchProof {
 		condensed := first(top, 2)
 		if condensed == nil {
-			return 0, zero, nil, fmt.Errorf("signal: response carries no distinguished search proof")
+			return 0, zero, nil, fmt.Errorf("signal: response carries no search proof for %s", searchKeyName(searchKey))
 		}
-		res, err := verifySearch(s.vrfPub, DistinguishedKey, nil, parse(condensed), serviceSize)
+		res, err := verifySearch(s.vrfPub, searchKey, nil, parse(condensed), serviceSize)
 		if err != nil {
 			return 0, zero, nil, err
 		}
 		if res.Root != root {
 			return 0, zero, nil, fmt.Errorf(
-				"signal: the distinguished search proof implies root %x, but the signed tree head at "+
-					"size %d has root %x; withholding", res.Root[:], serviceSize, root[:])
+				"signal: the %s search proof implies root %x, but the signed tree head at "+
+					"size %d has root %x; withholding",
+				searchKeyName(searchKey), res.Root[:], serviceSize, root[:])
 		}
 
 		// Step 5: cross-check against every previous observation. A log entry is
@@ -587,10 +632,17 @@ func (s *Source) verifyResponse(pb []byte) (uint64, hash, []hash, error) {
 			}
 		}
 
-		s.lastSearch = res
+		// Only the distinguished proof is retained as THE search result. The
+		// account search reuses this path, and letting it overwrite the field
+		// would quietly redefine what "the last search" means for every reader
+		// of it — the status page, the corpus tool, the test that checks the two
+		// resolve to different indices.
+		if bytes.Equal(searchKey, DistinguishedKey) {
+			s.lastSearch = res
+		}
 		if s.cfg.Log != nil {
 			s.cfg.Log.Info("signal search proof verified",
-				"key", string(DistinguishedKey), "index", hex.EncodeToString(res.Index[:8]),
+				"key", searchKeyName(searchKey), "index", hex.EncodeToString(res.Index[:8]),
 				"first_position", res.Pos, "version", res.Version,
 				"entries_opened", res.Entries, "entries_cross_checked", len(s.ledger.seen))
 		}

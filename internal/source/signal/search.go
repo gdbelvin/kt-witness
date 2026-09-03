@@ -148,7 +148,10 @@ func verifySearch(vrfKey *vrf.PublicKey, searchKey []byte, version *uint32,
 	}
 	out, err := vrfKey.ProofToHash(searchKey, vrfProof)
 	if err != nil {
-		return nil, fmt.Errorf("signal/search: VRF proof for %q: %w", searchKey, err)
+		// Named by shape, never by value: for an ACI the search key contains a
+		// real person's identifier, and an error string is the single easiest
+		// way for one to escape into a log, a bug report or a paste.
+		return nil, fmt.Errorf("signal/search: VRF proof for %s: %w", searchKeyName(searchKey), err)
 	}
 	var index hash
 	copy(index[:], out)
@@ -257,7 +260,7 @@ func verifySearch(vrfKey *vrf.PublicKey, searchKey []byte, version *uint32,
 
 	resultIdx, _, ok := guide.result()
 	if !ok {
-		return nil, fmt.Errorf("signal/search: the log does not contain the requested version of %q", searchKey)
+		return nil, fmt.Errorf("signal/search: the log does not contain the requested version of %s", searchKeyName(searchKey))
 	}
 	if resultIdx >= len(visited) {
 		return nil, fmt.Errorf("signal/search: result index %d out of range", resultIdx)
@@ -273,8 +276,8 @@ func verifySearch(vrfKey *vrf.PublicKey, searchKey []byte, version *uint32,
 	value := first(parse(valueRaw), 1)
 	opening := first(condensed, 3)
 	if !verifyCommitment(searchKey, answer.commitment, marshalUpdateValue(value), opening) {
-		return nil, fmt.Errorf("signal/search: the commitment at entry %d does not open to the value served for %q",
-			answer.id, searchKey)
+		return nil, fmt.Errorf("signal/search: the commitment at entry %d does not open to the value served for %s",
+			answer.id, searchKeyName(searchKey))
 	}
 
 	opened := make(map[uint64]hash, len(visited))

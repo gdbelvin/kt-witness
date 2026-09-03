@@ -79,7 +79,13 @@ type config struct {
 	} `json:"proton_audit"`
 
 	Audit struct {
-		SidecarPath       string  `json:"sidecar_path"`
+		SidecarPath string `json:"sidecar_path"`
+
+		// SidecarWorkers is how many verifications may run at once. Each peaks
+		// near 3.7 GB RSS, so this is a statement about the host's memory, not
+		// about how fast auditing ought to go. Defaults to 1.
+		SidecarWorkers int `json:"sidecar_workers"`
+
 		SampleRate        float64 `json:"sample_rate"`
 		Interval          string  `json:"interval"`
 		Timeout           string  `json:"timeout"`
@@ -129,8 +135,14 @@ type logConfig struct {
 	PlexiNamespaceURL string   `json:"plexi_namespace_url"`
 	LogType           uint64   `json:"log_type"`
 	Application       uint64   `json:"application"`
-	StartEpoch        int64    `json:"start_epoch"`
-	MaxEpochsPerRound int64    `json:"max_epochs_per_round"`
+	// signal: names of the environment variables carrying the monitored
+	// account's material. The values themselves are never in this file.
+	AccountACIEnv         string `json:"account_aci_env"`
+	AccountIdentityKeyEnv string `json:"account_identity_key_env"`
+	AccountIntervalSec    int    `json:"account_interval_sec"`
+
+	StartEpoch        int64 `json:"start_epoch"`
+	MaxEpochsPerRound int64 `json:"max_epochs_per_round"`
 }
 
 func (l logConfig) build(log *slog.Logger, entries source.EntryStore, ctLogs []proton.CTLog) (source.Source, error) {
@@ -214,13 +226,27 @@ func (l logConfig) build(log *slog.Logger, entries source.EntryStore, ctLogs []p
 			Application:  l.Application,
 		})
 	case "signal":
+		// Account material is read from the environment, never from the config
+		// file: the config is committed and mounted into the container, and an
+		// ACI identifies a real person. Supply it with `op run` or a Docker
+		// secret so it exists only in the process.
+		aci := os.Getenv(envOr(l.AccountACIEnv, "KT_SIGNAL_ACI"))
+		idKey := os.Getenv(envOr(l.AccountIdentityKeyEnv, "KT_SIGNAL_ACI_IDENTITY_KEY"))
+		if (aci == "") != (idKey == "") {
+			// Half-configured monitors nothing while looking configured, which
+			// is the worst of both.
+			return nil, fmt.Errorf("log %q: set both the ACI and the identity key, or neither", l.Origin)
+		}
 		return ktsignal.New(ktsignal.Config{
-			Origin:      l.Origin,
-			Endpoint:    l.Endpoint,
-			AuditorKeys: l.AuditorKeys,
-			MinAuditors: l.MinAuditors,
-			Entries:     entries,
-			Log:         log,
+			Origin:             l.Origin,
+			Endpoint:           l.Endpoint,
+			AuditorKeys:        l.AuditorKeys,
+			MinAuditors:        l.MinAuditors,
+			Entries:            entries,
+			AccountACI:         aci,
+			AccountIdentityKey: idKey,
+			AccountInterval:    time.Duration(l.AccountIntervalSec) * time.Second,
+			Log:                log,
 		})
 	default:
 		return nil, fmt.Errorf("log %q: unknown type %q", l.Origin, l.Type)
@@ -438,12 +464,16 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 		if rate <= 0 {
 			rate = 0.1
 		}
-		sidecar := audit.NewSidecar(cfg.Audit.SidecarPath)
+		workers := cfg.Audit.SidecarWorkers
+		if workers < 1 {
+			workers = 1
+		}
+		sidecar := audit.NewPool(cfg.Audit.SidecarPath, workers)
 		defer sidecar.Close()
 		auditor = &audit.Auditor{
 			Store: db, Beacon: audit.NewBeacon(cfg.Audit.BeaconURL),
 			Sidecar: sidecar, Log: log, Rate: rate, Timeout: auditTimeout,
-			MaxEpochsPerRound: cfg.Audit.MaxEpochsPerRound,
+			MaxEpochsPerRound: maxEpochsPerRound(cfg.Audit.MaxEpochsPerRound),
 		}
 		for _, src := range sources {
 			if r, ok := src.(audit.Resolver); ok {
@@ -451,7 +481,9 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 			}
 		}
 		log.Info("tier B auditing enabled", "sidecar", cfg.Audit.SidecarPath,
-			"sample_rate", rate, "logs", len(resolvers), "interval", auditInterval.String())
+			"sample_rate", rate, "logs", len(resolvers), "interval", auditInterval.String(),
+			"workers", sidecar.Size(),
+			"peak_memory_estimate_gb", float64(sidecar.Size())*3.7)
 	}
 
 	peers, err := cosig.NewVerifier(cfg.PeerWitnesses)
@@ -507,7 +539,30 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 	}()
 
 	if backfill {
-		runBackfill(ctx, db, sources, log)
+		// Backfill runs in the BACKGROUND, immediately and then on a schedule.
+		//
+		// It used to run synchronously before the witness loop started, which
+		// is why it was never switched on in the deployment: walking Meta's
+		// 536,000-epoch listing before witnessing anything means minutes with no
+		// equivocation detection, and equivocation is the live incident.
+		// History is a completeness exercise and has no business delaying it.
+		//
+		// Repeating matters as much as starting. Coverage counts audits landing
+		// inside the backfilled range, so a range whose upper bound is frozen at
+		// the tip of whenever it last ran stops counting today's work, and the
+		// gap grows without limit — WhatsApp had drifted 1,628 epochs past its
+		// own recorded history. This walks listing metadata, not proofs, so
+		// repeating it is cheap relative to what it keeps honest.
+		go func() {
+			for {
+				runBackfill(ctx, db, sources, log)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backfillRefresh):
+				}
+			}
+		}()
 	}
 
 	var exporter *export.Exporter
@@ -559,22 +614,54 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 				}
 				awg.Wait()
 
-				// The backwards sweep runs after the forward one and with a
-				// small budget. Equivocation happens at the tip and is a live
-				// incident; history is a completeness exercise that can wait,
-				// and must never delay the thing that catches an active attack.
-				for _, r := range resolvers {
-					out, err := auditor.RunHistory(ctx, r, historyBudgetPerRound)
-					if err != nil && ctx.Err() == nil {
-						log.Warn("history sweep", "origin", r.Origin(), "err", err)
-						continue
-					}
-					if out != nil && out.Verified > 0 {
-						log.Info("history swept", "origin", out.Origin,
-							"from", out.From, "to", out.To, "verified", out.Verified,
-							"remaining", out.Remaining, "complete", out.Complete)
-					}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(auditInterval):
 				}
+			}
+		}()
+
+		// The backwards sweep runs on its OWN goroutine, not after the forward
+		// one.
+		//
+		// It used to run after awg.Wait(), which read as a sensible priority
+		// rule — the tip is a live incident, history is a completeness exercise
+		// — but it made history's progress conditional on the forward pass ever
+		// finishing. With an unbounded backlog the forward pass does not
+		// finish for days, so the sweep never ran at all: 31 of Meta's 536,043
+		// epochs, frozen, with no error and no log line to say why. A
+		// completeness metric that silently stops moving is worse than one that
+		// is honestly slow.
+		//
+		// Priority is now enforced where it actually belongs — the sidecar
+		// mutex — so the two sweeps interleave one verification at a time
+		// instead of one starving the other. Memory stays bounded because only
+		// one verification ever runs.
+		go func() {
+			for {
+				// Across origins in parallel, like the forward sweep. The
+				// sidecar pool is what bounds real concurrency, so fanning out
+				// here costs nothing when the pool is small and uses the whole
+				// pool when it is not.
+				var hwg sync.WaitGroup
+				for _, r := range resolvers {
+					hwg.Add(1)
+					go func(r audit.Resolver) {
+						defer hwg.Done()
+						out, err := auditor.RunHistory(ctx, r, historyBudgetPerRound)
+						if err != nil && ctx.Err() == nil {
+							log.Warn("history sweep", "origin", r.Origin(), "err", err)
+							return
+						}
+						if out != nil && out.Verified > 0 {
+							log.Info("history swept", "origin", out.Origin,
+								"from", out.From, "to", out.To, "verified", out.Verified,
+								"remaining", out.Remaining, "complete", out.Complete)
+						}
+					}(r)
+				}
+				hwg.Wait()
 				select {
 				case <-ctx.Done():
 					return
@@ -1012,11 +1099,18 @@ func startPeerPolling(ctx context.Context, peers map[string]string, db *store.St
 // comparePeerViews looks for a peer reporting a different root at a size we
 // also witnessed.
 func comparePeerViews(peer string, views []cosig.PeerView, db *store.Store, log *slog.Logger) {
-	var checked, agreed int
+	var checked, agreed, sizeOnly int
 	for _, v := range views {
 		rec, err := db.Get(v.Origin)
 		if err != nil || rec == nil {
 			continue // we do not witness this log; nothing to compare
+		}
+		if !v.HasRoot() {
+			// A size with no root cannot contradict anything. Counted so the
+			// log line distinguishes "we compared and agreed" from "there was
+			// nothing to compare", which otherwise look identical.
+			sizeOnly++
+			continue
 		}
 		if rec.Size != v.Size {
 			// Different sizes are just different moments. Only the same size
@@ -1036,8 +1130,42 @@ func comparePeerViews(peer string, views []cosig.PeerView, db *store.Store, log 
 		log.Error("PEER DIVERGENCE — another witness publishes a different root at "+
 			"a size we also witnessed", "detail", d.String())
 	}
-	if checked > 0 {
+	if checked > 0 || sizeOnly > 0 {
 		log.Info("peer view compared", "peer", peer,
-			"logs_in_common_at_same_size", checked, "agreed", agreed)
+			"logs_in_common_at_same_size", checked, "agreed", agreed,
+			"size_only_not_comparable", sizeOnly)
 	}
 }
+
+// envOr returns name if set, else the default variable name.
+func envOr(name, dflt string) string {
+	if name != "" {
+		return name
+	}
+	return dflt
+}
+
+// maxEpochsPerRound bounds how many epochs one forward pass considers.
+//
+// Zero used to mean unbounded, which is the setting that stalled the backwards
+// sweep in production: with a long backlog the forward pass ran for days
+// without returning, and anything sequenced after it never happened. Unbounded
+// is not a useful choice for a loop that is supposed to come back around, so an
+// unset value now means a bound rather than none.
+//
+// 64 is roughly two hours of Meta epochs, so a caught-up witness never notices
+// the cap, and a witness with a backlog still yields between passes.
+func maxEpochsPerRound(configured int64) int64 {
+	if configured > 0 {
+		return configured
+	}
+	return 64
+}
+
+// backfillRefresh is how often published history is re-walked so the recorded
+// range keeps up with the tip.
+//
+// Six hours is short enough that the coverage metric stays close to true and
+// long enough that re-listing a 536,000-epoch bucket is not a background load
+// worth noticing.
+const backfillRefresh = 6 * time.Hour

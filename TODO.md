@@ -87,10 +87,44 @@ hardware, because publishing is what invites people to depend on it.
       heads Signal signed, disagreeing about an immutable log position — but the
       tree math is a fresh reimplementation and a fork is permanent and public.
       Promote once this has a production record.
-- [ ] **Signal: monitor proofs.** Not reachable by a witness. `/monitor` is
-      unauthenticated but requires an ACI: it rejects `distinguished` at the
-      parser (HTTP 422) and returns 403 for a well-formed but unknown ACI. Would
-      need an account. The entry ledger stands in for it.
+- [x] **Signal: account monitoring.** DONE — verified against production.
+      The blocker was never "unauthenticated access" — `/search` answers a bare
+      request from anywhere — but that it requires an `aci` AND an
+      `aciIdentityKey`, and the identity key is a real cryptographic input (the
+      tree's commitment is over it) held only by a registered device. The
+      operator supplied both from Signal Desktop; they live in 1Password and
+      reach the process through the environment, never the config file.
+      `internal/source/signal/account.go` searches the account on an interval
+      and runs the same three-way check plus VRF, prefix tree, batch inclusion
+      and commitment opening, requiring the proof to resolve to the root the
+      signed head and the auditors already agree on. The ACI search key is
+      `b"a"` + the bare 16 UUID bytes, taken from libsignal — the ACI branch
+      deliberately omits the ServiceId kind byte, which is the detail that would
+      otherwise fail at the VRF with no useful diagnostic.
+      Two rules are pinned by tests: a transport failure (rate limit, timeout,
+      5xx) must NOT withhold the cosignature, or Signal could silence its own
+      auditor by throttling it; and the ACI never appears in logs or published
+      output, only a stable hash.
+      **This does not raise the tier**, and is not a step towards it. It moves
+      per-label coverage from one label to two out of hundreds of millions. Its
+      value is a second, independent exercise of the verification path against
+      an ordinary entry rather than the one label every client checks.
+      Live: the account proof verifies at tree size 860,072,136, resolving to a
+      different tree index from the distinguished entry, so a genuinely second
+      point in the tree is being exercised.
+      Three bugs fell out of writing the tests, all worth remembering.
+      The account search reused the distinguished verification path and so
+      overwrote `lastSearch`, silently changing what "the last search" meant for
+      every reader of it. The first negative control asked for a *different*
+      ACI and was testing the wrong system — Signal answers HTTP 403 for an ACI
+      that is not the caller's, so the proof machinery is never reached; the
+      control now perturbs the search KEY against a genuine response, and also
+      checks the `a` type prefix is bound by swapping in the e164 prefix.
+      And the VRF failure formatted the search key with `%q`, printing the raw
+      ACI bytes into an error — found by reading the negative control's own
+      output. `TestNoErrorLeaksTheSearchKey` now drives the verifier into
+      several failure paths and asserts no message carries the identifier in
+      raw, hex or string form.
 - [x] **Proton: tree re-verification (tier B).** Done — `kt-proton-audit`
       rebuilds all 200,714,006 leaves and matches the signed tree hash.
 - [x] **Proton between-snapshot audit.** Done and validated end to end:

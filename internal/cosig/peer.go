@@ -57,12 +57,22 @@ import (
 // cross-witness gossip conclusive rather than advisory, and is worth asking for.
 
 // PeerView is what another witness says it has seen for one log.
+//
+// Root may be empty. Some witnesses publish only a size — navigli exposes
+// sunlight_witness_log_entries_total and no root at all — and a size on its own
+// cannot contradict anything: two witnesses at the same size with no roots to
+// compare have said nothing to each other. Such a view is still worth having as
+// liveness and lag information, but it can never produce a divergence, and
+// comparePeerViews must not pretend otherwise.
 type PeerView struct {
 	Witness string
 	Origin  string
 	Size    int64
 	Root    string
 }
+
+// HasRoot reports whether this view can participate in a comparison at all.
+func (v PeerView) HasRoot() bool { return v.Root != "" }
 
 // PeerPoller fetches other witnesses' published views.
 type PeerPoller struct {
@@ -111,7 +121,34 @@ func (p *PeerPoller) Poll(ctx context.Context, witness string) ([]PeerView, erro
 		return nil, nil
 	}
 
-	return parsePeerPage(witness, string(body)), nil
+	text := string(body)
+	// Two published shapes, told apart by content rather than configuration so
+	// that a peer changing how it publishes does not need a config edit.
+	if strings.Contains(text, "sunlight_witness_log_entries_total") {
+		return parsePeerMetrics(witness, text), nil
+	}
+	return parsePeerPage(witness, text), nil
+}
+
+// sunlight witnesses expose their observed tree size per log in Prometheus
+// exposition format. Machine-readable and stable, which the HTML page is not —
+// but size-only, so these views inform rather than convict.
+var peerMetricRe = regexp.MustCompile(
+	`(?m)^sunlight_witness_log_entries_total\{origin="([^"]+)"\}\s+([0-9.eE+]+)`)
+
+func parsePeerMetrics(witness, body string) []PeerView {
+	matches := peerMetricRe.FindAllStringSubmatch(body, -1)
+	out := make([]PeerView, 0, len(matches))
+	for _, m := range matches {
+		// Prometheus renders large integers in exponent form, so this parses as
+		// a float and converts; ParseInt would reject "3.785078045e+09".
+		f, err := strconv.ParseFloat(m[2], 64)
+		if err != nil || f < 0 {
+			continue
+		}
+		out = append(out, PeerView{Witness: witness, Origin: m[1], Size: int64(f)})
+	}
+	return out
 }
 
 // parsePeerPage extracts the log listing from a witness status page.

@@ -161,3 +161,85 @@ func (s *Sidecar) Verify(ctx context.Context, logDirectory string, epoch int64, 
 		return r.res, nil
 	}
 }
+
+// Verifier is what the auditor needs from a sidecar: replay one epoch's proof.
+//
+// It exists so a single process and a pool of them are interchangeable. The
+// auditor should not know or care how many verifications can run at once; that
+// is a deployment question about how much memory the host has, not a property
+// of auditing.
+type Verifier interface {
+	Verify(ctx context.Context, logDirectory string, epoch int64, prevRoot, currRoot string, timeout time.Duration) (*Result, error)
+	Close()
+}
+
+var (
+	_ Verifier = (*Sidecar)(nil)
+	_ Verifier = (*Pool)(nil)
+)
+
+// Pool runs several sidecar processes so verifications can overlap.
+//
+// # Why processes and not goroutines
+//
+// The sidecar speaks one request per line over a single stdin/stdout pair, so a
+// process can only ever have one verification in flight — the mutex inside
+// Sidecar is not a policy choice, it is the protocol. Concurrency therefore
+// means more processes, and the pool is the smallest thing that provides them.
+//
+// # Why the size is a deployment decision
+//
+// Each verification peaks near 3.7 GB RSS for Meta. The right number is
+// (available memory / peak) with headroom, and getting it wrong is not a
+// slowdown but an OOM kill of the whole witness, taking equivocation detection
+// down with it. So it is configured rather than inferred, defaults to 1, and
+// the operator raises it having looked at the box.
+type Pool struct {
+	free chan *Sidecar
+
+	// all is kept so Close can reach every worker, including any currently
+	// checked out — those are returned to free before Close is reachable in
+	// practice, but relying on that would make shutdown depend on timing.
+	all []*Sidecar
+}
+
+// NewPool builds n sidecar workers. n < 1 is treated as 1: a pool of zero would
+// deadlock on first use, and silently disabling auditing is never the behaviour
+// a misconfiguration should produce.
+func NewPool(path string, n int) *Pool {
+	if n < 1 {
+		n = 1
+	}
+	p := &Pool{free: make(chan *Sidecar, n)}
+	for i := 0; i < n; i++ {
+		s := NewSidecar(path)
+		p.all = append(p.all, s)
+		p.free <- s
+	}
+	return p
+}
+
+// Size reports how many verifications may run at once.
+func (p *Pool) Size() int { return cap(p.free) }
+
+// Verify checks out a worker, runs one verification, and returns the worker.
+//
+// A worker is returned even when the verification failed and the process was
+// killed: Sidecar.start restarts a dead process on next use, so a crashed
+// worker heals rather than permanently shrinking the pool. Losing capacity to
+// transient failures would degrade the witness quietly over days.
+func (p *Pool) Verify(ctx context.Context, logDirectory string, epoch int64, prevRoot, currRoot string, timeout time.Duration) (*Result, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case s := <-p.free:
+		defer func() { p.free <- s }()
+		return s.Verify(ctx, logDirectory, epoch, prevRoot, currRoot, timeout)
+	}
+}
+
+func (p *Pool) Close() {
+	for _, s := range p.all {
+		s.Close()
+	}
+}

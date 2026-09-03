@@ -49,6 +49,43 @@ mkdir -p data
 sudo chown -R 65532:65532 data      # the image runs as distroless nonroot
 ```
 
+## Shipping the source without git
+
+The server is not a git checkout, so the source arrives by tar over ssh. There
+is no rsync on it.
+
+```sh
+# from the laptop
+tar czf - --exclude='.git' --exclude='data' --exclude='*.key' . \
+  | ssh <server> 'cd ~/kt-witness && tar xzf -'
+
+# ALWAYS copy the config explicitly afterwards
+scp deploy/witness.json <server>:~/kt-witness/deploy/witness.json
+```
+
+**Why the config gets its own line.** An earlier version of this used
+`--exclude='./witness.json'` to skip the gitignored root config. bsdtar matched
+that pattern against `deploy/witness.json` as well, so the push shipped every
+new adapter with the *previous* config. The container would have started clean,
+reported healthy, logged no errors, and cosigned none of the new logs — because
+it would not have known they existed.
+
+That is the same failure as the `.gitignore` incident below, wearing a different
+hat, and it is the second time this specific file has been silently dropped by a
+pattern meant for another one. Treat any exclude pattern containing
+`witness.json` as a bug.
+
+**Verify the transfer by asking the server what it now believes**, never by
+trusting that the copy succeeded:
+
+```sh
+ssh <server> 'cd ~/kt-witness && python3 -c "
+import json; print(len(json.load(open(\"deploy/witness.json\"))[\"logs\"]))"'
+```
+
+That number must match the laptop. A config that is merely *present* proves
+nothing; a stale one is indistinguishable from a correct one from the outside.
+
 **Do not copy the config into `data/`.** compose mounts `deploy/witness.json`
 read-only at `/config/witness.json`, so the file the container reads is the file
 in the repository. An earlier version of this runbook said to copy it, and the

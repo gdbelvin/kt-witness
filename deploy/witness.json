@@ -7,7 +7,8 @@
     "witness.stagemole.eu+67f7aea0+BEqSG3yu9YrmcM3BHvQYTxwFj3uSWakQepafafpUqklv"
   ],
   "peer_status_urls": {
-    "witness.stagemole.eu": "https://witness.stagemole.eu/"
+    "witness.stagemole.eu": "https://witness.stagemole.eu/",
+    "navigli.sunlight.geomys.org": "https://navigli.sunlight.geomys.org/metrics"
   },
   "export_dir": "/data/public",
   "proton_audit": {
@@ -18,6 +19,7 @@
   "refresh_interval": "1h",
   "audit": {
     "sidecar_path": "/usr/local/bin/kt-akd-verify",
+    "sidecar_workers": 3,
     "sample_rate": 0.1,
     "interval": "5m",
     "timeout": "10m"

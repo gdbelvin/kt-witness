@@ -33,7 +33,7 @@ type Resolver interface {
 type Auditor struct {
 	Store   *store.Store
 	Beacon  *Beacon
-	Sidecar *Sidecar
+	Sidecar Verifier
 	Log     *slog.Logger
 
 	// Rate is the fraction of epochs verified, published alongside results.
@@ -45,6 +45,13 @@ type Auditor struct {
 	// MaxEpochsPerRound bounds how many epochs are considered per pass, so a
 	// long backlog does not monopolise a single round.
 	MaxEpochsPerRound int64
+
+	// Concurrency is bounded by the sidecar pool rather than by a lock here.
+	// An earlier version held a mutex across every verification because one
+	// process could only do one at a time; that is the sidecar's protocol, not
+	// the auditor's concern, and encoding it here meant the forward sweep and
+	// the backwards sweep could starve each other. The pool's size is now the
+	// only thing that decides how many run at once.
 
 	// TipWindow is how many epochs behind the tip are audited unconditionally.
 	// Zero means DefaultTipWindow; a negative value disables exhaustive tip
