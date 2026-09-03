@@ -186,18 +186,27 @@ func (s *Server) buildStatus() (*statusView, error) {
 		// from a dead witness. Two hours is comfortably past the hourly refresh.
 		lv.Stale = now.Sub(rec.WitnessedAt) > 2*time.Hour
 
-		// Tier B+ is earned rather than configured: a log only counts as
-		// construction audited across its published history when the stored
-		// record shows every epoch in that range has a settled decision. A
-		// source cannot claim this about itself, because only the record knows
-		// what was actually checked.
-		if h := lv.History; h != nil && strings.HasPrefix(lv.Tier, "B ") {
-			if settled, _, err := s.Store.AuditCoverage(rec.Origin, h.From, h.To); err == nil {
+		// The tier a source reports is what its own checks establish. Whether a
+		// log is ALSO construction audited is decided by the auditor and lives
+		// in the record, not in the source: the AKD adapter reports A+ because
+		// root-chain continuity is what it proves on its own, while tier B for
+		// the same log comes from proofs the sidecar replayed.
+		//
+		// So the effective tier is computed here, from what was actually done.
+		// An earlier version asked the source whether it was tier B, which meant
+		// B+ could never be reached by any of the logs that are actually audited.
+		if h := lv.History; h != nil {
+			settled, verified, err := s.Store.AuditCoverage(rec.Origin, h.From, h.To)
+			if err == nil && verified > 0 {
 				total := h.To - h.From + 1
 				lv.HistoryAudited = settled
 				lv.HistoryTotal = total
-				if total > 0 && settled >= total {
+				switch {
+				case total > 0 && settled >= total:
+					// Every epoch in the published range has a settled decision.
 					lv.Tier = source.TierBPlus.String()
+				default:
+					lv.Tier = source.TierB.String()
 				}
 			}
 		}

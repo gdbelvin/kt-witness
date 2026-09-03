@@ -175,7 +175,7 @@ func (a *Auditor) Run(ctx context.Context, r Resolver) error {
 		}
 
 		a.Log.Info("auditing epoch", "origin", origin, "epoch", epoch,
-			"rate", a.Rate, "attempt", ar.Attempts)
+			"strategy", strategy, "rate", rate, "age", age, "attempt", ar.Attempts)
 		res, err := a.Sidecar.Verify(ctx, ref.LogDirectory, epoch, ref.PrevRoot, ref.CurrRoot, a.Timeout)
 		if err != nil {
 			return a.unavailable(ar, epoch, "fetch", err)

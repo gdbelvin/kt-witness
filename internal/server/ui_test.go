@@ -198,3 +198,52 @@ func TestUnconfiguredOriginsAreNotReportedAsLive(t *testing.T) {
 		t.Errorf("TotalLogs counted a retired origin: %d", v.TotalLogs)
 	}
 }
+
+// The tier a source reports is what its own checks prove; whether a log is also
+// construction audited lives in the audit record. Computing the effective tier
+// from the source alone meant B+ could never be reached by the logs that are
+// actually audited — the AKD adapter reports A+ while its tier-B evidence comes
+// from the sidecar.
+func TestEffectiveTierComesFromTheAuditRecord(t *testing.T) {
+	s := testServer(t)
+	const origin = "example.org/log"
+
+	if err := s.Store.RecordHistory(&store.History{
+		Origin: origin, From: 10, To: 12, Epochs: 3, VerifiedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Two of three epochs audited: construction audited, but not across the
+	// whole published range.
+	for _, e := range []int64{10, 11} {
+		if err := s.Store.RecordAudit(&store.Audit{
+			Origin: origin, Epoch: e, Sampled: true, Verified: true, DecidedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v, err := s.buildStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.Logs[0].Tier; !strings.HasPrefix(got, "B (") {
+		t.Errorf("partial coverage should read as tier B, got %q", got)
+	}
+
+	// The third epoch closes the range.
+	if err := s.Store.RecordAudit(&store.Audit{
+		Origin: origin, Epoch: 12, Sampled: true, Verified: true, DecidedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.buildStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.Logs[0].Tier; !strings.HasPrefix(got, "B+") {
+		t.Errorf("full coverage should earn tier B+, got %q", got)
+	}
+	if v.Logs[0].HistoryAudited != 3 || v.Logs[0].HistoryTotal != 3 {
+		t.Errorf("coverage misreported: %d/%d", v.Logs[0].HistoryAudited, v.Logs[0].HistoryTotal)
+	}
+}
