@@ -111,6 +111,20 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
 - [ ] **Publish the AKD → signed-note canonicalisation as a spec.** The mapping
       that lets the existing witness network consume a KT log is the reusable
       part of this project, and it is currently only code.
+- [ ] **Consume other witnesses' cosignatures.** The strongest split-view
+      evidence available is not our own observation but a *disagreement between
+      independent witnesses*: a log that shows us one history and
+      `witness.stagemole.eu` another has equivocated, and neither of us can see
+      that alone. Several logs we already witness carry cosignature lines from
+      other witnesses in the checkpoint we fetch — those are free datapoints we
+      currently parse past and discard.
+      Concretely: verify the other witnesses' cosignature lines on every
+      checkpoint we fetch, record what each of them attested at what size, and
+      compare against our own view. A same-size-different-root disagreement with
+      a witness whose key we can verify is a conclusive contradiction, and one
+      we can reproduce for a third party.
+      This is strictly easier than the full gossip protocol below, needs no
+      cooperation from anyone, and uses bytes already on the wire. Start here.
 - [ ] **Gossip with other witnesses.** Cross-witness comparison is how split
       views are actually caught, and it would subsume the beacon-canonicalisation
       problem above.
