@@ -73,7 +73,7 @@ func newTestSource(t *testing.T, epochs map[int64]*epoch, tip int64) *Source {
 	}))
 	t.Cleanup(srv.Close)
 
-	s, err := New(Config{Origin: "proton.test/kt", APIBase: srv.URL})
+	s, err := New(Config{Origin: "proton.me/kt/v1", APIBase: srv.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func head(t *testing.T, id int64, hashHex string) *source.Head {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &source.Head{Origin: "proton.test/kt", Size: id, Hash: h}
+	return &source.Head{Origin: "proton.me/kt/v1", Size: id, Hash: h}
 }
 
 func TestChainHashVerification(t *testing.T) {

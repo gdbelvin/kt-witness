@@ -85,6 +85,12 @@ func New(cfg Config) (*Source, error) {
 	if cfg.Origin == "" || cfg.LogDirectory == "" {
 		return nil, fmt.Errorf("akd: origin and log_directory are required")
 	}
+	// A minted origin is a name we invent, so it has to be the name everyone
+	// else invents: cosignatures aggregate by origin, and a private spelling
+	// produces attestations nobody can combine with another witness's.
+	if err := source.CheckMintedOrigin(cfg.Origin); err != nil {
+		return nil, err
+	}
 	if cfg.MaxEpochsPerRound == 0 {
 		// Sized so a full catch-up walk finishes well inside a typical
 		// max_sign_delay: each epoch costs one listing request (~100 ms), so

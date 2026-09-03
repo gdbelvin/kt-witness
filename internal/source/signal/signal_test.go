@@ -159,7 +159,7 @@ func newFake(t *testing.T, serviceSize uint64, auditorSizes ...uint64) (*Source,
 	}
 
 	s, err := New(Config{
-		Origin:      "signal.test/kt",
+		Origin:      "signal.org/kt",
 		AuditorKeys: keys,
 		MinAuditors: 1,
 		SigningKey:  hex.EncodeToString(svcPub),
@@ -360,7 +360,7 @@ func TestProductionKeysAreWellFormed(t *testing.T) {
 }
 
 func TestSignablePreimageLayout(t *testing.T) {
-	s, err := New(Config{Origin: "x"})
+	s, err := New(Config{Origin: "signal.org/kt"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -87,7 +87,7 @@ func newTestSource(t *testing.T, links map[int64][2]string) *Source {
 	t.Helper()
 	srv := httptest.NewServer((&fakeStore{links: links}).handler())
 	t.Cleanup(srv.Close)
-	s, err := New(Config{Origin: "test.kt/v1", LogDirectory: srv.URL})
+	s, err := New(Config{Origin: "meta.messenger.kt/v1", LogDirectory: srv.URL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func newTestSource(t *testing.T, links map[int64][2]string) *Source {
 
 func head(t *testing.T, epoch int64, rootHex string) *source.Head {
 	t.Helper()
-	return &source.Head{Origin: "test.kt/v1", Size: epoch, Hash: hash(t, rootHex)}
+	return &source.Head{Origin: "meta.messenger.kt/v1", Size: epoch, Hash: hash(t, rootHex)}
 }
 
 func TestChainWalkAcceptsContinuousHistory(t *testing.T) {

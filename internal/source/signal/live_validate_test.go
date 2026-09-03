@@ -121,7 +121,7 @@ func TestLiveDeriveServiceRoot(t *testing.T) {
 		if len(auditorKey) != 32 || len(sig) != 64 {
 			continue
 		}
-		src, err := New(Config{Origin: "x"})
+		src, err := New(Config{Origin: "signal.org/kt"})
 		if err != nil {
 			t.Fatal(err)
 		}

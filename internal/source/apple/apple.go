@@ -134,6 +134,12 @@ func New(cfg Config) (*Source, error) {
 	if cfg.Origin == "" {
 		return nil, fmt.Errorf("apple: origin is required")
 	}
+	// A minted origin is a name we invent, so it has to be the name everyone
+	// else invents: cosignatures aggregate by origin, and a private spelling
+	// produces attestations nobody can combine with another witness's.
+	if err := source.CheckMintedOrigin(cfg.Origin); err != nil {
+		return nil, err
+	}
 	if cfg.Endpoint == "" {
 		cfg.Endpoint = "https://kttcc-prod.ess.apple.com/at_researcher"
 	}

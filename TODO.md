@@ -127,12 +127,11 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
 - [x] **Publish the AKD → signed-note canonicalisation as a spec.** Done —
       [docs/akd-checkpoint.md](docs/akd-checkpoint.md), precise enough for an
       independent implementer to produce byte-identical checkpoints.
-- [ ] **Pin the minted origin strings in code, not config.** Writing the spec
-      surfaced this: an origin like `meta.messenger.kt/v1` exists only in
-      `witness.json`, so two operators running this witness could mint different
-      origins for the same log and produce cosignatures nobody can aggregate.
-      Aggregation is the entire point of a shared canonicalisation. The spec now
-      fixes the convention; the code should enforce it.
+- [x] **Pin the minted origin strings in code, not config.** Done —
+      `internal/source/origins.go` defines the canonical spellings and every
+      minting adapter rejects anything else at construction. Logs that sign
+      their own checkpoints are untouched: the origin is in the note, so it is
+      theirs to choose and not ours to police.
 - [ ] **Consume other witnesses' cosignatures.** The strongest split-view
       evidence available is not our own observation but a *disagreement between
       independent witnesses*: a log that shows us one history and

@@ -115,7 +115,7 @@ func TestHeadSignedByAnotherKeyIsRejected(t *testing.T) {
 	const pccKey = "3059301306072a8648ce3d020106082a8648ce3d03010703420004c4ad1582c97e1a89" +
 		"371e10051e815b87abdb1473394a4ddae7ff0892a50be59b105547a637f0ca875bd8927f810169ca5e" +
 		"6fa1fe0f2819aeadd76a9a909fc31e"
-	s, err := New(Config{Origin: "x", PublicKeyDER: pccKey})
+	s, err := New(Config{Origin: "signal.org/kt", PublicKeyDER: pccKey})
 	if err != nil {
 		t.Fatal(err)
 	}
