@@ -3,6 +3,26 @@
 Ordered by what would most improve what we can honestly claim. Background and
 reasoning for most of these is in [NOTES.md](NOTES.md).
 
+## Status
+
+Everything reachable by writing code is done. What remains falls into three
+kinds, and the distinction matters more than the count:
+
+**Blocked on someone else** — no amount of work here moves these. A YubiKey
+5.7+ (this key is 5.2.7, and PIV Ed25519 needs 5.7); Apple deploying an RPC
+that exists in their proto but not their service; Signal's `/monitor` requiring
+an account; Meta publishing a pinnable key; another witness serving the signed
+checkpoints it already holds; IETF keytrans having any public deployment.
+
+**Deliberately deferred** — promoting a contradicted Signal entry to a fork
+waits for a production record, because a fork is permanent and public and the
+tree math is a fresh reimplementation. Publishing the verifier key waits for
+hardware, because publishing is what invites people to depend on it.
+
+**A judgement call, not a task** — sigsum has its own protocol and an existing
+witness network; joining is probably worth more than reimplementing, and that
+is a decision rather than an implementation.
+
 ## Before anyone relies on this witness
 
 - [ ] **Move the signing key to hardware.** It is currently a file on disk. That
@@ -121,7 +141,12 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
       consecutive failures, exports `kt_witness_consecutive_withheld`, and a
       Grafana alert fires on it. Occasional withholding is the system working;
       sustained withholding was indistinguishable from it in a stream of WARNs.
-- [ ] **Export the search-proof and ledger state.** The file mirror in
+- [x] **Export the search-proof and ledger state.** Done —
+      `searches/<log>.json` carries the last verified search proof and
+      `entries/<log>.jsonl` the cross-observation ledger, both with notes
+      stating what they do *not* prove: a per-label spot check is not a
+      construction audit, and a missing entry id means "unrecorded", never
+      "absent from the log". The file mirror in
       `internal/export` publishes heads, audits and forks but says nothing about
       what the Signal search proofs opened. A witness's product is evidence other
       people can read, so state that only exists in log lines is half-published.
