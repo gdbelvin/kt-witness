@@ -153,6 +153,13 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
       A disagreement is reported, not acted on: the evidence does not say which
       party was served the false history, and poisoning a log on the strength of
       a signature we merely relayed needs a human first.
+- [ ] **Ask upstream for a signed peer-view endpoint.** The missing piece for
+      real gossip is small: litewitness already holds the signed checkpoints it
+      has cosigned, but serves only `POST /add-checkpoint` — every retrieval
+      path 404s. An endpoint returning the checkpoint a witness holds would make
+      cross-witness detection conclusive, because the convicting signature is
+      the *log's own*: two log signatures over different roots at one size is
+      the log convicting itself, needing nobody to be trusted.
 - [ ] **Gossip with other witnesses.** Cross-witness comparison is how split
       views are actually caught, and it would subsume the beacon-canonicalisation
       problem above.

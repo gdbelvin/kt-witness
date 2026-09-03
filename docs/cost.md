@@ -32,6 +32,14 @@ Poll interval 60 s; tier-B sampling at 0.1 for the AKD logs.
 
 **0.27 cores sustained. 1.2 TB/month. ~45 GB of disk.**
 
+**These blob sizes are conservative.** Capturing a corpus of real proofs
+measured Meta epochs at ~150 MB rather than 284 MB, WhatsApp at ~30–37 MB
+rather than 58.5 MB, and Signal responses at ~370–455 KB rather than 490 KB.
+The original figures came from single observations; the table below has not been
+rewritten around the new ones because they vary per epoch, but real bandwidth is
+likely nearer half of what is stated. Erring high is the right direction for a
+number an operator plans capacity against.
+
 An earlier draft of this table put CT storage at 120 GB, assuming a persistent
 tile cache. There is none — `NewTileFetcher` is used without `PermanentCache`,
 so tiles are fetched, used and discarded. Consistency proofs need only internal

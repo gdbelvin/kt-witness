@@ -1,19 +1,28 @@
 // Package cosig reads other witnesses' cosignatures off the checkpoints we
 // already fetch.
 //
-// # Why this is the strongest evidence available
+// # What this actually establishes, and what it does not
 //
-// A witness on its own can only compare a log against what that same log showed
-// it earlier. That catches a log which contradicts itself over time, and misses
-// the attack the whole system exists to detect: showing one history to one
-// party and a different history to another, consistently, forever. Nothing in a
-// single witness's own record can see that, because from where it stands
-// nothing is inconsistent.
+// It is worth being exact, because an earlier version of this comment
+// overclaimed and the distinction is the whole point.
 //
-// Two witnesses can see it immediately. If `witness.stagemole.eu` attests size
-// N with root R and we attest size N with root R', one of those is a history
-// the log served to somebody else — and both are signed, so neither party has
-// to be believed on their word.
+// The signature that can convict a log is the LOG'S OWN. A checkpoint body
+// carries (origin, size, root) and the log signs it; witnesses countersign that
+// same body. Two log signatures over different roots at one size is the log
+// contradicting itself, and that is conclusive and attributable.
+//
+// A cosignature read off a checkpoint WE fetched does not give that. Both
+// signatures — ours and theirs — sit on the same document, so they cannot
+// disagree with each other by construction. What this establishes is
+// CORROBORATION: another witness, whose key we hold independently, has seen and
+// vouched for the same history we are looking at. That is genuinely useful —
+// it is evidence the log is not showing us a private view — but it is not
+// detection, because a log serving two histories would simply put a different
+// set of cosignatures on each.
+//
+// Detecting the split needs the other witness's INDEPENDENTLY OBTAINED
+// checkpoint, carrying the log's signature over their view. See peer.go for why
+// that is not fetchable today and what would make it so.
 //
 // # Why it is nearly free
 //
@@ -151,12 +160,16 @@ func parseBody(text, wantOrigin string) (size int64, root string, ok bool) {
 	return n, lines[2], true
 }
 
-// Conflict reports two witnesses attesting different roots at the same size.
+// Conflict reports two attestations of different roots at one size.
 //
-// This is a conclusive contradiction and the only one this package can produce.
-// A log cannot have two roots at one size; if two signed attestations say
-// otherwise, the log served different histories to different parties. Which
-// party was lied to is not determined by the evidence — only that somebody was.
+// This is conclusive ONLY when both carry the log's own signature over their
+// respective bodies: a log cannot have signed two roots at one size, and that
+// is the log convicting itself. Two witness cosignatures on the same document
+// can never reach this state, so in practice it is reachable only once peer
+// checkpoints can be fetched — see peer.go.
+//
+// Which party was served the false history is not determined by the evidence.
+// Only that somebody was.
 type Conflict struct {
 	Origin    string
 	Size      int64
