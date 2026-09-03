@@ -108,9 +108,15 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
 
 ## Ecosystem
 
-- [ ] **Publish the AKD → signed-note canonicalisation as a spec.** The mapping
-      that lets the existing witness network consume a KT log is the reusable
-      part of this project, and it is currently only code.
+- [x] **Publish the AKD → signed-note canonicalisation as a spec.** Done —
+      [docs/akd-checkpoint.md](docs/akd-checkpoint.md), precise enough for an
+      independent implementer to produce byte-identical checkpoints.
+- [ ] **Pin the minted origin strings in code, not config.** Writing the spec
+      surfaced this: an origin like `meta.messenger.kt/v1` exists only in
+      `witness.json`, so two operators running this witness could mint different
+      origins for the same log and produce cosignatures nobody can aggregate.
+      Aggregation is the entire point of a shared canonicalisation. The spec now
+      fixes the convention; the code should enforce it.
 - [ ] **Consume other witnesses' cosignatures.** The strongest split-view
       evidence available is not our own observation but a *disagreement between
       independent witnesses*: a log that shows us one history and
