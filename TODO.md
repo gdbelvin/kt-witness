@@ -85,12 +85,19 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
 
 ## Correctness and operability
 
-- [ ] **Canonicalise the beacon round for tier-B sampling.** Selection currently
-      uses whichever drand round was latest at decision time. Rounds are 3 s
-      apart, so a dishonest witness could redraw until an epoch it wanted to skip
-      deselects. Either pin the canonical round as a function of the epoch, or —
-      more likely better — solve it by gossip between witnesses, which also makes
-      coverage compose. See NOTES.md.
+- [x] **Canonicalise the beacon round for tier-B sampling.** Done — the round is
+      now `RoundAt(decidedAt)`, the first quicknet round strictly after the
+      moment the decision was settled, derived from the published chain genesis
+      and 3 s period. Both properties hold at once: the round postdates
+      publication so the operator cannot predict the sample, and it is
+      determined rather than chosen so we cannot re-draw. A decision already on
+      record keeps its original round, since re-deriving would itself be a
+      re-draw.
+      Residual risk, worth being honest about: the witness still chooses the
+      *timestamp* it records. Falsifying that is far harder than silently
+      retrying — it means publishing a false time that a third party can check
+      against the epoch's own publication — but gossip is still the complete
+      answer.
 - [x] **Retention for the `audits` bucket.** Done — 200,000 decisions per origin,
       oldest dropped first. bbolt never returns freed pages to the filesystem,
       so an unbounded bucket was a slow leak.

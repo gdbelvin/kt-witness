@@ -87,10 +87,24 @@ func (a *Auditor) Run(ctx context.Context, r Resolver) error {
 		default:
 		}
 
-		// The beacon is drawn now, strictly after this epoch was published and
-		// observed. Drawing it earlier would let the operator predict the
-		// sample and misbehave only in the epochs we skip.
-		round, err := a.Beacon.Latest(ctx)
+		// The beacon round is PINNED to the moment we first settled this epoch,
+		// not simply "whatever is current". Both properties have to hold at
+		// once: the round must postdate publication, so the operator cannot
+		// predict the sample and misbehave only in the epochs we skip; and it
+		// must be determined rather than chosen, so we cannot re-decide until an
+		// epoch we would rather skip comes up unselected. Rounds are three
+		// seconds apart, which made that grinding attack cheap and traceless.
+		//
+		// A decision already on record keeps its original round. Re-deriving it
+		// would be re-drawing, and the published record is what a third party
+		// recomputes against.
+		decidedAt := time.Now().UTC()
+		if prior, err := a.Store.GetAudit(origin, epoch); err != nil {
+			return err
+		} else if prior != nil && prior.BeaconRound != 0 {
+			decidedAt = prior.DecidedAt
+		}
+		round, err := a.Beacon.Round(ctx, RoundAt(decidedAt))
 		if err != nil {
 			// Without unpredictable randomness we must not fall back to a
 			// predictable rule; better to audit nothing this round.
@@ -110,7 +124,7 @@ func (a *Auditor) Run(ctx context.Context, r Resolver) error {
 			BeaconRound:  round.Number,
 			BeaconSig:    round.Signature,
 			BeaconRandom: round.Randomness,
-			DecidedAt:    time.Now().UTC(),
+			DecidedAt:    decidedAt,
 		}
 
 		if !selected {
