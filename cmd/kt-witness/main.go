@@ -22,6 +22,7 @@ import (
 
 	"filippo.io/torchwood"
 	"github.com/gdbsecurity/kt-witness/internal/audit"
+	"github.com/gdbsecurity/kt-witness/internal/cosig"
 	"github.com/gdbsecurity/kt-witness/internal/export"
 	"github.com/gdbsecurity/kt-witness/internal/metrics"
 	"github.com/gdbsecurity/kt-witness/internal/server"
@@ -42,12 +43,18 @@ type config struct {
 	// Name is our witness identity, and appears in every cosignature line.
 	Name string `json:"name"`
 
-	Listen          string `json:"listen"`
-	DB              string `json:"db"`
-	KeyFile         string `json:"key_file"`
-	PollInterval    string `json:"poll_interval"`
-	MaxSignDelay    string `json:"max_sign_delay"`
-	RefreshInterval string `json:"refresh_interval"`
+	Listen  string `json:"listen"`
+	DB      string `json:"db"`
+	KeyFile string `json:"key_file"`
+
+	// PeerWitnesses are other witnesses' cosignature verifier keys. Their
+	// cosignatures already ride on checkpoints we fetch, and a disagreement
+	// with one of them is the only conclusive split-view evidence a single
+	// witness can obtain.
+	PeerWitnesses   []string `json:"peer_witnesses"`
+	PollInterval    string   `json:"poll_interval"`
+	MaxSignDelay    string   `json:"max_sign_delay"`
+	RefreshInterval string   `json:"refresh_interval"`
 
 	// ExportDir mirrors state as plain files beside the database, so evidence
 	// can be read without this binary. Empty disables it.
@@ -400,10 +407,19 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 			"sample_rate", rate, "logs", len(resolvers), "interval", auditInterval.String())
 	}
 
+	peers, err := cosig.NewVerifier(cfg.PeerWitnesses)
+	if err != nil {
+		return err
+	}
+
 	w := &witness.Witness{
 		Signer: signer, Store: db, Log: log,
 		MaxSignDelay:    maxSignDelay,
 		RefreshInterval: refreshInterval,
+		Peers:           peers,
+	}
+	if n := len(peers.Names()); n > 0 {
+		log.Info("reading other witnesses' cosignatures", "witnesses", peers.Names())
 	}
 
 	log.Info("starting", "version", version, "name", cfg.Name, "logs", len(sources),

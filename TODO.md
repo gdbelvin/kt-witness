@@ -132,7 +132,7 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
       minting adapter rejects anything else at construction. Logs that sign
       their own checkpoints are untouched: the origin is in the note, so it is
       theirs to choose and not ours to police.
-- [ ] **Consume other witnesses' cosignatures.** The strongest split-view
+- [x] **Consume other witnesses' cosignatures.** The strongest split-view
       evidence available is not our own observation but a *disagreement between
       independent witnesses*: a log that shows us one history and
       `witness.stagemole.eu` another has equivocated, and neither of us can see
@@ -144,8 +144,15 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
       compare against our own view. A same-size-different-root disagreement with
       a witness whose key we can verify is a conclusive contradiction, and one
       we can reproduce for a third party.
-      This is strictly easier than the full gossip protocol below, needs no
-      cooperation from anyone, and uses bytes already on the wire. Start here.
+      **Done.** `internal/cosig` verifies other witnesses' cosignature lines on
+      every checkpoint we fetch, the store records what each attested at each
+      size, and two signed attestations disagreeing at one size is escalated as
+      a split view. Verified live: `witness.stagemole.eu` attests
+      `thelemail.com/keys` at size 99 with root `jm6wmVaB…`, read from bytes we
+      were downloading anyway.
+      A disagreement is reported, not acted on: the evidence does not say which
+      party was served the false history, and poisoning a log on the strength of
+      a signature we merely relayed needs a human first.
 - [ ] **Gossip with other witnesses.** Cross-witness comparison is how split
       views are actually caught, and it would subsume the beacon-canonicalisation
       problem above.

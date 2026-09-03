@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"filippo.io/torchwood"
+	"github.com/gdbsecurity/kt-witness/internal/cosig"
 	"github.com/gdbsecurity/kt-witness/internal/source"
 	"github.com/gdbsecurity/kt-witness/internal/store"
 	"golang.org/x/mod/sumdb/note"
@@ -39,6 +40,10 @@ type Witness struct {
 	// monitor could not distinguish "log is quiet" from "witness is dead". Zero
 	// disables refreshing.
 	RefreshInterval time.Duration
+
+	// Peers verifies other witnesses' cosignatures on the checkpoints we fetch.
+	// Optional: nil simply means we do not read them.
+	Peers *cosig.Verifier
 }
 
 // Outcome describes what happened for one log in one round.
@@ -108,6 +113,13 @@ func (w *Witness) Process(ctx context.Context, src source.Source) (*Outcome, err
 		}
 		return nil, fmt.Errorf("witness: fetch %s: %w", origin, err)
 	}
+	// Read any cosignatures other witnesses have already put on this checkpoint.
+	// A witness comparing a log only against its own earlier observations cannot
+	// see a consistent split view — from where it stands, nothing is
+	// inconsistent. Another witness's signed attestation at the same size can,
+	// and it costs no extra request because the bytes are already here.
+	w.observePeers(origin, next)
+
 	if next.Origin != origin {
 		// A source must never hand us a head for a different log; that would
 		// let one log's key authenticate another's origin.
@@ -218,4 +230,44 @@ func (w *Witness) fork(fe *source.ForkError) error {
 	w.Log.Error("FORK DETECTED — withholding cosignature permanently",
 		"origin", fe.Origin, "reason", fe.Reason)
 	return fe
+}
+
+// observePeers records what other witnesses attested on this checkpoint and
+// escalates a disagreement.
+//
+// A disagreement is conclusive — a log cannot have two roots at one size — but
+// it is reported rather than acted on here. The evidence does not say which
+// party was served the false history, and this witness poisoning a log on the
+// strength of a signature it merely relayed is a step too far without a human
+// reading the two attestations. They are both persisted so that a human can.
+func (w *Witness) observePeers(origin string, head *source.Head) {
+	if w.Peers == nil || len(head.Signed) == 0 {
+		return
+	}
+	obs, err := w.Peers.Observe(origin, head.Signed)
+	if err != nil || len(obs) == 0 {
+		return
+	}
+	for _, o := range obs {
+		conflicts, err := w.Store.RecordPeer(&store.PeerAttestation{
+			Origin: o.Origin, Witness: o.Witness, Size: o.Size,
+			Root: o.Root, Timestamp: o.Timestamp,
+		})
+		if err != nil {
+			if w.Log != nil {
+				w.Log.Warn("recording peer attestation", "origin", origin, "err", err)
+			}
+			continue
+		}
+		for _, c := range conflicts {
+			if w.Log != nil {
+				w.Log.Error("SPLIT VIEW BETWEEN WITNESSES — two signed attestations "+
+					"disagree at one size; a log cannot have two roots there, so it "+
+					"served different histories to different parties",
+					"origin", origin, "size", o.Size,
+					"witness_a", c.Witness, "root_a", c.Root,
+					"witness_b", o.Witness, "root_b", o.Root)
+			}
+		}
+	}
 }
