@@ -11,6 +11,16 @@ services:
     # who listed the old key in their trust policy stops seeing us.
     volumes:
       - ./data:/data
+      # The config is mounted read-only from the repository rather than copied
+      # into ./data. An earlier setup step copied it, and the copy silently
+      # drifted: the repository grew from 10 logs to 77 while the container went
+      # on reading the stale copy, cosigning ten logs and reporting no errors
+      # because it never knew about the rest. Nothing about that looks wrong
+      # from the outside, which is what made it dangerous.
+      - ./deploy/witness.json:/config/witness.json:ro
+
+    # Read the mounted config, not the copy under /data.
+    command: ["-config", "/config/witness.json"]
 
     # Tier B streams a ~284 MB proof per verified epoch. tmpfs keeps that churn
     # off disk; 1g leaves room for one proof plus slack.

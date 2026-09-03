@@ -45,9 +45,16 @@ means tier B would be silently dead.
 ## 3. State directory
 
 ```sh
-mkdir -p data && cp deploy/witness.json data/witness.json
+mkdir -p data
 sudo chown -R 65532:65532 data      # the image runs as distroless nonroot
 ```
+
+**Do not copy the config into `data/`.** compose mounts `deploy/witness.json`
+read-only at `/config/witness.json`, so the file the container reads is the file
+in the repository. An earlier version of this runbook said to copy it, and the
+copy drifted: the repository grew to 77 logs while the container kept reading a
+stale 10-log copy and reported no errors, because it never knew the other logs
+existed.
 
 ## 4. Generate the signing key, on this machine
 
@@ -55,8 +62,8 @@ The key is the witness's published identity. Generating it here means the
 private key never leaves the server.
 
 ```sh
-docker run --rm -v "$PWD/data:/data" kt-witness:latest \
-  -config /data/witness.json -genkey
+docker run --rm -v "$PWD/data:/data" -v "$PWD/deploy/witness.json:/config/witness.json:ro" \
+  kt-witness:latest -config /config/witness.json -genkey
 ```
 
 It prints the verifier key — **record it**, that is what others pin:
@@ -75,8 +82,8 @@ Verifies published history before witnessing starts, so everything before today
 is attested rather than trusted-on-first-use. Takes about three minutes.
 
 ```sh
-docker run --rm -v "$PWD/data:/data" kt-witness:latest \
-  -config /data/witness.json -backfill -once
+docker run --rm -v "$PWD/data:/data" -v "$PWD/deploy/witness.json:/config/witness.json:ro" \
+  kt-witness:latest -config /config/witness.json -backfill -once
 ```
 
 Expect roughly:
