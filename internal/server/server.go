@@ -32,6 +32,14 @@ type Server struct {
 	// cosignature says the log is append-only and nothing whatever about
 	// whether its contents are correctly constructed.
 	Tiers map[string]string
+
+	// Kinds maps an origin to what it makes transparent: kt, ct, software.
+	// Orthogonal to Tiers — a tier-A certificate log and a tier-A key
+	// transparency log are the same strength of claim about different things.
+	Kinds map[string]string
+
+	// Storage locates the database and mirror so their size can be reported.
+	Storage StoragePaths
 }
 
 // originHashes returns the identifiers a log may be addressed by.

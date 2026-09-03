@@ -337,6 +337,14 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 	for _, src := range sources {
 		tiers[src.Origin()] = src.Tier().String()
 	}
+	// What KIND of transparency each log provides. With ~77 origins, most of
+	// them certificate logs, a per-origin chart is unreadable and the useful
+	// question is almost always "how are the KT logs doing" or "is any CT log
+	// stale". The kind makes that a filter rather than a scroll.
+	kinds := make(map[string]string, len(cfg.Logs))
+	for _, l := range cfg.Logs {
+		kinds[l.Origin] = kindOf(l)
+	}
 
 	refreshInterval, err := time.ParseDuration(cfg.RefreshInterval)
 	if err != nil {
@@ -387,8 +395,9 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 	defer stop()
 
 	srv := &http.Server{
-		Addr:    cfg.Listen,
-		Handler: (&server.Server{Store: db, VKey: vkey, Version: version, Tiers: tiers}).Handler(),
+		Addr: cfg.Listen,
+		Handler: (&server.Server{Store: db, VKey: vkey, Version: version, Tiers: tiers, Kinds: kinds,
+			Storage: server.StoragePaths{DBPath: cfg.DB, ExportDir: cfg.ExportDir}}).Handler(),
 	}
 	// Bind before starting to witness. A witness whose monitoring endpoint is
 	// unreachable is cosigning into the void, so a listener failure is fatal
@@ -675,4 +684,27 @@ func orDefault(v, def string) string {
 		return def
 	}
 	return v
+}
+
+// kindOf classifies a log by what it makes transparent, which is a different
+// axis from the assurance tier: a tier-A certificate log and a tier-A key
+// transparency log are the same strength of claim about very different things.
+func kindOf(l logConfig) string {
+	switch l.Type {
+	case "akd", "proton", "signal":
+		return "kt"
+	case "apple":
+		// Apple runs both: the Top-Level Tree is key transparency, the AT log is
+		// software transparency for Private Cloud Compute.
+		if l.TreeID != 0 && uint64(l.TreeID) == apple.ATLogTreeID {
+			return "software"
+		}
+		return "kt"
+	case "staticct":
+		return "ct"
+	case "sumdb":
+		return "software"
+	default:
+		return "generic"
+	}
 }

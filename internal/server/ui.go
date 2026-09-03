@@ -28,6 +28,7 @@ const auditWindow = 5000
 
 type logView struct {
 	Tier         string
+	Kind         string
 	Origin       string
 	Size         int64
 	Root         string
@@ -154,6 +155,7 @@ func (s *Server) buildStatus() (*statusView, error) {
 			History:      byOrigin[rec.Origin],
 			CheckpointID: originHashes(rec.Origin)[0],
 			Tier:         s.Tiers[rec.Origin],
+			Kind:         s.Kinds[rec.Origin],
 		}
 		lv.RootShort = lv.Root[:16]
 		lv.Path = "/" + lv.CheckpointID + "/checkpoint"

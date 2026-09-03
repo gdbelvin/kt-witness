@@ -1,7 +1,11 @@
 package server
 
 import (
+	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/gdbsecurity/kt-witness/internal/metrics"
@@ -26,6 +30,14 @@ const (
 	MAppHeads      = "kt_witness_application_heads"
 	MAppConflicts  = "kt_witness_application_conflicts"
 	MScrapeSeconds = "kt_witness_metrics_scrape_duration_seconds"
+
+	// Storage. A witness that runs out of disk stops witnessing, and the
+	// database is the only thing on it that cannot be rebuilt from the network.
+	MDBBytes        = "kt_witness_database_bytes"
+	MExportBytes    = "kt_witness_export_bytes"
+	MDiskFreeBytes  = "kt_witness_disk_free_bytes"
+	MDiskTotalBytes = "kt_witness_disk_total_bytes"
+	MDiskUsedRatio  = "kt_witness_disk_used_ratio"
 
 	// Counters maintained by the witness loop rather than derived from storage.
 	MRounds              = "kt_witness_rounds_total"
@@ -62,6 +74,11 @@ func Init(version string) {
 	d(MAppHeads, metrics.Gauge, "Per-application heads observed. These are observations, never cosigned.")
 	d(MAppConflicts, metrics.Gauge, "Contradictions recorded among observed application heads.")
 	d(MScrapeSeconds, metrics.Gauge, "How long it took to gather these metrics from the store.")
+	d(MDBBytes, metrics.Gauge, "Size of the bbolt database on disk. Note bbolt never returns freed pages to the filesystem, so this only grows; a large drop means the file was replaced.")
+	d(MExportBytes, metrics.Gauge, "Size of the published file mirror.")
+	d(MDiskFreeBytes, metrics.Gauge, "Bytes free on the filesystem holding the database.")
+	d(MDiskTotalBytes, metrics.Gauge, "Total bytes on the filesystem holding the database.")
+	d(MDiskUsedRatio, metrics.Gauge, "Fraction of the database filesystem in use, 0 to 1. A witness that runs out of disk stops witnessing.")
 
 	d(MRounds, metrics.Counter, "Witness rounds completed.")
 	d(MCosigned, metrics.Counter, "Cosignatures issued, by origin.")
@@ -95,12 +112,21 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 	_ = metrics.Default.Write(w)
 }
 
+// StoragePaths tells the metrics layer where to measure. Empty entries are
+// skipped rather than reported as zero: a zero-byte database and an unknown one
+// are very different things and an alert must not confuse them.
+type StoragePaths struct {
+	DBPath    string
+	ExportDir string
+}
+
 func (s *Server) refreshStoreMetrics() error {
 	v, err := s.buildStatus()
 	if err != nil {
 		return err
 	}
 	now := time.Now()
+	s.refreshStorageMetrics()
 
 	metrics.Set(MLogsTotal, nil, float64(v.TotalLogs))
 	metrics.Set(MEntries, nil, float64(v.TotalEntries))
@@ -109,7 +135,11 @@ func (s *Server) refreshStoreMetrics() error {
 	metrics.Set(MAppConflicts, nil, float64(v.AppConflicts))
 
 	for _, lg := range v.Logs {
-		l := map[string]string{"origin": lg.Origin, "tier": lg.Tier}
+		kind := lg.Kind
+		if kind == "" {
+			kind = "generic"
+		}
+		l := map[string]string{"origin": lg.Origin, "tier": lg.Tier, "kind": kind}
 		metrics.Set(MLogSize, l, float64(lg.Size))
 		metrics.Set(MLogWitnessed, l, float64(lg.WitnessedAt.Unix()))
 		metrics.Set(MLogAge, l, now.Sub(lg.WitnessedAt).Seconds())
@@ -135,4 +165,39 @@ func (s *Server) refreshStoreMetrics() error {
 		}
 	}
 	return nil
+}
+
+// refreshStorageMetrics measures the database, the published mirror, and the
+// filesystem underneath them.
+func (s *Server) refreshStorageMetrics() {
+	if s.Storage.DBPath != "" {
+		if fi, err := os.Stat(s.Storage.DBPath); err == nil {
+			metrics.Set(MDBBytes, nil, float64(fi.Size()))
+		}
+		var st syscall.Statfs_t
+		if err := syscall.Statfs(filepath.Dir(s.Storage.DBPath), &st); err == nil {
+			free := float64(st.Bavail) * float64(st.Bsize)
+			total := float64(st.Blocks) * float64(st.Bsize)
+			metrics.Set(MDiskFreeBytes, nil, free)
+			metrics.Set(MDiskTotalBytes, nil, total)
+			if total > 0 {
+				metrics.Set(MDiskUsedRatio, nil, (total-free)/total)
+			}
+		}
+	}
+	if s.Storage.ExportDir != "" {
+		var total int64
+		// Walk rather than stat: the mirror is a directory of small files, and
+		// its growth is what would surprise someone, not any single file.
+		_ = filepath.WalkDir(s.Storage.ExportDir, func(_ string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+			if fi, err := d.Info(); err == nil {
+				total += fi.Size()
+			}
+			return nil
+		})
+		metrics.Set(MExportBytes, nil, float64(total))
+	}
 }
