@@ -334,7 +334,24 @@ func ApplyDiff(tree Leaves, diff []byte, out func(label, value []byte) error) (*
 			switch dOp(j) {
 			case OpRemove:
 				stats.Removed++
-				stats.RemovedLabels = append(stats.RemovedLabels, append([]byte(nil), dLabel(j)...))
+				// The *tree's* value is recorded, not the diff record's. The tree
+				// came out of a dump whose root was matched against a hash Proton
+				// committed to, so its bytes are bound to something verified; the
+				// diff is unaudited input that has not been checked against
+				// anything yet. Dating a removal from the tree's copy therefore
+				// keeps the judgement resting on verified data.
+				stats.Removals = append(stats.Removals, Removal{
+					Label: append([]byte(nil), tree.Label(i)...),
+					Value: append([]byte(nil), tree.Value(i)...),
+				})
+				// The diff carries a value on a removal too, and it should be the
+				// value being removed. When it is not, Proton's two publications
+				// disagree with each other about what left the tree. That is a
+				// discrepancy worth naming rather than an accusation: nothing here
+				// says which of the two is wrong.
+				if compare(tree.Value(i), dValue(j)) != 0 {
+					stats.ValueMismatches++
+				}
 			case OpAdd:
 				stats.Overwritten++
 				if err := out(tree.Label(i), tree.Value(i)); err != nil {
@@ -353,8 +370,15 @@ func ApplyDiff(tree Leaves, diff []byte, out func(label, value []byte) error) (*
 					return nil, err
 				}
 			case OpRemove:
-				// Removing something that is not there.
+				// Removing something that is not there. Only the diff's own copy
+				// of the value exists in this case, so anything derived from it is
+				// weaker evidence than a real removal's — there is no tree entry to
+				// corroborate it.
 				stats.PhantomRemovals++
+				stats.PhantomRemoved = append(stats.PhantomRemoved, Removal{
+					Label: append([]byte(nil), dLabel(j)...),
+					Value: append([]byte(nil), dValue(j)...),
+				})
 			default:
 				return nil, fmt.Errorf("proton/tree: unknown diff operation %d", dOp(j))
 			}
@@ -375,6 +399,10 @@ func ApplyDiff(tree Leaves, diff []byte, out func(label, value []byte) error) (*
 			}
 		case OpRemove:
 			stats.PhantomRemovals++
+			stats.PhantomRemoved = append(stats.PhantomRemoved, Removal{
+				Label: append([]byte(nil), dLabel(j)...),
+				Value: append([]byte(nil), dValue(j)...),
+			})
 		}
 	}
 	return stats, nil
@@ -391,14 +419,31 @@ type DiffStats struct {
 	Overwritten     int
 	PhantomRemovals int
 
-	// RemovedLabels are retained so a removal can be examined rather than only
-	// counted — Proton permits deletion within a retention window, so the
-	// question is which removals were legitimate.
-	RemovedLabels [][]byte
+	// ValueMismatches counts removals where the diff record's value differs from
+	// the value actually sitting in the tree under that label — Proton's two
+	// publications disagreeing about what was removed.
+	ValueMismatches int
+
+	// Removals are retained whole so each one can be judged rather than only
+	// counted: Proton permits deletion within a retention window, and the value
+	// carries the epoch the entry entered the tree, which is what makes that
+	// judgement possible. See JudgeRemovals.
+	Removals []Removal
+
+	// PhantomRemoved are the removals of labels the tree did not contain, kept
+	// apart because their values come from the diff alone.
+	PhantomRemoved []Removal
+}
+
+// Removal is one leaf that left the tree, kept label and value together because
+// the value is what dates it.
+type Removal struct {
+	Label []byte
+	Value []byte
 }
 
 // Suspicious reports whether this epoch did anything an append-only directory
 // should not.
 func (d *DiffStats) Suspicious() bool {
-	return d.Removed > 0 || d.Overwritten > 0 || d.PhantomRemovals > 0
+	return d.Removed > 0 || d.Overwritten > 0 || d.PhantomRemovals > 0 || d.ValueMismatches > 0
 }

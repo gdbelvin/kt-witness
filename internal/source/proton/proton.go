@@ -14,10 +14,15 @@
 //   - The certificate binding. The chain hash we were served must appear in a
 //     WebPKI-valid certificate's SAN, in a format Proton's own client checks.
 //
+// Given a CT log list (Config.CTLogs), a third thing becomes verifiable: that
+// the certificate is *in* a Certificate Transparency log, rather than merely
+// carrying a log's promise to include it. Since CT is the channel Proton's whole
+// design relies on to make equivocation visible, that is the check the design
+// was built around; see ct.go.
+//
 // What this adapter does NOT do is re-verify the tree itself (Proton's §3.11
 // external audit), which needs a ~13.6 GB dump and ~16 GB RAM — the analogue of
-// tier B, and a separate project. Nor does it yet confirm the certificate's
-// presence in a CT log independently of its embedded SCTs; see NOTES.md.
+// tier B, and a separate command, cmd/kt-proton-audit.
 package proton
 
 import (
@@ -55,6 +60,18 @@ type Config struct {
 
 	// MaxEpochsPerRound bounds catch-up work per round.
 	MaxEpochsPerRound int64
+
+	// CTLogs are the Certificate Transparency logs the tip's certificate may be
+	// confirmed in. Left empty, the adapter behaves as it always has and trusts
+	// the certificate's embedded SCTs; supplied, every fetch additionally
+	// confirms the certificate's *presence* in one of these logs, which is the
+	// channel Proton's whole design leans on. See ct.go.
+	//
+	// Supply the full witnessed log list rather than a hand-picked log: CT logs
+	// are temporally sharded and rotate under Proton's ~90-day certificates, and
+	// the CA issuing them alternates, so which log will hold the next epoch's
+	// certificate is not something to guess at.
+	CTLogs []CTLog
 }
 
 func New(cfg Config) (*Source, error) {
@@ -138,12 +155,8 @@ func (e *epoch) expectedSAN() (string, error) {
 		e.ChainHash[:32], e.ChainHash[32:], e.CertificateTime, e.EpochID, nameVersion, e.Domain), nil
 }
 
-// verifyCertificate checks that a publicly trusted CA signed a certificate
-// committing to this epoch's chain hash.
-//
-// This is the step that makes an epoch non-repudiable: Proton cannot later
-// disown a chain hash a CA attested to, and the certificate is destined for CT.
-func (e *epoch) verifyCertificate(now time.Time) error {
+// certificates parses the PEM chain the epoch carries, leaf first.
+func (e *epoch) certificates() ([]*x509.Certificate, error) {
 	var certs []*x509.Certificate
 	rest := []byte(e.Certificate)
 	for {
@@ -157,12 +170,25 @@ func (e *epoch) verifyCertificate(now time.Time) error {
 		}
 		c, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			return fmt.Errorf("epoch %d: parse certificate: %w", e.EpochID, err)
+			return nil, fmt.Errorf("epoch %d: parse certificate: %w", e.EpochID, err)
 		}
 		certs = append(certs, c)
 	}
 	if len(certs) == 0 {
-		return fmt.Errorf("epoch %d: no certificate supplied", e.EpochID)
+		return nil, fmt.Errorf("epoch %d: no certificate supplied", e.EpochID)
+	}
+	return certs, nil
+}
+
+// verifyCertificate checks that a publicly trusted CA signed a certificate
+// committing to this epoch's chain hash.
+//
+// This is the step that makes an epoch non-repudiable: Proton cannot later
+// disown a chain hash a CA attested to, and the certificate is destined for CT.
+func (e *epoch) verifyCertificate(now time.Time) error {
+	certs, err := e.certificates()
+	if err != nil {
+		return err
 	}
 
 	leaf := certs[0]
@@ -264,6 +290,14 @@ func (s *Source) Fetch(ctx context.Context, prev *source.Head) (*source.Head, er
 	if err := e.verifyCertificate(fetchedAt); err != nil {
 		return nil, fmt.Errorf("proton: %w", err)
 	}
+	// Confirming the certificate in a CT log turns the SCT's promise into a
+	// fact. Failure here withholds and never accuses: a log we cannot reach or a
+	// checkpoint that has not caught up with a fresh certificate both mean we
+	// could not check, and even a leaf-hash mismatch is far likelier to be our
+	// reconstruction than a conspiracy between a CA, a CT log and Proton.
+	if _, err := s.ConfirmCertificate(ctx, &e); err != nil {
+		return nil, err
+	}
 
 	head, err := s.stepTowards(ctx, prev, &e)
 	if err != nil {
@@ -310,6 +344,24 @@ func (s *Source) stepTowards(ctx context.Context, prev *source.Head, tip *epoch)
 		Signed: []byte(text),
 		Note:   &note.Note{Text: text},
 	}, nil
+}
+
+// ConfirmCertificate confirms the epoch's certificate is present in one of the
+// configured CT logs. With no logs configured it does nothing and says so by
+// returning a nil confirmation, so an unwired deployment is unchanged.
+func (s *Source) ConfirmCertificate(ctx context.Context, e *epoch) (*CTConfirmation, error) {
+	if len(s.cfg.CTLogs) == 0 {
+		return nil, nil
+	}
+	certs, err := e.certificates()
+	if err != nil {
+		return nil, fmt.Errorf("proton: %w", err)
+	}
+	conf, err := ConfirmInCT(ctx, certs, s.cfg.CTLogs)
+	if err != nil {
+		return nil, fmt.Errorf("proton: epoch %d: %w", e.EpochID, err)
+	}
+	return conf, nil
 }
 
 func (s *Source) epochAt(ctx context.Context, id int64) (*epoch, error) {

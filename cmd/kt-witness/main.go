@@ -97,7 +97,7 @@ type logConfig struct {
 	MaxEpochsPerRound int64    `json:"max_epochs_per_round"`
 }
 
-func (l logConfig) build(log *slog.Logger, entries source.EntryStore) (source.Source, error) {
+func (l logConfig) build(log *slog.Logger, entries source.EntryStore, ctLogs []proton.CTLog) (source.Source, error) {
 	switch l.Type {
 	case "", "c2sp":
 		return c2sp.New(c2sp.Config{
@@ -148,6 +148,7 @@ func (l logConfig) build(log *slog.Logger, entries source.EntryStore) (source.So
 			Origin:            l.Origin,
 			APIBase:           l.APIBase,
 			MaxEpochsPerRound: l.MaxEpochsPerRound,
+			CTLogs:            ctLogs,
 		})
 	case "apple":
 		return apple.New(apple.Config{
@@ -317,9 +318,26 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 		return fmt.Errorf("max_sign_delay: %w", err)
 	}
 
+	// Proton confirms each epoch certificate's presence in a CT log we already
+	// witness, so it needs the whole configured CT set. The whole set, not a
+	// hand-picked log: CT shards are temporal and rotate underneath Proton's
+	// ~90-day certificates, so pinning one would start withholding the moment
+	// their CA moved on.
+	var ctLogs []proton.CTLog
+	for _, l := range cfg.Logs {
+		if l.Type != "staticct" || l.LogKey == "" {
+			continue
+		}
+		spki, err := base64.StdEncoding.DecodeString(l.LogKey)
+		if err != nil {
+			return fmt.Errorf("log %q: log_key is not base64: %w", l.Origin, err)
+		}
+		ctLogs = append(ctLogs, proton.CTLog{Origin: l.Origin, BaseURL: l.BaseURL, SPKI: spki})
+	}
+
 	var sources []source.Source
 	for _, l := range cfg.Logs {
-		src, err := l.build(log, db)
+		src, err := l.build(log, db, ctLogs)
 		if err != nil {
 			return err
 		}

@@ -62,6 +62,12 @@ type epochMeta struct {
 	EpochID   int64  `json:"EpochID"`
 	TreeHash  string `json:"TreeHash"`
 	ChainHash string `json:"ChainHash"`
+
+	// StartEpochID is the oldest epoch this one still retains, and it is stored
+	// per epoch rather than being a property of the tip. It is what a removal is
+	// judged against; see proton.JudgeRemovals.
+	StartEpochID int64 `json:"StartEpochID"`
+	ClaimedTime  int64 `json:"ClaimedTime"`
 }
 
 func run(epoch int64, dir string, shardDepth int, apiBase, dumpBase string, keep bool) error {
@@ -283,12 +289,16 @@ func runIncremental(from, target int64, dir string, shardDepth int, apiBase, dum
 	fmt.Printf("  merged in %s\n", time.Since(start).Round(time.Second))
 	fmt.Printf("  mutations: %d added, %d removed, %d overwritten in place, %d removals of absent labels\n",
 		stats.Added, stats.Removed, stats.Overwritten, stats.PhantomRemovals)
+	if stats.ValueMismatches > 0 {
+		fmt.Printf("  %d removals name a value that differs from the one in the tree\n", stats.ValueMismatches)
+	}
 	if stats.Suspicious() {
 		// Not an accusation. Proton permits deletion within a retention window,
-		// so these need judging against that window — but they are invisible
-		// from the epoch chain, so they are surfaced rather than absorbed.
+		// so these are judged against that window — but they are invisible from
+		// the epoch chain, so they are surfaced rather than absorbed.
 		fmt.Printf("  NOTE: this epoch mutated existing entries. None of that is\n" +
 			"        visible from the chain of signed epoch hashes.\n")
+		reportRemovals(apiBase, meta, stats)
 	}
 
 	merged, closeMerged, err := mapFile(outPath)
@@ -312,6 +322,48 @@ func runIncremental(from, target int64, dir string, shardDepth int, apiBase, dum
 	}
 	fmt.Printf("\n  MATCH: epoch %d plus its published diff is exactly epoch %d.\n", from, target)
 	return nil
+}
+
+// reportRemovals judges the epoch's removals against its own retention window
+// and prints the verdict.
+//
+// The output deliberately stops short of an accusation. Proton permits deletion,
+// and the window rule this checks was inferred from Proton's behaviour rather
+// than promised by it, so a removal that fails the rule is one this audit cannot
+// explain — worth publishing and worth withholding over, but not evidence of a
+// fork.
+func reportRemovals(apiBase string, meta *epochMeta, stats *proton.DiffStats) {
+	rep := proton.JudgeRemovals(stats, meta.EpochID, meta.StartEpochID)
+	fmt.Printf("  %s\n", rep.Summary())
+
+	// The window in days is a courtesy for the reader, not part of the check:
+	// the check itself is in epochs, which is the unit Proton publishes and the
+	// only one that cannot drift with epoch cadence.
+	if start, err := fetchEpoch(apiBase, meta.StartEpochID); err == nil && start.ClaimedTime > 0 && meta.ClaimedTime > 0 {
+		days := float64(meta.ClaimedTime-start.ClaimedTime) / 86400
+		fmt.Printf("  that window spans %.1f days (%d epochs)\n", days, meta.EpochID-meta.StartEpochID)
+	}
+
+	switch {
+	case rep.Clean():
+		fmt.Printf("  every removal is explained by the retention window.\n")
+	case !rep.Judged():
+		fmt.Printf("  WITHHOLD: no retention window published for this epoch, so the\n" +
+			"        removals cannot be judged either way.\n")
+	default:
+		fmt.Printf("  WITHHOLD: %d removals are not explained by the retention window.\n"+
+			"        This is not an accusation — the window rule is inferred from\n"+
+			"        Proton's behaviour, not signed by Proton — but it is a removal\n"+
+			"        this audit cannot account for.\n", len(rep.Unexplained))
+		const show = 20
+		for i, v := range rep.Unexplained {
+			if i == show {
+				fmt.Printf("        ... and %d more\n", len(rep.Unexplained)-show)
+				break
+			}
+			fmt.Printf("        %s\n", v.Describe())
+		}
+	}
 }
 
 func fetchBytes(url string) ([]byte, error) {

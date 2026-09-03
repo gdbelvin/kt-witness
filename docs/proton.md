@@ -47,10 +47,18 @@ The design intent is that a fork requires *two certificates* for the same epoch,
 both logged in CT — making equivocation publicly visible through infrastructure
 Proton does not control. That is a genuinely elegant use of CT.
 
-The loop is not yet closed here: the witness trusts the certificates' embedded
-SCTs rather than confirming presence in a CT log itself. Since CT *is* Proton's
-equivocation channel, that check is the one that matters most. See
-[TODO.md](../TODO.md).
+The loop is closed. Given the CT logs this witness already watches, it rebuilds
+the precertificate's RFC 6962 Merkle leaf and matches it against the hash the
+log's own signed checkpoint carries at the index the SCT names — verifying
+inclusion locally from tiles rather than trusting the SCT's promise or asking
+the log for a proof.
+
+Confirmed live: epoch 6712's certificate is entry 593,786,554 of
+`tuscolo2026h2.sunlight.geomys.org`. Negative controls in the same test reject
+the certificate at index+1 and a bit-flipped TBS at the right index.
+
+The whole configured CT set is supplied rather than one pinned log, because CT
+shards are temporal and rotate underneath Proton's ~90-day certificates.
 
 ## The tree
 
@@ -126,11 +134,21 @@ demonstration behind the mutable-map argument in [design.md](design.md).
 Mutations are **reported, never silently folded into a new root**. Removals and
 in-place overwrites are the entire point of running the audit.
 
-They are also not accusations. Proton permits deletion within a roughly 90-day
-window, so a removal count is a fact requiring judgement, not misbehaviour.
-Judging each removal against that window is outstanding work — right now the
-audit counts them, which is better than the alternative of not seeing them at
-all, and worse than knowing whether they were permitted.
+They are also not accusations, and each removal is now judged rather than
+merely counted. The 36-byte leaf value ends in the epoch that revision entered
+the directory, and every epoch publishes the oldest epoch it still retains, so a
+removal is explained exactly when the entry predates the window:
+
+	explained  ⟺  minEpochID < StartEpochID(removing epoch)
+
+Across five sampled epochs and 45,816 removals, every one was explained — and
+the largest removed `minEpochID` in each epoch lands exactly on the window
+boundary rather than merely inside it, which is what a retention policy looks
+like when it is actually being applied.
+
+The rule is inferred from Proton's behaviour, not promised by anything Proton
+signs. So a removal that fails it withholds and is published; it is never an
+accusation.
 
 ## Cost, and what it means for the witness loop
 

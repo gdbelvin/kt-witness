@@ -72,12 +72,21 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
       command; the witness process does not yet run it every epoch. Needs the
       13.6 GB tree kept on disk between epochs and a scheduler that tolerates a
       ~19-minute job against a ~4-hour epoch cadence.
-- [ ] **Judge Proton's removals.** Epoch 6709 alone removed 9,337 leaves.
-      Proton permits deletion within a ~90-day window, so the audit should check
-      each removal against that window rather than merely counting it.
-- [ ] **Proton: confirm certificates in a CT log** rather than trusting their
-      embedded SCTs. Proton's whole design leans on CT as the equivocation
-      channel, so this closes the loop it was built around.
+- [x] **Judge Proton's removals.** Done — a removal is explained when its
+      `minEpochID` predates the removing epoch's published `StartEpochID`.
+      Verified live across five epochs and 45,816 removals: all explained, with
+      the largest removed epoch landing exactly on the window boundary. The rule
+      is inferred from behaviour rather than promised, so a failure withholds
+      and is published, never accused.
+- [x] **Proton: confirm certificates in a CT log.** Done — the precertificate's
+      RFC 6962 Merkle leaf is rebuilt and matched against the hash the CT log's
+      own signed checkpoint carries at the index the SCT names, verified from
+      tiles locally rather than by asking the log for a proof or trusting the
+      SCT's promise. Confirmed live: epoch 6712's certificate is entry
+      593,786,554 of `tuscolo2026h2.sunlight.geomys.org`.
+      Only verified against one CA shape so far; a differently encoded
+      certificate would withhold rather than corrupt, which is the right
+      failure mode but is unproven.
 - [ ] **Meta: verify Meta's own signature.** Today the head is *derived* from
       object listings, not signed, which is why `DerivedHead()` is true and head
       regressions are withheld rather than accused. If a key ever becomes

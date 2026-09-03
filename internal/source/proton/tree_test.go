@@ -304,8 +304,15 @@ func TestApplyDiffReportsRemovals(t *testing.T) {
 	if merged.Len() != 11 {
 		t.Fatalf("merged tree has %d leaves, want 11", merged.Len())
 	}
-	if len(stats.RemovedLabels) != 1 || !bytes.Equal(stats.RemovedLabels[0], tree.Label(4)) {
+	if len(stats.Removals) != 1 || !bytes.Equal(stats.Removals[0].Label, tree.Label(4)) {
 		t.Fatal("the removed label must be retained so it can be examined")
+	}
+	// The value comes from the tree, which is the copy bound to a verified root.
+	if !bytes.Equal(stats.Removals[0].Value, tree.Value(4)) {
+		t.Fatal("the removed leaf's value must be retained so the removal can be dated")
+	}
+	if stats.ValueMismatches != 0 {
+		t.Fatal("the diff named the value that was actually there; that is not a mismatch")
 	}
 
 	before, _ := TreeRoot(tree)
