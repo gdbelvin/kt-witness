@@ -66,13 +66,14 @@ const (
 	StrategyHistory Strategy = "history"
 )
 
-// TipWindow is how many epochs behind the tip are audited unconditionally.
+// DefaultTipWindow is how many epochs behind the tip are audited
+// unconditionally when an Auditor does not choose otherwise.
 //
 // Sized so that an operator serving a forged binding cannot outrun it: Meta
 // publishes every 120 s and WhatsApp every 30 s, so 256 epochs is roughly eight
 // hours of Messenger and two of WhatsApp. A forgery that persists long enough
 // to reach a victim falls inside that window.
-const TipWindow = 256
+const DefaultTipWindow = 256
 
 // SelectionRate returns the probability that an epoch `age` behind the tip is
 // audited, and the strategy that decision belongs to.
@@ -84,23 +85,30 @@ const TipWindow = 256
 // decay keeps reaching arbitrarily far back with slowly diminishing density
 // rather than cutting off.
 //
-//	rate(age) = min(1, base / (1 + log2(1 + age - TipWindow)))
+//	rate(age) = min(1, base / (1 + log2(1 + age - tipWindow)))
 //
 // It is a pure function of (age, base), both of which are published, so a third
 // party recomputes exactly the rate we were obliged to use — the same property
 // the beacon gives for the draw itself. A sampling rule nobody can recompute is
 // a rate we are merely asserting.
-func SelectionRate(age int64, base float64) (float64, Strategy) {
+func SelectionRate(age int64, base float64, tipWindow int64) (float64, Strategy) {
 	if age < 0 {
 		age = 0
 	}
-	if age < TipWindow {
+	if age < tipWindow {
 		return 1, StrategyLive
 	}
 	if base <= 0 {
 		return 0, StrategyBacklog
 	}
-	decay := 1 + math.Log2(1+float64(age-TipWindow))
+	// An explicitly configured rate of 1 means "audit everything", and decay
+	// must not quietly turn that into less. Decay describes how a PARTIAL
+	// budget is spent across the backlog; it is not a reason to skip work an
+	// operator has said they want done.
+	if base >= 1 {
+		return 1, StrategyBacklog
+	}
+	decay := 1 + math.Log2(1+float64(age-tipWindow))
 	rate := base / decay
 	if rate > 1 {
 		rate = 1

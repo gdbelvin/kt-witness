@@ -45,6 +45,22 @@ type Auditor struct {
 	// MaxEpochsPerRound bounds how many epochs are considered per pass, so a
 	// long backlog does not monopolise a single round.
 	MaxEpochsPerRound int64
+
+	// TipWindow is how many epochs behind the tip are audited unconditionally.
+	// Zero means DefaultTipWindow; a negative value disables exhaustive tip
+	// auditing entirely and samples everything, which is what an operator with
+	// a constrained link would choose.
+	TipWindow int64
+}
+
+func (a *Auditor) tipWindow() int64 {
+	if a.TipWindow < 0 {
+		return 0
+	}
+	if a.TipWindow == 0 {
+		return DefaultTipWindow
+	}
+	return a.TipWindow
 }
 
 // Run audits newly witnessed epochs for one source.
@@ -115,7 +131,7 @@ func (a *Auditor) Run(ctx context.Context, r Resolver) error {
 		// recency bias; both are the same forward pass, so an epoch is
 		// considered exactly once and never revisited. See strategy.go.
 		age := limit - epoch
-		rate, strategy := SelectionRate(age, a.Rate)
+		rate, strategy := SelectionRate(age, a.Rate, a.tipWindow())
 		selected, err := Selected(round.Randomness, epoch, rate)
 		if err != nil {
 			return err

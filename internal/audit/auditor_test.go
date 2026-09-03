@@ -54,6 +54,10 @@ func newTestAuditor(t *testing.T, sidecarPath string, rate float64) (*Auditor, *
 		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Rate:    rate,
 		Timeout: 30 * time.Second,
+		// Sampling behaviour is what these tests exercise, so exhaustive tip
+		// auditing is switched off: with it on, nothing near the tip is ever
+		// declined and a test about declined epochs has nothing to observe.
+		TipWindow: -1,
 	}, db
 }
 
