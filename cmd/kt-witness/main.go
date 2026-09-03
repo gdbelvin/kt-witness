@@ -32,6 +32,7 @@ import (
 	"github.com/gdbsecurity/kt-witness/internal/source/c2sp"
 	"github.com/gdbsecurity/kt-witness/internal/source/proton"
 	ktsignal "github.com/gdbsecurity/kt-witness/internal/source/signal"
+	"github.com/gdbsecurity/kt-witness/internal/source/sigsum"
 	"github.com/gdbsecurity/kt-witness/internal/staticct"
 	"github.com/gdbsecurity/kt-witness/internal/store"
 	"github.com/gdbsecurity/kt-witness/internal/witness"
@@ -46,6 +47,11 @@ type config struct {
 	Listen  string `json:"listen"`
 	DB      string `json:"db"`
 	KeyFile string `json:"key_file"`
+
+	// PeerStatusURLs maps a witness name to its status page, polled to compare
+	// its view against ours. Detection only: those pages are unsigned, so a
+	// divergence is a lead to chase, never something to publish.
+	PeerStatusURLs map[string]string `json:"peer_status_urls"`
 
 	// PeerWitnesses are other witnesses' cosignature verifier keys. Their
 	// cosignatures already ride on checkpoints we fetch, and a disagreement
@@ -105,6 +111,12 @@ type logConfig struct {
 	// published in the CT log list. Origin must be the submission prefix
 	// without scheme; BaseURL is the monitoring prefix.
 	LogKey string `json:"log_key"`
+
+	// sigsum: the log's Ed25519 public key as 64 hex characters, taken from a
+	// sigsum trust policy. The origin is DERIVED from this key rather than
+	// configured, so there is no way to point the adapter at a log without
+	// naming which log it is.
+	LogKeyHex string `json:"log_key_hex"`
 
 	// akd / proton / signal
 	APIBase           string   `json:"api_base"`
@@ -167,6 +179,24 @@ func (l logConfig) build(log *slog.Logger, entries source.EntryStore, ctLogs []p
 			CheckpointPath: "latest", TileLayout: "sumdb",
 			VerifyEntries: l.VerifyEntries,
 		})
+	case "sigsum":
+		pub, err := hex.DecodeString(l.LogKeyHex)
+		if err != nil {
+			return nil, fmt.Errorf("log %q: log_key_hex is not hex: %w", l.Origin, err)
+		}
+		src, err := sigsum.New(sigsum.Config{Endpoint: l.BaseURL, PublicKey: pub})
+		if err != nil {
+			return nil, fmt.Errorf("log %q: %w", l.Origin, err)
+		}
+		// The configured origin is not trusted as the log's name — it is
+		// checked against the one the key implies. A mismatch means the
+		// operator pinned a key for a different log than they think, which is
+		// exactly the confusion worth failing loudly on.
+		if l.Origin != "" && l.Origin != src.Origin() {
+			return nil, fmt.Errorf("log %q: configured origin does not match the key, which implies %q",
+				l.Origin, src.Origin())
+		}
+		return src, nil
 	case "proton":
 		return proton.New(proton.Config{
 			Origin:            l.Origin,
@@ -446,6 +476,9 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 
 	if cfg.ProtonAudit.Dir != "" {
 		startProtonAudit(ctx, cfg, sources, db, log)
+	}
+	if len(cfg.PeerStatusURLs) > 0 {
+		startPeerPolling(ctx, cfg.PeerStatusURLs, db, log)
 	}
 	defer stop()
 
@@ -772,6 +805,13 @@ func orDefault(v, def string) string {
 // axis from the assurance tier: a tier-A certificate log and a tier-A key
 // transparency log are the same strength of claim about very different things.
 func kindOf(l logConfig) string {
+	// Rekor is a plain tlog-tiles log, so it arrives here as type "c2sp" and
+	// would otherwise be classified "generic". What it makes transparent is
+	// software provenance — npm and PyPI attestations chain to it — so it is
+	// named by what it carries, not by the adapter that happens to read it.
+	if strings.HasSuffix(l.Origin, ".rekor.sigstore.dev") {
+		return "software"
+	}
 	switch l.Type {
 	case "akd", "proton", "signal":
 		return "kt"
@@ -784,7 +824,7 @@ func kindOf(l logConfig) string {
 		return "kt"
 	case "staticct":
 		return "ct"
-	case "sumdb":
+	case "sumdb", "sigsum":
 		return "software"
 	default:
 		return "generic"
@@ -925,5 +965,79 @@ func runProtonStep(ctx context.Context, a *proton.IncrementalAuditor, db *store.
 			"withholding judgement, not accusing; the window rule is inferred "+
 			"from behaviour rather than promised",
 			"epoch", res.To, "summary", res.Removals.Summary())
+	}
+}
+
+// startPeerPolling compares other witnesses' published views against our own.
+//
+// This is the half of gossip that is possible today. A witness reading
+// cosignatures off checkpoints it fetched cannot detect a split view — every
+// signature there sits over the same body, so they agree by construction. Only
+// an independently obtained view can differ, and polling is how we get one.
+//
+// It is DETECTION ONLY. The pages are unsigned, so a divergence found here
+// cannot support an accusation; it is the signal to go and obtain the signed
+// artifact. The witness never poisons a log on this evidence.
+func startPeerPolling(ctx context.Context, peers map[string]string, db *store.Store, log *slog.Logger) {
+	p := cosig.NewPeerPoller(peers)
+	names := make([]string, 0, len(peers))
+	for n := range peers {
+		names = append(names, n)
+	}
+	log.Info("polling peer witnesses for their published views", "peers", names)
+
+	go func() {
+		// Hourly. Their pages change as slowly as the logs do, and a witness
+		// that hammers its peers is a bad neighbour.
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		for {
+			for name := range peers {
+				views, err := p.Poll(ctx, name)
+				if err != nil {
+					log.Warn("polling peer", "peer", name, "err", err)
+					continue
+				}
+				comparePeerViews(name, views, db, log)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
+}
+
+// comparePeerViews looks for a peer reporting a different root at a size we
+// also witnessed.
+func comparePeerViews(peer string, views []cosig.PeerView, db *store.Store, log *slog.Logger) {
+	var checked, agreed int
+	for _, v := range views {
+		rec, err := db.Get(v.Origin)
+		if err != nil || rec == nil {
+			continue // we do not witness this log; nothing to compare
+		}
+		if rec.Size != v.Size {
+			// Different sizes are just different moments. Only the same size
+			// can disagree.
+			continue
+		}
+		checked++
+		ours := base64.StdEncoding.EncodeToString(rec.Hash[:])
+		if ours == v.Root {
+			agreed++
+			continue
+		}
+		d := &cosig.Divergence{
+			Origin: v.Origin, Size: v.Size,
+			OurRoot: ours, Witness: peer, TheirRoot: v.Root,
+		}
+		log.Error("PEER DIVERGENCE — another witness publishes a different root at "+
+			"a size we also witnessed", "detail", d.String())
+	}
+	if checked > 0 {
+		log.Info("peer view compared", "peer", peer,
+			"logs_in_common_at_same_size", checked, "agreed", agreed)
 	}
 }

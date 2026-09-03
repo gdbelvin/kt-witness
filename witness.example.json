@@ -6,6 +6,9 @@
   "peer_witnesses": [
     "witness.stagemole.eu+67f7aea0+BEqSG3yu9YrmcM3BHvQYTxwFj3uSWakQepafafpUqklv"
   ],
+  "peer_status_urls": {
+    "witness.stagemole.eu": "https://witness.stagemole.eu/"
+  },
   "poll_interval": "60s",
   "max_sign_delay": "30s",
   "refresh_interval": "1h",
@@ -474,6 +477,24 @@
       "origin": "ct-log-api.godaddy.com/aquamarine2028h2",
       "base_url": "https://ct-log-api.godaddy.com/aquamarine2028h2/",
       "log_key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEOZA5sbbVjTlj60DpI6u9AKO/79QvNB7mIq/det2cLZnhV9N4pygpZ1rArRxzn80Y4ydFh+bKOqk7gWnrYfDuqA=="
+    },
+    {
+      "type": "sigsum",
+      "origin": "sigsum.org/v1/tree/44ad38f8226ff9bd27629a41e55df727308d0a1cd8a2c31d3170048ac1dd22a1",
+      "base_url": "https://seasalp.glasklar.is",
+      "log_key_hex": "0ec7e16843119b120377a73913ac6acbc2d03d82432e2c36b841b09a95841f25"
+    },
+    {
+      "type": "sigsum",
+      "origin": "sigsum.org/v1/tree/c03f05182be9341e33b9edd5f3f8675b08332164640203e743f4285359cace47",
+      "base_url": "https://ginkgo.tlog.mullvad.net",
+      "log_key_hex": "f00c159663d09bbda6131ee1816863b6adcacfe80b0b288000b11aba8fe38314"
+    },
+    {
+      "type": "c2sp",
+      "origin": "log2025-1.rekor.sigstore.dev",
+      "base_url": "https://log2025-1.rekor.sigstore.dev/api/v2",
+      "vkey": "log2025-1.rekor.sigstore.dev+cf119915+AbfK5adZJxsI323FwGD2AJJ9F4i89cfDuLdGJBIYntuO"
     }
   ]
 }

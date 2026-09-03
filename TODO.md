@@ -14,14 +14,23 @@ that exists in their proto but not their service; Signal's `/monitor` requiring
 an account; Meta publishing a pinnable key; another witness serving the signed
 checkpoints it already holds; IETF keytrans having any public deployment.
 
+**Watch these automatically, don't re-check them by hand.** `cmd/kt-unblock`
+probes each precondition above and reports which have become reachable. It
+exists because the real failure mode is not being blocked — it is a conclusion
+going stale unnoticed. Production Sigstore Rekor v2 had been live since
+2025-09-23 while this file still said "wire it the day a production v2 endpoint
+exists"; the earlier check had found only the staging instance and was never
+revisited. Witnessing it turned out to need no new code at all.
+
+    go run ./cmd/kt-unblock          # or -json for monitoring
+
+"Still blocked" is the expected result and exits 0, so this is safe to run on a
+schedule without training anyone to ignore it.
+
 **Deliberately deferred** — promoting a contradicted Signal entry to a fork
 waits for a production record, because a fork is permanent and public and the
 tree math is a fresh reimplementation. Publishing the verifier key waits for
 hardware, because publishing is what invites people to depend on it.
-
-**A judgement call, not a task** — sigsum has its own protocol and an existing
-witness network; joining is probably worth more than reimplementing, and that
-is a decision rather than an implementation.
 
 ## Before anyone relies on this witness
 
@@ -192,9 +201,20 @@ is a decision rather than an implementation.
       cross-witness detection conclusive, because the convicting signature is
       the *log's own*: two log signatures over different roots at one size is
       the log convicting itself, needing nobody to be trusted.
-- [ ] **Gossip with other witnesses.** Cross-witness comparison is how split
+- [~] **Gossip with other witnesses.** Cross-witness comparison is how split
       views are actually caught, and it would subsume the beacon-canonicalisation
       problem above.
+      **Detection half done** — the witness now polls peers' published views
+      hourly and reports a peer publishing a different root at a size we also
+      hold (`startPeerPolling` in cmd/kt-witness, `internal/cosig/peer.go`).
+      That is the part that is possible today, and it is the part that matters:
+      cosignatures read off a checkpoint *we* fetched cannot detect a split view
+      at all, because every signature there sits over the same body and agrees
+      by construction. Only an independently obtained view can differ.
+      It stays **detection only**, and cannot become more until the item below
+      lands: peer status pages are unsigned, so a divergence is the cue to go
+      and obtain the signed artifact, never something to publish. The witness
+      does not accuse on unsigned evidence.
 - [x] **WhatsApp.** Done — `whatsapp.key-transparency.v2` is Online with a
       public log directory and needed no code at all. v1 stays untouched
       (`Disabled`). Tier B verified feasible: one real proof through the
@@ -215,21 +235,35 @@ is a decision rather than an implementation.
       is refused as a `ForkError`.
       Configured at tier A on purpose: at that size a first-observation entry
       sweep would read ~242k data tiles.
-- [~] **Sigstore Rekor.** Verifier built and validated against production
-      (`internal/rekor`): 2,571,226,639 entries, with an altered tree size
-      correctly refused. Rekor's scheme is its own — key hash is the bare
-      `SHA-256(SPKI)[:4]` with no name or algorithm byte, and the signature is
-      DER ECDSA over the note body *including* its trailing newline.
-      **Not wired as an origin, because production Rekor cannot be witnessed
-      yet**: v1 wraps its note in a JSON envelope and serves no tlog-tiles, so
-      there is nothing to compute a consistency proof from — it would be a
-      tier-S signed head, which this project does not ship. Rekor v2 does serve
-      a bare note and is tile-backed, but only on `sigstage.dev`; witnessing a
-      staging log would pollute the published surface for the same reason the
-      `test.*` CT namespaces were excluded.
-      Wire it the day a production v2 endpoint exists. The verifier is done.
-- [ ] **sigsum.** Its own protocol, and it already has a witness network —
-      joining is probably worth more than reimplementing.
+- [x] **Sigstore Rekor.** DONE — production Rekor **v2** is live and is now
+      witnessed as `log2025-1.rekor.sigstore.dev`, at 93 million entries.
+      The item said "wire it the day a production v2 endpoint exists". It does:
+      the Sigstore TUF trusted root lists exactly two active tlogs, and the
+      second is `log2025-1.rekor.sigstore.dev` (`PKIX_ED25519`, valid from
+      2025-09-23), serving `/api/v2/checkpoint` and `/api/v2/tile/...`.
+      The pleasing part is that it needed **no new code at all**. v2 signs a
+      bare signed note with plain Ed25519 and serves tlog-tiles, so it is just
+      a `c2sp` log with a vkey — none of the bespoke machinery v1 forced is
+      required. Tier A, with real consistency proofs.
+      `internal/rekor` (the v1 ECDSA verifier — bare `SHA-256(SPKI)[:4]` key
+      hash, DER ECDSA over the body including its trailing newline) is retained
+      and still passing, but is **not** wired: v1 remains unwitnessable, because
+      it wraps its note in a JSON envelope and serves no tiles, so there is
+      nothing to build a consistency proof from. That is a property of v1, not
+      an outstanding task — v2 is where Sigstore is going.
+- [x] **sigsum.** DONE — and the judgement call dissolved on contact with the
+      source. Modern sigsum signs a C2SP checkpoint body
+      (`sigsum.org/v1/tree/<hex sha256(key)>`) with plain Ed25519, and its
+      cosignatures are literally `cosignature/v1`. It is not a separate
+      ecosystem; it is a note-carrying log wearing an ASCII transport. So there
+      was nothing to reimplement and nothing to join: `internal/source/sigsum`
+      transcodes `get-tree-head` into the equivalent signed note and hands it to
+      the machinery that was already there.
+      Witnessing all four logs in sigsum's built-in policies at tier A —
+      `seasalp.glasklar.is`, `ginkgo.tlog.mullvad.net`,
+      `serviceberry.tlog.stagemole.eu` and `test.sigsum.org/barreleye` —
+      with append-only proven from the log's own `get-consistency-proof`.
+      See docs/sigsum.md.
 - [ ] **IETF keytrans.** Revisit when a public deployment exists. The draft
       specifies no transport, so there is currently nothing to be conformant to
       on the wire.

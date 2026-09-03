@@ -230,6 +230,51 @@ unauthenticated (it explicitly *rejects* authenticated callers) but takes only
 `commitmentIndex` from a prior search. Monitoring needs an account. The entry
 ledger stands in for it.
 
+### What "having an account" does and does not unlock
+
+The obvious next thought is that an operator with a Signal account can simply
+supply one, and the coverage question goes away. Probing the search endpoint
+shows it does not.
+
+`POST /v1/key-transparency/search` is unauthenticated — it answers a bare
+request from anywhere — but it validates its inputs:
+
+    {"errors":["aci must not be null","aciIdentityKey must not be null",
+               "lastTreeHeadSize must be greater than 0",
+               "distinguishedTreeHeadSize must be greater than 0"]}
+
+The two that matter are `aci` and **`aciIdentityKey`**. The commitment stored
+in the tree is over the identity key, so the opening cannot be checked without
+it — it is a genuine cryptographic input, not a formality. And neither value is
+publicly derivable. The identity key lives behind `/v2/keys`, which *is*
+authenticated. (`GET /v1/accounts/username_hash/{hash}` returned 404 here, but
+that probe used a plain SHA-256 of the username rather than libsignal's actual
+username-hash construction, so it says nothing about whether the endpoint would
+resolve a handle — the identity key is the binding requirement either way.)
+
+So the requirement is not "an account exists". It is the ACI and the ACI
+identity key **as held by a registered or linked device** — material this
+project has no way to obtain from the outside, and that an operator would have
+to extract from their own client and hand over.
+
+This is supported when the operator supplies both values from their own device.
+Two constraints come with it, and they are design requirements rather than
+objections:
+
+- **The ACI is hashed everywhere it is published.** It is a stable identifier
+  for a real person, and the witness's audit trail and file mirror are
+  permanent. The witness verifies against the raw value and publishes only the
+  hash.
+- **It does not change the tier.** It moves per-label coverage from one label
+  to two, out of a directory of hundreds of millions, for the reason in the
+  next section. It is a second independent probe of the same machinery, which
+  has real value as a cross-check — and no value as coverage.
+
+Seed `lastTreeHeadSize` from the distinguished tree head the witness already
+verifies on every fetch; the endpoint rejects zero.
+
+Coverage still comes from Signal's auditor feed, not from per-label monitoring.
+
 ## Why the tier stays A
 
 Signal's proofs are **per-label**. They answer questions about identifiers the
