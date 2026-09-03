@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/gdbsecurity/kt-witness/internal/metrics"
+	"github.com/gdbsecurity/kt-witness/internal/netmeter"
 	"log/slog"
 	"time"
 
@@ -182,6 +183,10 @@ func (a *Auditor) Run(ctx context.Context, r Resolver) error {
 		lbl := map[string]string{"origin": origin}
 		metrics.Inc("kt_witness_audit_verified_total", lbl)
 		metrics.Add("kt_witness_audit_bytes_total", lbl, float64(ar.Bytes))
+		// The sidecar fetches proofs over its own HTTP stack, outside any
+		// transport we wrap, so without this the single largest consumer of
+		// bandwidth in the system would not appear in the bandwidth metric.
+		netmeter.Add(origin, ar.Bytes)
 		metrics.Add("kt_witness_audit_duration_seconds_sum", lbl, float64(ar.DurationMS)/1000)
 
 		if err := a.Store.SetAuditProgress(origin, epoch); err != nil {

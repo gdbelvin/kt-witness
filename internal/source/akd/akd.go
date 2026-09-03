@@ -46,6 +46,7 @@ import (
 
 	"filippo.io/torchwood"
 	"github.com/gdbsecurity/kt-witness/internal/audit"
+	"github.com/gdbsecurity/kt-witness/internal/netmeter"
 	"github.com/gdbsecurity/kt-witness/internal/source"
 	"golang.org/x/mod/sumdb/note"
 	"golang.org/x/mod/sumdb/tlog"
@@ -94,7 +95,7 @@ func New(cfg Config) (*Source, error) {
 	cfg.LogDirectory = strings.TrimSuffix(cfg.LogDirectory, "/")
 	return &Source{
 		cfg:    cfg,
-		client: &http.Client{Timeout: 30 * time.Second},
+		client: &http.Client{Timeout: 30 * time.Second, Transport: netmeter.Wrap(nil, cfg.Origin)},
 	}, nil
 }
 

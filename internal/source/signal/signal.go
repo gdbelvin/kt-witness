@@ -69,6 +69,7 @@ import (
 	"time"
 
 	"filippo.io/torchwood"
+	"github.com/gdbsecurity/kt-witness/internal/netmeter"
 	"github.com/gdbsecurity/kt-witness/internal/source"
 	"github.com/gdbsecurity/kt-witness/internal/vrf"
 	"golang.org/x/mod/sumdb/note"
@@ -221,11 +222,11 @@ func New(cfg Config) (*Source, error) {
 
 	s.client = &http.Client{
 		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
+		Transport: netmeter.Wrap(&http.Transport{
 			// Pinned, not added to the system pool: only Signal's own CA may
 			// authenticate this host.
 			TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
-		},
+		}, cfg.Origin),
 	}
 	return s, nil
 }

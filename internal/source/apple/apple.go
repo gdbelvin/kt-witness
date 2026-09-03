@@ -48,6 +48,7 @@ import (
 	"time"
 
 	"filippo.io/torchwood"
+	"github.com/gdbsecurity/kt-witness/internal/netmeter"
 	"github.com/gdbsecurity/kt-witness/internal/pbwire"
 	"github.com/gdbsecurity/kt-witness/internal/source"
 	"golang.org/x/mod/sumdb/note"
@@ -177,9 +178,9 @@ func New(cfg Config) (*Source, error) {
 		keyID: sha256.Sum256(der),
 		client: &http.Client{
 			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
+			Transport: netmeter.Wrap(&http.Transport{
 				TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
-			},
+			}, cfg.Origin),
 		},
 	}, nil
 }

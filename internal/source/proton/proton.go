@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"filippo.io/torchwood"
+	"github.com/gdbsecurity/kt-witness/internal/netmeter"
 	"github.com/gdbsecurity/kt-witness/internal/source"
 	"golang.org/x/mod/sumdb/note"
 	"golang.org/x/mod/sumdb/tlog"
@@ -68,7 +69,10 @@ func New(cfg Config) (*Source, error) {
 		cfg.MaxEpochsPerRound = 200
 	}
 	cfg.APIBase = strings.TrimSuffix(cfg.APIBase, "/")
-	return &Source{cfg: cfg, client: &http.Client{Timeout: 30 * time.Second}}, nil
+	return &Source{cfg: cfg, client: &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: netmeter.Wrap(nil, cfg.Origin),
+	}}, nil
 }
 
 func (s *Source) Origin() string    { return s.cfg.Origin }

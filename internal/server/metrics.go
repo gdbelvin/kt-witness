@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gdbsecurity/kt-witness/internal/metrics"
+	"github.com/gdbsecurity/kt-witness/internal/netmeter"
 )
 
 // Metric names. Declared in one place so the exposition is stable and an alert
@@ -38,6 +39,13 @@ const (
 	MDiskFreeBytes  = "kt_witness_disk_free_bytes"
 	MDiskTotalBytes = "kt_witness_disk_total_bytes"
 	MDiskUsedRatio  = "kt_witness_disk_used_ratio"
+
+	// Bandwidth, per log and therefore per ecosystem. This is the resource the
+	// witness actually consumes at scale and the one a home connection has a
+	// hard limit on.
+	MNetBytesIn  = "kt_witness_network_bytes_in_total"
+	MNetBytesOut = "kt_witness_network_bytes_out_total"
+	MNetRequests = "kt_witness_network_requests_total"
 
 	// Counters maintained by the witness loop rather than derived from storage.
 	MRounds              = "kt_witness_rounds_total"
@@ -78,6 +86,9 @@ func Init(version string) {
 	d(MExportBytes, metrics.Gauge, "Size of the published file mirror.")
 	d(MDiskFreeBytes, metrics.Gauge, "Bytes free on the filesystem holding the database.")
 	d(MDiskTotalBytes, metrics.Gauge, "Total bytes on the filesystem holding the database.")
+	d(MNetBytesIn, metrics.Counter, "Bytes received per log, counted as actually read rather than from Content-Length. Group by kind for per-ecosystem utilisation. Almost all of it is construction-audit proofs.")
+	d(MNetBytesOut, metrics.Counter, "Bytes sent per log. A witness sends almost nothing.")
+	d(MNetRequests, metrics.Counter, "HTTP requests issued per log.")
 	d(MDiskUsedRatio, metrics.Gauge, "Fraction of the database filesystem in use, 0 to 1. A witness that runs out of disk stops witnessing.")
 
 	d(MRounds, metrics.Counter, "Witness rounds completed.")
@@ -133,6 +144,19 @@ func (s *Server) refreshStoreMetrics() error {
 	metrics.Set(MForksTotal, nil, float64(v.Forks))
 	metrics.Set(MAppHeads, nil, float64(v.Apps))
 	metrics.Set(MAppConflicts, nil, float64(v.AppConflicts))
+
+	// Bandwidth, labelled with kind so the dashboard can answer "what is CT
+	// costing us" without enumerating 69 origins.
+	for origin, st := range netmeter.Snapshot() {
+		kind := s.Kinds[origin]
+		if kind == "" {
+			kind = "generic"
+		}
+		l := map[string]string{"origin": origin, "kind": kind}
+		metrics.Set(MNetBytesIn, l, float64(st.BytesIn))
+		metrics.Set(MNetBytesOut, l, float64(st.BytesOut))
+		metrics.Set(MNetRequests, l, float64(st.Requests))
+	}
 
 	for _, lg := range v.Logs {
 		kind := lg.Kind

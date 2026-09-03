@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gdbsecurity/kt-witness/internal/netmeter"
 	"github.com/gdbsecurity/kt-witness/internal/pbwire"
 	"github.com/gdbsecurity/kt-witness/internal/source"
 )
@@ -256,8 +257,10 @@ func TestAppleRootIsPinnedAndCorrect(t *testing.T) {
 	}
 
 	// And the client must actually be using it, rather than the host's store.
+	// Unwrap first: the transport is wrapped for bandwidth accounting, and that
+	// wrapper must not be able to hide a pinning regression.
 	s := newSource(t)
-	tr, ok := s.client.Transport.(*http.Transport)
+	tr, ok := netmeter.Unwrap(s.client.Transport).(*http.Transport)
 	if !ok || tr.TLSClientConfig == nil || tr.TLSClientConfig.RootCAs == nil {
 		t.Fatal("client is not pinned to a root pool; it would inherit the host trust store")
 	}
