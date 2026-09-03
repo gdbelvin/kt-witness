@@ -443,7 +443,7 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 	// Witness once before auditing starts. The auditor works from what we have
 	// already attested, so launching it first would spend its opening pass on an
 	// empty store and then sleep a full interval before doing anything useful.
-	round(ctx, w, sources, log)
+	round(ctx, w, sources, db, log)
 	mirror()
 	if once {
 		return nil
@@ -470,6 +470,23 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 					}(r)
 				}
 				awg.Wait()
+
+				// The backwards sweep runs after the forward one and with a
+				// small budget. Equivocation happens at the tip and is a live
+				// incident; history is a completeness exercise that can wait,
+				// and must never delay the thing that catches an active attack.
+				for _, r := range resolvers {
+					out, err := auditor.RunHistory(ctx, r, historyBudgetPerRound)
+					if err != nil && ctx.Err() == nil {
+						log.Warn("history sweep", "origin", r.Origin(), "err", err)
+						continue
+					}
+					if out != nil && out.Verified > 0 {
+						log.Info("history swept", "origin", out.Origin,
+							"from", out.From, "to", out.To, "verified", out.Verified,
+							"remaining", out.Remaining, "complete", out.Complete)
+					}
+				}
 				select {
 				case <-ctx.Done():
 					return
@@ -491,7 +508,7 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 			return nil
 		case <-time.After(pollInterval):
 		}
-		round(ctx, w, sources, log)
+		round(ctx, w, sources, db, log)
 		scanApplications(ctx, db, sources, log)
 		mirror()
 	}
@@ -594,6 +611,14 @@ const roundConcurrency = 8
 // roughly twenty minutes of a log not being witnessed at all.
 const sustainedWithholding = 20
 
+// historyBudgetPerRound bounds how many historical epochs one pass audits.
+//
+// Small on purpose. Meta alone has 625,000 published epochs at ~24 s of
+// verification each; sweeping them is a months-long background task, not
+// something to finish today, and it must never crowd out the forward auditing
+// that catches an active equivocation.
+const historyBudgetPerRound = 4
+
 // withholding tracks consecutive failures per origin, so a persistent problem
 // is distinguishable from the ordinary transient one.
 var withholding = &failureTracker{n: map[string]int{}}
@@ -620,7 +645,7 @@ func (f *failureTracker) ok(origin string) {
 	metrics.Set(server.MConsecutiveWithheld, map[string]string{"origin": origin}, 0)
 }
 
-func round(ctx context.Context, w *witness.Witness, sources []source.Source, log *slog.Logger) {
+func round(ctx context.Context, w *witness.Witness, sources []source.Source, db *store.Store, log *slog.Logger) {
 	sem := make(chan struct{}, roundConcurrency)
 	var wg sync.WaitGroup
 
@@ -667,10 +692,12 @@ func round(ctx context.Context, w *witness.Witness, sources []source.Source, log
 				}
 			case out.Unchanged:
 				withholding.ok(src.Origin())
+				recordSearch(db, src, log)
 				log.Debug("unchanged", "origin", out.Origin, "size", out.Size)
 				metrics.Inc(server.MCosigned, origin)
 			default:
 				withholding.ok(src.Origin())
+				recordSearch(db, src, log)
 				metrics.Inc(server.MCosigned, origin)
 			}
 		}(src)
@@ -706,5 +733,34 @@ func kindOf(l logConfig) string {
 		return "software"
 	default:
 		return "generic"
+	}
+}
+
+// recordSearch persists the most recent verified search proof so the published
+// mirror can show what was actually opened, not merely that something was.
+//
+// Best effort: failing to record evidence is not a reason to withhold a
+// cosignature that is otherwise fully verified.
+func recordSearch(db *store.Store, src source.Source, log *slog.Logger) {
+	type searcher interface{ LastSearch() *ktsignal.SearchResult }
+	s, ok := src.(searcher)
+	if !ok {
+		return
+	}
+	sr := s.LastSearch()
+	if sr == nil {
+		return
+	}
+	if err := db.PutSearch(src.Origin(), &store.SearchRecord{
+		Key:        string(ktsignal.DistinguishedKey),
+		Index:      sr.Index,
+		Pos:        sr.Pos,
+		Version:    sr.Version,
+		Value:      sr.Value,
+		Entries:    sr.Entries,
+		Root:       sr.Root,
+		VerifiedAt: time.Now().Unix(),
+	}); err != nil {
+		log.Warn("persisting verified search", "origin", src.Origin(), "err", err)
 	}
 }

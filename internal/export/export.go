@@ -21,6 +21,8 @@
 //	  applications.json               observed heads (never cosigned)
 //	  audits/<log>.jsonl              recent tier-B decisions, one per line
 //	  forks/<log>-<unix>.json         misbehaviour evidence, one file each
+//	  searches/<log>.json             the last verified search proof, a spot check
+//	  entries/<log>.jsonl             leaf hash per opened entry, one per line
 package export
 
 import (
@@ -49,7 +51,7 @@ type Exporter struct {
 // Run rewrites the mirror. It is cheap — a handful of small files — and safe to
 // call after every round.
 func (e *Exporter) Run(now time.Time) error {
-	for _, sub := range []string{"", "checkpoints", "audits", "forks"} {
+	for _, sub := range []string{"", "checkpoints", "audits", "forks", "searches", "entries"} {
 		if err := os.MkdirAll(filepath.Join(e.Dir, sub), 0o755); err != nil {
 			return fmt.Errorf("export: %w", err)
 		}
@@ -189,6 +191,19 @@ func (e *Exporter) Run(now time.Time) error {
 		}
 		p := filepath.Join(e.Dir, "audits", slug(h.Origin)+".jsonl")
 		if err := writeAtomic(p, []byte(b.String())); err != nil {
+			return err
+		}
+	}
+
+	// What the search proofs opened. State that exists only in log lines is
+	// half-published: a witness's product is evidence other people can read, so
+	// the spot check and the entries it established belong in files beside the
+	// checkpoints they were verified against.
+	if err := e.exportSearches(); err != nil {
+		return err
+	}
+	for _, h := range heads {
+		if err := e.exportEntries(h.Origin); err != nil {
 			return err
 		}
 	}

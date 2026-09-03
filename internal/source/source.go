@@ -41,6 +41,20 @@ const (
 	// TierB additionally replays the log's own construction proofs to attest
 	// the tree is correctly built.
 	TierB
+
+	// TierBPlus is TierB across the log's ENTIRE published history rather than
+	// only the epochs published since we started watching.
+	//
+	// The distinction is the same one that separates A from A+, and it matters
+	// for the same reason: a log with 625,000 published epochs that we began
+	// witnessing yesterday has almost none of that history checked, while a
+	// bare "tier B" reads as though it does.
+	//
+	// This tier is EARNED, not configured. It is only claimed when the stored
+	// record shows every epoch in the published range has a settled decision,
+	// which is why the witness computes it from coverage rather than taking a
+	// source's word for it.
+	TierBPlus
 )
 
 func (t Tier) String() string {
@@ -51,6 +65,8 @@ func (t Tier) String() string {
 		return "A+ (root-chain continuity)"
 	case TierB:
 		return "B (construction audit)"
+	case TierBPlus:
+		return "B+ (construction audit across published history)"
 	case TierSignedHead:
 		return "S (signed head; equivocation detected, append-only unproven)"
 	}

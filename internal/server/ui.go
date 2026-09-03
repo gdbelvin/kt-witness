@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/gdbsecurity/kt-witness/internal/source"
 )
 
 // The human-facing status page.
@@ -27,24 +29,26 @@ import (
 const auditWindow = 5000
 
 type logView struct {
-	Tier         string
-	Kind         string
-	Origin       string
-	Size         int64
-	Root         string
-	RootShort    string
-	Path         string
-	WitnessedAt  time.Time
-	Age          string
-	Stale        bool
-	Forked       bool
-	Audited      int
-	Sampled      int
-	Declined     int
-	Unavailable  int
-	LastEpoch    int64
-	History      *historyView
-	CheckpointID string
+	Tier           string
+	Kind           string
+	HistoryAudited int64
+	HistoryTotal   int64
+	Origin         string
+	Size           int64
+	Root           string
+	RootShort      string
+	Path           string
+	WitnessedAt    time.Time
+	Age            string
+	Stale          bool
+	Forked         bool
+	Audited        int
+	Sampled        int
+	Declined       int
+	Unavailable    int
+	LastEpoch      int64
+	History        *historyView
+	CheckpointID   string
 }
 
 type historyView struct {
@@ -181,6 +185,22 @@ func (s *Server) buildStatus() (*statusView, error) {
 		// well over the refresh interval is one a monitor cannot distinguish
 		// from a dead witness. Two hours is comfortably past the hourly refresh.
 		lv.Stale = now.Sub(rec.WitnessedAt) > 2*time.Hour
+
+		// Tier B+ is earned rather than configured: a log only counts as
+		// construction audited across its published history when the stored
+		// record shows every epoch in that range has a settled decision. A
+		// source cannot claim this about itself, because only the record knows
+		// what was actually checked.
+		if h := lv.History; h != nil && strings.HasPrefix(lv.Tier, "B ") {
+			if settled, _, err := s.Store.AuditCoverage(rec.Origin, h.From, h.To); err == nil {
+				total := h.To - h.From + 1
+				lv.HistoryAudited = settled
+				lv.HistoryTotal = total
+				if total > 0 && settled >= total {
+					lv.Tier = source.TierBPlus.String()
+				}
+			}
+		}
 
 		if audits, err := s.Store.Audits(rec.Origin, auditWindow); err == nil {
 			for _, a := range audits {

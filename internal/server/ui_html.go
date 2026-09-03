@@ -121,7 +121,7 @@ footer{margin-top:3rem;padding-top:1.1rem;border-top:1px solid var(--rule);
       <span class="origin">{{.Origin}}</span>
       {{if .Forked}} <span class="pill bad">FORKED</span>{{end}}
       {{if .Stale}} <span class="pill warn">STALE</span>{{end}}
-      {{if .History}}<div class="root">history {{comma .History.From}}–{{comma .History.To}} · {{commai .History.Epochs}} epochs · {{commai .History.Gaps}} gaps</div>{{end}}
+      {{if .History}}<div class="root">history {{comma .History.From}}–{{comma .History.To}} · {{commai .History.Epochs}} epochs · {{commai .History.Gaps}} gaps{{if .HistoryTotal}} · construction audited {{comma .HistoryAudited}}/{{comma .HistoryTotal}}{{end}}</div>{{end}}
     </td>
     <td>{{if .Tier}}<span class="pill ok">{{.Tier}}</span>{{else}}<span class="pill warn">?</span>{{end}}</td>
     <td class="n">{{comma .Size}}</td>
@@ -146,6 +146,7 @@ footer{margin-top:3rem;padding-top:1.1rem;border-top:1px solid var(--rule);
   <tbody>
   <tr><td><span class="pill ok">A</span></td><td><strong>Append-only.</strong> Every root this witness has seen is a prefix of the current one, proven by a consistency proof it verified itself. Catches equivocation and rollback. Says <em>nothing</em> about whether the log's contents are correct.</td></tr>
   <tr><td><span class="pill ok">A+</span></td><td>As A, and the root chain has been verified across the log's <em>entire published history</em>, not merely since this witness started watching.</td></tr>
+  <tr><td><span class="pill ok">B+</span></td><td>Construction audited across the log's <em>entire published history</em>, not merely the epochs published since this witness started watching. Earned from the record, never configured: a log with 625,000 published epochs that we began witnessing yesterday has almost none of them checked, and a bare “B” would read as though it did.</td></tr>
   <tr><td><span class="pill ok">B</span></td><td><strong>Construction audit.</strong> As above, and the log's own proofs have been replayed to confirm the tree is correctly built. This is the only tier that can see an illegal mutation — a binding removed, or overwritten without its version advancing — because those leave the append-only chain perfectly intact.</td></tr>
   </tbody>
 </table></div>

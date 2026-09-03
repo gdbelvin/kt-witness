@@ -621,3 +621,72 @@ func (s *Store) PutLogEntries(origin string, entries map[uint64][32]byte) error 
 	}
 	return nil
 }
+
+// --- historical audit progress ------------------------------------------------
+
+// backProgressKey namespaces the backwards sweep so it cannot collide with the
+// forward one, which uses the bare origin.
+func backProgressKey(origin string) []byte { return []byte("back|" + origin) }
+
+// BackAuditProgress is the LOWEST epoch the historical sweep has reached, or 0
+// if it has not started.
+//
+// The forward auditor only ever moves from where witnessing began, so "tier B"
+// otherwise means "epochs since we showed up" rather than "this log's published
+// history is construction audited". Sweeping backwards is what closes that gap,
+// and it needs its own high-water mark because it moves the other way.
+func (s *Store) BackAuditProgress(origin string) (int64, error) {
+	var out int64
+	err := s.db.View(func(tx *bolt.Tx) error {
+		if v := tx.Bucket(bucketProgress).Get(backProgressKey(origin)); v != nil {
+			out, _ = strconv.ParseInt(string(v), 10, 64)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("store: back audit progress for %s: %w", origin, err)
+	}
+	return out, nil
+}
+
+func (s *Store) SetBackAuditProgress(origin string, epoch int64) error {
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(bucketProgress).Put(backProgressKey(origin),
+			[]byte(strconv.FormatInt(epoch, 10)))
+	})
+	if err != nil {
+		return fmt.Errorf("store: set back audit progress for %s: %w", origin, err)
+	}
+	return nil
+}
+
+// AuditCoverage counts how many epochs in [from, to] have a settled decision,
+// and how many of those were actually verified.
+//
+// This is what turns "tier B" into a measured claim rather than an asserted
+// one: a log is only construction-audited across its published history if the
+// record says every epoch in that range was considered.
+func (s *Store) AuditCoverage(origin string, from, to int64) (settled, verified int64, err error) {
+	err = s.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket(bucketAudits).Cursor()
+		prefix := []byte(origin + "|")
+		for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+			var a Audit
+			if json.Unmarshal(v, &a) != nil {
+				continue
+			}
+			if a.Epoch < from || a.Epoch > to {
+				continue
+			}
+			settled++
+			if a.Verified {
+				verified++
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("store: audit coverage for %s: %w", origin, err)
+	}
+	return settled, verified, nil
+}
