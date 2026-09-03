@@ -41,7 +41,7 @@ services:
     # The monitoring endpoint is the product. If it stops serving, the witness is
     # cosigning into the void and should be restarted.
     healthcheck:
-      test: ["CMD", "/usr/local/bin/kt-witness", "-config", "/data/witness.json", "-healthcheck"]
+      test: ["CMD", "/usr/local/bin/kt-witness", "-config", "/config/witness.json", "-healthcheck"]
       interval: 60s
       timeout: 10s
       retries: 3
