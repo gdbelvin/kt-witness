@@ -144,7 +144,8 @@ func (a *Auditor) RunHistory(ctx context.Context, r Resolver, budget int64) (*Hi
 			// because the operator cannot retroactively choose what we replay.
 			// Rate 1 is recorded so the published record shows this epoch was
 			// checked outright rather than drawn.
-			Sampled: true, Rate: 1, DecidedAt: time.Now().UTC(), Attempts: 1,
+			Sampled: true, Rate: 1, Strategy: string(StrategyHistory),
+			DecidedAt: time.Now().UTC(), Attempts: 1,
 		}
 
 		out, err := a.Sidecar.Verify(ctx, ref.LogDirectory, epoch, ref.PrevRoot, ref.CurrRoot, a.Timeout)

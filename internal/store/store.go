@@ -251,6 +251,11 @@ type Audit struct {
 	BeaconSig    string `json:"beacon_signature"`
 	BeaconRandom string `json:"beacon_randomness"`
 
+	// Strategy names the rule that chose this epoch: live, backlog or history.
+	// Published so the record says which regime applied, since the sampling
+	// rate alone no longer identifies it.
+	Strategy string `json:"strategy,omitempty"`
+
 	Verified bool `json:"verified"`
 
 	// Attempts counts how many times we tried to verify a sampled epoch. An

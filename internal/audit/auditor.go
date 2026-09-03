@@ -111,7 +111,12 @@ func (a *Auditor) Run(ctx context.Context, r Resolver) error {
 			return fmt.Errorf("audit: %s: %w", origin, err)
 		}
 
-		selected, err := Selected(round.Randomness, epoch, a.Rate)
+		// The tip is audited exhaustively and the backlog is sampled with a
+		// recency bias; both are the same forward pass, so an epoch is
+		// considered exactly once and never revisited. See strategy.go.
+		age := limit - epoch
+		rate, strategy := SelectionRate(age, a.Rate)
+		selected, err := Selected(round.Randomness, epoch, rate)
 		if err != nil {
 			return err
 		}
@@ -120,7 +125,8 @@ func (a *Auditor) Run(ctx context.Context, r Resolver) error {
 			Origin:       origin,
 			Epoch:        epoch,
 			Sampled:      selected,
-			Rate:         a.Rate,
+			Rate:         rate,
+			Strategy:     string(strategy),
 			BeaconRound:  round.Number,
 			BeaconSig:    round.Signature,
 			BeaconRandom: round.Randomness,
