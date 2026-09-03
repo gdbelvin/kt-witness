@@ -64,6 +64,11 @@ type statusView struct {
 	Forks       int
 	ForkOrigins []string
 
+	// Retired lists origins with stored history that are no longer configured.
+	// Kept visible so removing a log is an observable act rather than a silent
+	// one, but excluded from liveness reporting.
+	Retired []string
+
 	// Aggregates — the nerdy part.
 	TotalLogs        int
 	TotalEntries     int64
@@ -145,6 +150,19 @@ func (s *Server) buildStatus() (*statusView, error) {
 	v.Forks = len(forks)
 
 	for _, rec := range recs {
+		// A log that has been removed from the configuration keeps its stored
+		// record — that history is evidence and deleting it would be
+		// destroying our own audit trail — but it must not be reported as a
+		// live origin. Otherwise a log we deliberately stopped witnessing
+		// (retired, rejected, or past its temporal window) ages forever and
+		// trips the staleness alarm that is supposed to mean the witness is
+		// stuck.
+		if len(s.Tiers) > 0 {
+			if _, configured := s.Tiers[rec.Origin]; !configured {
+				v.Retired = append(v.Retired, rec.Origin)
+				continue
+			}
+		}
 		lv := logView{
 			Origin:       rec.Origin,
 			Size:         rec.Size,

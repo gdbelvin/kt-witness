@@ -168,3 +168,33 @@ func TestMetricsEndpoint(t *testing.T) {
 		}
 	}
 }
+
+// A log removed from the configuration keeps its stored history — that is our
+// own audit trail — but must not be reported as live. Otherwise it ages
+// forever and trips the staleness alarm that is supposed to mean the witness
+// itself is stuck.
+func TestUnconfiguredOriginsAreNotReportedAsLive(t *testing.T) {
+	s := testServer(t)
+	var h tlog.Hash
+	if err := s.Store.CompareAndSet(nil, &store.Record{
+		Origin: "retired.example/log", Size: 7, Hash: h,
+		Cosigned: []byte("x"), WitnessedAt: time.Now().Add(-72 * time.Hour).UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	v, err := s.buildStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, lg := range v.Logs {
+		if lg.Origin == "retired.example/log" {
+			t.Fatal("an unconfigured origin was reported as a live log")
+		}
+	}
+	if len(v.Retired) != 1 || v.Retired[0] != "retired.example/log" {
+		t.Errorf("retired origins should still be listed, got %v", v.Retired)
+	}
+	if v.TotalLogs != 1 {
+		t.Errorf("TotalLogs counted a retired origin: %d", v.TotalLogs)
+	}
+}
