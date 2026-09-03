@@ -62,6 +62,16 @@ type config struct {
 
 	// Audit configures tier B: replaying construction proofs for a sampled
 	// subset of epochs. Disabled unless sidecar_path is set.
+	// ProtonAudit runs Proton's construction audit inside this process. It
+	// retains a ~13.6 GB tree between epochs, which is what makes each step a
+	// 3 MB job rather than a 13.6 GB one. Empty dir disables it.
+	ProtonAudit struct {
+		Dir          string `json:"dir"`
+		DumpBase     string `json:"dump_base"`
+		ShardDepth   int    `json:"shard_depth"`
+		MinFreeBytes uint64 `json:"min_free_bytes"`
+	} `json:"proton_audit"`
+
 	Audit struct {
 		SidecarPath       string  `json:"sidecar_path"`
 		SampleRate        float64 `json:"sample_rate"`
@@ -426,6 +436,10 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 		"poll", pollInterval.String(), "refresh", refreshInterval.String(), "vkey", vkey)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+
+	if cfg.ProtonAudit.Dir != "" {
+		startProtonAudit(ctx, cfg, sources, db, log)
+	}
 	defer stop()
 
 	srv := &http.Server{
@@ -796,5 +810,113 @@ func recordSearch(db *store.Store, src source.Source, log *slog.Logger) {
 		VerifiedAt: time.Now().Unix(),
 	}); err != nil {
 		log.Warn("persisting verified search", "origin", src.Origin(), "err", err)
+	}
+}
+
+// startProtonAudit runs Proton's construction audit in the background.
+//
+// Deliberately its own goroutine at a slow cadence. One step is about nineteen
+// minutes of CPU against a four-hour epoch, so it fits — but it must never sit
+// in the path of the witness loop, which has to stay responsive to catch
+// equivocation. A construction audit is thoroughness; equivocation detection is
+// urgency, and urgency wins.
+func startProtonAudit(ctx context.Context, cfg *config, sources []source.Source, db *store.Store, log *slog.Logger) {
+	var origin string
+	for _, src := range sources {
+		if src.Origin() == source.OriginProton {
+			origin = src.Origin()
+		}
+	}
+	if origin == "" {
+		log.Warn("proton audit configured but proton is not witnessed")
+		return
+	}
+
+	api := "https://api.protonmail.ch"
+	for _, l := range cfg.Logs {
+		if l.Origin == origin && l.APIBase != "" {
+			api = l.APIBase
+		}
+	}
+	dumps := cfg.ProtonAudit.DumpBase
+	if dumps == "" {
+		dumps = "https://proton.me/kt"
+	}
+
+	a := &proton.IncrementalAuditor{
+		Dir: cfg.ProtonAudit.Dir, APIBase: api, DumpBase: dumps,
+		ShardDepth: cfg.ProtonAudit.ShardDepth, MinFreeBytes: cfg.ProtonAudit.MinFreeBytes,
+	}
+
+	go func() {
+		// Proton publishes roughly every four hours; checking every thirty
+		// minutes catches a new epoch promptly without polling hard.
+		t := time.NewTicker(30 * time.Minute)
+		defer t.Stop()
+		for {
+			runProtonStep(ctx, a, db, origin, log)
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
+}
+
+func runProtonStep(ctx context.Context, a *proton.IncrementalAuditor, db *store.Store, origin string, log *slog.Logger) {
+	base, err := a.Base()
+	if err != nil {
+		log.Warn("proton audit: reading retained tree", "err", err)
+		return
+	}
+	rec, err := db.Get(origin)
+	if err != nil || rec == nil {
+		return // nothing witnessed yet
+	}
+	tip := rec.Size
+
+	if base == 0 {
+		// Cold start: ~13.6 GB and about eight minutes, once. Everything about
+		// this design exists to avoid needing it again.
+		log.Info("proton audit: bootstrapping retained tree — this is a one-off "+
+			"~13.6 GB download", "epoch", tip)
+		if err := a.Bootstrap(ctx, tip); err != nil {
+			log.Warn("proton audit: bootstrap", "epoch", tip, "err", err)
+		}
+		return
+	}
+	if base >= tip {
+		return // already caught up
+	}
+
+	next := base + 1
+	meta, err := a.FetchEpochMeta(ctx, next)
+	if err != nil {
+		log.Warn("proton audit: epoch metadata", "epoch", next, "err", err)
+		return
+	}
+
+	res, err := a.Step(ctx, base, next, meta)
+	if err != nil {
+		// A tree-hash mismatch is conclusive and the evidence is retained on
+		// disk, but it is reported rather than used to poison the log here: the
+		// witness core owns that decision, and a human should see this first.
+		log.Error("PROTON CONSTRUCTION AUDIT FAILED — the published diff does not "+
+			"carry one epoch into the next; evidence retained on disk",
+			"from", base, "to", next, "err", err)
+		return
+	}
+
+	log.Info("proton epoch construction audited",
+		"from", res.From, "to", res.To, "leaves", res.Leaves,
+		"added", res.Stats.Added, "removed", res.Stats.Removed,
+		"root", res.ComputedRoot[:16], "took", res.Elapsed.Round(time.Second))
+
+	if res.Removals != nil && !res.Removals.Clean() {
+		log.Error("PROTON REMOVALS NOT EXPLAINED BY THE RETENTION WINDOW — "+
+			"withholding judgement, not accusing; the window rule is inferred "+
+			"from behaviour rather than promised",
+			"epoch", res.To, "summary", res.Removals.Summary())
 	}
 }

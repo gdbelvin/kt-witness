@@ -7,6 +7,9 @@
     "witness.stagemole.eu+67f7aea0+BEqSG3yu9YrmcM3BHvQYTxwFj3uSWakQepafafpUqklv"
   ],
   "export_dir": "/data/public",
+  "proton_audit": {
+    "dir": "/data/proton-tree"
+  },
   "poll_interval": "60s",
   "max_sign_delay": "120s",
   "refresh_interval": "1h",

@@ -68,10 +68,17 @@ reasoning for most of these is in [NOTES.md](NOTES.md).
       `kt-proton-audit -from 6708 -epoch 6709` applies the published 3 MB diff to
       epoch 6708's tree and reproduces 6709's signed hash exactly. Merge 37 s,
       rebuild 18m45s.
-- [ ] **Run Proton tier B inside the witness loop.** The audit works as a
-      command; the witness process does not yet run it every epoch. Needs the
-      13.6 GB tree kept on disk between epochs and a scheduler that tolerates a
-      ~19-minute job against a ~4-hour epoch cadence.
+- [x] **Run Proton tier B inside the witness loop.** Done —
+      `proton.IncrementalAuditor` retains the tree between epochs so each step
+      is a 3 MB diff rather than a 13.6 GB download, and the witness runs it on
+      its own goroutine at a 30-minute cadence against Proton's ~4-hour epochs.
+      Safety is in the file handling: a partial download or interrupted merge is
+      never picked up as a tree (it would rebuild to a wrong root and read as
+      Proton misbehaving), the old base is removed only once its successor is in
+      place, and an audit refuses to start below a free-space floor — filling
+      the volume would stop the witness, which is worse than an unaudited epoch.
+      A mismatch retains the evidence on disk and reports; it does not poison
+      the log without a human.
 - [x] **Judge Proton's removals.** Done — a removal is explained when its
       `minEpochID` predates the removing epoch's published `StartEpochID`.
       Verified live across five epochs and 45,816 removals: all explained, with
