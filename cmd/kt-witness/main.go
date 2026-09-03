@@ -94,6 +94,13 @@ type logConfig struct {
 	VKey          string `json:"vkey"`
 	VerifyEntries bool   `json:"verify_entries"`
 
+	// rekor: PEM public key, as served at /api/v1/log/publicKey, plus the
+	// SIGNER name — which for Rekor is not the origin line (the origin carries
+	// a tree id suffix).
+	SignerName     string `json:"signer_name"`
+	CheckpointPath string `json:"checkpoint_path"`
+	PublicKeyPEM   string `json:"public_key_pem"`
+
 	// staticct: the log's DER SubjectPublicKeyInfo, base64, exactly as
 	// published in the CT log list. Origin must be the submission prefix
 	// without scheme; BaseURL is the monitoring prefix.

@@ -215,10 +215,19 @@ is a decision rather than an implementation.
       is refused as a `ForkError`.
       Configured at tier A on purpose: at that size a first-observation entry
       sweep would read ~242k data tiles.
-- [ ] **Sigstore Rekor.** `/api/v2/checkpoint` answers 200 and v1 serves a
-      signed tree head; verify one through the adapter and it is likely
-      configuration. Witnessing Rekor covers npm and PyPI attestations
-      transitively.
+- [~] **Sigstore Rekor.** Verifier built and validated against production
+      (`internal/rekor`): 2,571,226,639 entries, with an altered tree size
+      correctly refused. Rekor's scheme is its own — key hash is the bare
+      `SHA-256(SPKI)[:4]` with no name or algorithm byte, and the signature is
+      DER ECDSA over the note body *including* its trailing newline.
+      **Not wired as an origin, because production Rekor cannot be witnessed
+      yet**: v1 wraps its note in a JSON envelope and serves no tlog-tiles, so
+      there is nothing to compute a consistency proof from — it would be a
+      tier-S signed head, which this project does not ship. Rekor v2 does serve
+      a bare note and is tile-backed, but only on `sigstage.dev`; witnessing a
+      staging log would pollute the published surface for the same reason the
+      `test.*` CT namespaces were excluded.
+      Wire it the day a production v2 endpoint exists. The verifier is done.
 - [ ] **sigsum.** Its own protocol, and it already has a witness network —
       joining is probably worth more than reimplementing.
 - [ ] **IETF keytrans.** Revisit when a public deployment exists. The draft
