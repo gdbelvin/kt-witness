@@ -73,6 +73,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/audits", s.audits)
 	mux.HandleFunc("/history", s.history)
 	mux.HandleFunc("/applications", s.applications)
+	mux.HandleFunc("/log", s.logPage)
+	mux.HandleFunc("/gossip", s.gossip)
 	return mux
 }
 
@@ -149,8 +151,37 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	}
 	forks, err := s.Store.Forks()
 	if err == nil && len(forks) > 0 {
-		fmt.Fprintf(w, "\n!! %d FORK(S) RECORDED — see /forks\n", len(forks))
+		// A withdrawn finding is not a live one. Banner only what still stands,
+		// and say separately that something was retracted — a reader who sees
+		// neither cannot tell a clean witness from one that quietly buried a
+		// mistake.
+		retracted := s.retractedOrigins()
+		live := 0
+		for _, f := range forks {
+			if !retracted[f.Origin] {
+				live++
+			}
+		}
+		if live > 0 {
+			fmt.Fprintf(w, "\n!! %d FORK(S) RECORDED — see /forks\n", live)
+		}
+		if n := len(forks) - live; n > 0 {
+			fmt.Fprintf(w, "\n%d withdrawn finding(s) — see /forks\n", n)
+		}
 	}
+}
+
+// retractedOrigins is the set of logs whose fork finding has been withdrawn.
+func (s *Server) retractedOrigins() map[string]bool {
+	out := map[string]bool{}
+	rs, err := s.Store.Retractions()
+	if err != nil {
+		return out
+	}
+	for _, r := range rs {
+		out[r.Origin] = true
+	}
+	return out
 }
 
 // forks publishes recorded misbehaviour evidence. Disclosure is out-of-band by
@@ -166,7 +197,22 @@ func (s *Server) forks(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "no forks recorded")
 		return
 	}
+	// Retractions are shown against the finding they withdraw, not on a separate
+	// page. An accusation and its withdrawal have to travel together: anyone
+	// reading this is reading it because they want to know whether a log
+	// misbehaved, and showing the claim without the retraction would leave them
+	// believing something we no longer assert.
+	byOrigin := map[string]*store.Retraction{}
+	if rs, err := s.Store.Retractions(); err == nil {
+		for _, r := range rs {
+			byOrigin[r.Origin] = r
+		}
+	}
 	for _, f := range forks {
+		if r := byOrigin[f.Origin]; r != nil {
+			fmt.Fprintf(w, "*** WITHDRAWN %s ***\nThis finding was retracted and is NOT an accusation against %s.\nreason: %s\n\nThe original evidence is kept below so the reversal can be checked as\nreadily as the claim.\n\n",
+				r.RetractedAt.Format("2006-01-02T15:04:05Z"), f.Origin, r.Reason)
+		}
 		fmt.Fprintf(w, "origin: %s\ndetected: %s\nreason: %s\n\n--- previously witnessed ---\n%s\n--- conflicting ---\n%s\n\n",
 			f.Origin, f.DetectedAt.Format("2006-01-02T15:04:05Z"), f.Reason, f.PrevSigned, f.NextSigned)
 	}

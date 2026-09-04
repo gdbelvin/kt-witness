@@ -1,0 +1,72 @@
+# Public HTTPS for the witness.
+#
+# Append to /etc/caddy/Caddyfile on docker-services and reload. Deliberately
+# kept as a separate file in the repository rather than applied automatically:
+# adding this makes the witness reachable from the internet, and that is a
+# decision about reliance, not a deployment step.
+#
+# ── Why HTTP-01 and not DNS-01 ────────────────────────────────────────────────
+#
+# gdbsecurity.com is registered at Squarespace, which offers no DNS API, so a
+# DNS-01 challenge cannot be automated: every renewal would need a TXT record
+# added by hand, and a certificate that renews only when someone remembers is a
+# certificate that expires. HTTP-01 needs no API at all — only inbound port 80 —
+# which is why it is the right choice here despite being the less fashionable
+# one.
+#
+# The alternative, if inbound ports are ever unavailable, is acme-dns: a one-off
+# CNAME from _acme-challenge.witness.kt.gdbsecurity.com to a service that does
+# have an API. That keeps automation without moving the zone. It is more moving
+# parts, so it is the fallback rather than the plan.
+#
+# ── What has to be true first ─────────────────────────────────────────────────
+#
+#  1. A record: witness.kt.gdbsecurity.com -> the site's public IP.
+#     Residential addresses move. If this one is not static, point the record at
+#     a dynamic-DNS name instead, or the witness silently becomes unreachable
+#     and its cosignatures stop being fetchable — which looks, from outside,
+#     exactly like a witness that has stopped working.
+#
+#  2. Inbound TCP 80 and 443 forwarded to this host (192.168.0.10).
+#     Port 80 is required for the ACME challenge even though nothing is served
+#     over it; Caddy redirects it to HTTPS once the certificate exists.
+#
+# Verify both before reloading, because a name that does not resolve makes Caddy
+# retry issuance in a loop and bury the real error in noise:
+#
+#     dig +short witness.kt.gdbsecurity.com
+#     curl -sS -o /dev/null -w '%{http_code}\n' http://witness.kt.gdbsecurity.com/
+#
+# ── The site ──────────────────────────────────────────────────────────────────
+
+witness.kt.gdbsecurity.com {
+	# The monitoring endpoint is the product: other witnesses and C2SP tooling
+	# fetch cosigned checkpoints from here, so it is served to everyone,
+	# unauthenticated, exactly as the plain-text contract expects.
+	reverse_proxy 127.0.0.1:8088
+
+	encode zstd gzip
+
+	header {
+		# A witness serves signed data whose authority comes from the
+		# signatures, not from the transport — but HSTS still stops a
+		# downgrade being used to feed somebody a stale view over plain HTTP.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		# The pages carry no third-party anything. Saying so makes that
+		# checkable rather than merely true.
+		Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; form-action 'none'; frame-ancestors 'none'; base-uri 'none'"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/witness.log {
+			roll_size 20mb
+			roll_keep 5
+		}
+		# Checkpoint fetches are the interesting traffic and they are frequent;
+		# logging every one at INFO would drown the errors that matter.
+		level WARN
+	}
+}

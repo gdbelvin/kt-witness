@@ -49,6 +49,63 @@ mkdir -p data
 sudo chown -R 65532:65532 data      # the image runs as distroless nonroot
 ```
 
+
+## Publishing the witness over HTTPS
+
+The witness identity is `witness.kt.gdbsecurity.com`, and that name is inside
+every cosignature it has issued. Serving it publicly is therefore not a
+deployment step but a decision: it invites reliance. Keep it behind Tailscale
+until the operating record justifies otherwise — the false fork finding against
+the Go checksum database is the kind of thing that argues for waiting.
+
+When it is time, `deploy/caddy/witness.caddy` is the site block. Caddy already
+runs on `docker-services` (every existing site uses a local self-signed cert, so
+this will be the first certificate it obtains from a public CA).
+
+### Why HTTP-01
+
+`gdbsecurity.com` is registered at Squarespace, which has **no DNS API**. A
+DNS-01 challenge would need a TXT record placed by hand at every renewal, and a
+certificate that renews only when someone remembers is a certificate that
+expires. HTTP-01 needs no API — only inbound port 80.
+
+If inbound ports ever become unavailable, the fallback is acme-dns: one CNAME
+from `_acme-challenge.witness.kt.gdbsecurity.com` to a service that does have an
+API, which keeps renewal automatic without moving the zone off Squarespace.
+
+### Two things only you can do
+
+1. **Squarespace → DNS → Custom Records**: `A` record for host `witness.kt`
+   pointing at the site's public IP.
+
+   Check whether that address is static first. A residential IP that moves
+   leaves the record pointing nowhere, and from outside that is
+   indistinguishable from a witness that has stopped working. If it is dynamic,
+   point the record at a dynamic-DNS name instead.
+
+2. **Router**: forward inbound TCP 80 and 443 to `192.168.0.10`. Port 80 is
+   needed for the ACME challenge even though nothing is served over it.
+
+### Then
+
+```sh
+# on docker-services, verify BOTH before reloading — an unresolvable name makes
+# Caddy retry issuance in a loop and buries the real error
+dig +short witness.kt.gdbsecurity.com
+curl -sS -o /dev/null -w '%{http_code}\n' http://witness.kt.gdbsecurity.com/
+
+cat /path/to/repo/deploy/caddy/witness.caddy | sudo tee -a /etc/caddy/Caddyfile
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+
+# confirm a real certificate, not a self-signed one
+curl -sS -o /dev/null -w '%{http_code} %{ssl_verify_result}\n' https://witness.kt.gdbsecurity.com/
+```
+
+`ssl_verify_result 0` means the chain verified. Anything else means the
+certificate did not issue, and the witness is now publicly advertised without
+working TLS — worse than not being published at all.
+
 ## Shipping the source without git
 
 The server is not a git checkout, so the source arrives by tar over ssh. There

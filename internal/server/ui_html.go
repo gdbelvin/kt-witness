@@ -10,67 +10,7 @@ const uiHTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{{.WitnessName}} — transparency log witness</title>
-<style>
-:root{
-  --bg:#0d1312; --panel:#141c1a; --sunken:#101817;
-  --ink:#e7eeeb; --muted:#93a29e; --faint:#6f7d79;
-  --rule:#243230; --rule2:#32433f;
-  --ok:#4fbfa3; --warn:#d9a05b; --bad:#e2686b;
-  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
-  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-}
-@media (prefers-color-scheme:light){
-  :root{--bg:#f6f8f7;--panel:#fff;--sunken:#eef2f0;--ink:#17211f;--muted:#5c6b67;
-        --faint:#8a9995;--rule:#dce3e1;--rule2:#c3cecb;--ok:#0f6e5c;--warn:#8a5210;--bad:#a8322f;}
-}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
-     font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
-.wrap{max-width:1180px;margin:0 auto;padding:2rem 1.1rem 5rem}
-a{color:var(--ok)}
-h1{font-size:1.5rem;margin:0 0 .2rem;letter-spacing:-.01em}
-h2{font-size:.78rem;text-transform:uppercase;letter-spacing:.11em;color:var(--muted);
-   margin:2.4rem 0 .7rem;font-weight:600}
-.sub{color:var(--muted);margin:0 0 1.6rem;font-size:.92rem}
-code,.m{font-family:var(--mono);font-variant-numeric:tabular-nums}
-
-header{border-bottom:1px solid var(--rule);padding-bottom:1.2rem;margin-bottom:.4rem}
-.key{display:inline-block;background:var(--sunken);border:1px solid var(--rule);
-     padding:.42rem .6rem;border-radius:4px;font-family:var(--mono);font-size:.78rem;
-     word-break:break-all;margin-top:.5rem}
-.klabel{font-size:.7rem;color:var(--faint);text-transform:uppercase;letter-spacing:.09em}
-
-.banner{border-radius:5px;padding:.85rem 1rem;margin:1.2rem 0;font-size:.92rem;
-        border:1px solid var(--rule);background:var(--panel)}
-.banner.bad{border-color:var(--bad);background:color-mix(in srgb,var(--bad) 12%,var(--panel))}
-.banner.ok{border-left:3px solid var(--ok)}
-
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
-      background:var(--rule);border:1px solid var(--rule);border-radius:5px;overflow:hidden}
-.cell{background:var(--panel);padding:.85rem .9rem}
-.cell .v{font-family:var(--mono);font-size:1.3rem;font-weight:600;color:var(--ok);
-         display:block;line-height:1.15;letter-spacing:-.02em}
-.cell .k{font-size:.72rem;color:var(--muted);margin-top:.28rem;display:block}
-
-.tablewrap{overflow-x:auto;border:1px solid var(--rule);border-radius:5px;background:var(--panel)}
-table{border-collapse:collapse;width:100%;font-size:.85rem}
-th{text-align:left;font-size:.68rem;text-transform:uppercase;letter-spacing:.08em;
-   color:var(--muted);font-weight:600;padding:.62rem .75rem;border-bottom:1px solid var(--rule2);
-   white-space:nowrap}
-td{padding:.58rem .75rem;border-bottom:1px solid var(--rule);vertical-align:top}
-tr:last-child td{border-bottom:none}
-td.n,th.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
-.origin{font-family:var(--mono);font-size:.82rem;word-break:break-all}
-.root{font-family:var(--mono);font-size:.74rem;color:var(--faint)}
-.pill{display:inline-block;font-size:.66rem;padding:.1rem .38rem;border-radius:3px;
-      font-family:var(--mono);letter-spacing:.03em}
-.pill.ok{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
-.pill.warn{background:color-mix(in srgb,var(--warn) 20%,transparent);color:var(--warn)}
-.pill.bad{background:color-mix(in srgb,var(--bad) 20%,transparent);color:var(--bad)}
-footer{margin-top:3rem;padding-top:1.1rem;border-top:1px solid var(--rule);
-       color:var(--faint);font-size:.8rem}
-.note{color:var(--muted);font-size:.85rem;margin:.5rem 0 0}
-</style></head><body><div class="wrap">
+<style>` + uiCSS + `</style></head><body><div class="wrap">
 
 <header>
   <h1>{{.WitnessName}}</h1>
@@ -118,7 +58,7 @@ footer{margin-top:3rem;padding-top:1.1rem;border-top:1px solid var(--rule);
   {{range .Logs}}
   <tr>
     <td>
-      <span class="origin">{{.Origin}}</span>
+      <a class="origin" href="/log?origin={{.Origin}}">{{.Origin}}</a>
       {{if .Forked}} <span class="pill bad">FORKED</span>{{end}}
       {{if .Stale}} <span class="pill warn">STALE</span>{{end}}
       {{if .History}}<div class="root">history {{comma .History.From}}–{{comma .History.To}} · {{commai .History.Epochs}} epochs · {{commai .History.Gaps}} gaps{{if .HistoryTotal}} · construction audited {{comma .HistoryAudited}}/{{comma .HistoryTotal}}{{end}}</div>{{end}}
@@ -189,6 +129,8 @@ footer{margin-top:3rem;padding-top:1.1rem;border-top:1px solid var(--rule);
   <tr><td><code>/history</code></td><td>what backfill established about published history</td></tr>
   <tr><td><code>/audits</code></td><td>every sampling decision, with the beacon evidence to recompute it</td></tr>
   <tr><td><code>/applications</code></td><td>observed per-application heads (never cosigned)</td></tr>
+  <tr><td><code>/gossip</code></td><td>what other witnesses say, and what comparison can and cannot prove</td></tr>
+  <tr><td><code>/log?origin=…</code></td><td>per-log detail: coverage, traffic, audits, peer views</td></tr>
   <tr><td><code>/forks</code></td><td>misbehaviour evidence, verbatim</td></tr>
   </tbody>
 </table></div>
@@ -202,3 +144,71 @@ footer{margin-top:3rem;padding-top:1.1rem;border-top:1px solid var(--rule);
 </footer>
 
 </div></body></html>`
+
+// uiCSS is the single stylesheet every page shares.
+//
+// Extracted so the per-log and gossip pages look like the status page
+// without carrying a copy of it. Still dependency-free: no CDN, no fonts,
+// no framework. A witness that cannot render itself without fetching code
+// from a third party is a witness with an extra thing to trust.
+const uiCSS = `
+:root{
+  --bg:#0d1312; --panel:#141c1a; --sunken:#101817;
+  --ink:#e7eeeb; --muted:#93a29e; --faint:#6f7d79;
+  --rule:#243230; --rule2:#32433f;
+  --ok:#4fbfa3; --warn:#d9a05b; --bad:#e2686b;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+@media (prefers-color-scheme:light){
+  :root{--bg:#f6f8f7;--panel:#fff;--sunken:#eef2f0;--ink:#17211f;--muted:#5c6b67;
+        --faint:#8a9995;--rule:#dce3e1;--rule2:#c3cecb;--ok:#0f6e5c;--warn:#8a5210;--bad:#a8322f;}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+     font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:2rem 1.1rem 5rem}
+a{color:var(--ok)}
+h1{font-size:1.5rem;margin:0 0 .2rem;letter-spacing:-.01em}
+h2{font-size:.78rem;text-transform:uppercase;letter-spacing:.11em;color:var(--muted);
+   margin:2.4rem 0 .7rem;font-weight:600}
+.sub{color:var(--muted);margin:0 0 1.6rem;font-size:.92rem}
+code,.m{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+header{border-bottom:1px solid var(--rule);padding-bottom:1.2rem;margin-bottom:.4rem}
+.key{display:inline-block;background:var(--sunken);border:1px solid var(--rule);
+     padding:.42rem .6rem;border-radius:4px;font-family:var(--mono);font-size:.78rem;
+     word-break:break-all;margin-top:.5rem}
+.klabel{font-size:.7rem;color:var(--faint);text-transform:uppercase;letter-spacing:.09em}
+
+.banner{border-radius:5px;padding:.85rem 1rem;margin:1.2rem 0;font-size:.92rem;
+        border:1px solid var(--rule);background:var(--panel)}
+.banner.bad{border-color:var(--bad);background:color-mix(in srgb,var(--bad) 12%,var(--panel))}
+.banner.ok{border-left:3px solid var(--ok)}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
+      background:var(--rule);border:1px solid var(--rule);border-radius:5px;overflow:hidden}
+.cell{background:var(--panel);padding:.85rem .9rem}
+.cell .v{font-family:var(--mono);font-size:1.3rem;font-weight:600;color:var(--ok);
+         display:block;line-height:1.15;letter-spacing:-.02em}
+.cell .k{font-size:.72rem;color:var(--muted);margin-top:.28rem;display:block}
+
+.tablewrap{overflow-x:auto;border:1px solid var(--rule);border-radius:5px;background:var(--panel)}
+table{border-collapse:collapse;width:100%;font-size:.85rem}
+th{text-align:left;font-size:.68rem;text-transform:uppercase;letter-spacing:.08em;
+   color:var(--muted);font-weight:600;padding:.62rem .75rem;border-bottom:1px solid var(--rule2);
+   white-space:nowrap}
+td{padding:.58rem .75rem;border-bottom:1px solid var(--rule);vertical-align:top}
+tr:last-child td{border-bottom:none}
+td.n,th.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.origin{font-family:var(--mono);font-size:.82rem;word-break:break-all}
+.root{font-family:var(--mono);font-size:.74rem;color:var(--faint)}
+.pill{display:inline-block;font-size:.66rem;padding:.1rem .38rem;border-radius:3px;
+      font-family:var(--mono);letter-spacing:.03em}
+.pill.ok{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.pill.warn{background:color-mix(in srgb,var(--warn) 20%,transparent);color:var(--warn)}
+.pill.bad{background:color-mix(in srgb,var(--bad) 20%,transparent);color:var(--bad)}
+footer{margin-top:3rem;padding-top:1.1rem;border-top:1px solid var(--rule);
+       color:var(--faint);font-size:.8rem}
+.note{color:var(--muted);font-size:.85rem;margin:.5rem 0 0}
+`
