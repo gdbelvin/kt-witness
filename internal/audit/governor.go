@@ -40,14 +40,21 @@ import (
 // Watching only the second could not separate our load from the neighbours'.
 // The permit count is driven by whichever of the two is more constraining.
 type Governor struct {
-	// TargetCores is how much CPU the backlog sweep should aim to use.
-	TargetCores float64
+	// ReserveCores is how many cores to leave free. The target is derived from
+	// the machine: aim to drive total usage to (cores - reserve).
+	//
+	// Expressed as a reservation rather than a target because a target is a
+	// statement about hardware that will change, and this project has already
+	// been bitten twice by exactly that — a fixed per-round budget chosen for a
+	// four-core box, and then a fixed five-core target on a sixteen-core one.
+	// "Leave one core free" stays true across both.
+	//
+	// Defaults to 1.
+	ReserveCores float64
 
-	// MachineLimit is the fraction of the host's cores that may be busy in
-	// total before the sweep yields regardless of its own usage. Defaults to
-	// 0.85: leaving headroom is what stops a background task from being the
-	// reason something interactive stutters.
-	MachineLimit float64
+	// TargetCores optionally overrides the derived target, for an operator who
+	// wants to use less than the machine allows. Zero means derive.
+	TargetCores float64
 
 	// MaxConcurrent caps permits however much headroom appears. The sidecar
 	// pool is the real ceiling — permits above it buy nothing and would let the
@@ -63,8 +70,9 @@ type Governor struct {
 }
 
 const (
-	// defaultMachineLimit leaves ~15% of the host free.
-	defaultMachineLimit = 0.85
+	// defaultReserveCores leaves one core for everything else on the box. This
+	// host also runs the home automation and a baby monitor.
+	defaultReserveCores = 1
 
 	// governorInterval is how often the loop measures and corrects. Long enough
 	// that a single 25-second verification does not dominate a sample, short
@@ -77,11 +85,33 @@ const (
 	gain = 0.35
 )
 
-func (g *Governor) machineLimit() float64 {
-	if g.MachineLimit > 0 {
-		return g.MachineLimit
+func (g *Governor) reserve() float64 {
+	if g.ReserveCores > 0 {
+		return g.ReserveCores
 	}
-	return defaultMachineLimit
+	return defaultReserveCores
+}
+
+// BudgetFor exposes the derived budget for logging.
+func (g *Governor) BudgetFor(totalCores float64) float64 { return g.budget(totalCores) }
+
+// budget returns the usage ceiling for this machine, in cores.
+//
+// The same figure bounds both our own usage and the machine's total. They
+// coincide deliberately: machine usage always includes ours, so a single
+// ceiling means the two constraints can never contradict each other. The
+// previous shape — a self target in cores and a machine limit as a fraction —
+// could be configured so the machine term bound first and silently starved the
+// sweep, which is what it did.
+func (g *Governor) budget(totalCores float64) float64 {
+	if g.TargetCores > 0 {
+		return g.TargetCores
+	}
+	b := totalCores - g.reserve()
+	if b < 1 {
+		b = 1 // a one-core box still gets to make progress
+	}
+	return b
 }
 
 // Run measures and adjusts until ctx is done.
@@ -146,9 +176,12 @@ func (g *Governor) step(sample cpuload.Sample) {
 		return
 	}
 
-	// Two constraints; the tighter one wins.
-	selfError := g.TargetCores - sample.SelfCores
-	headroom := sample.Headroom(g.machineLimit())
+	// Two constraints against one budget; the tighter one wins. Machine usage
+	// includes ours, so in an otherwise idle box they coincide and in a busy one
+	// the machine term binds first — which is the yielding behaviour wanted.
+	budget := g.budget(sample.TotalCores)
+	selfError := budget - sample.SelfCores
+	headroom := budget - sample.MachineCores
 	err := selfError
 	if headroom < err {
 		err = headroom

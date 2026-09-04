@@ -55,7 +55,13 @@ const (
 	MNetRequests = "kt_witness_network_requests_total"
 
 	// Counters maintained by the witness loop rather than derived from storage.
-	MRounds              = "kt_witness_rounds_total"
+	MRounds            = "kt_witness_rounds_total"
+	MAuditPermits      = "kt_witness_audit_permits"
+	MAuditInFlight     = "kt_witness_audit_in_flight"
+	MCPUSelfCores      = "kt_witness_cpu_self_cores"
+	MCPUMachineCores   = "kt_witness_cpu_machine_cores"
+	MCPUSampleComplete = "kt_witness_cpu_sample_complete"
+
 	MCosigned            = "kt_witness_cosignatures_total"
 	MWithheld            = "kt_witness_withheld_total"
 	MConsecutiveWithheld = "kt_witness_consecutive_withheld"
@@ -102,6 +108,11 @@ func Init(version string) {
 	d(MDiskUsedRatio, metrics.Gauge, "Fraction of the database filesystem in use, 0 to 1. A witness that runs out of disk stops witnessing.")
 
 	d(MRounds, metrics.Counter, "Witness rounds completed.")
+	d(MAuditPermits, metrics.Gauge, "Concurrent backlog verifications the CPU governor currently allows. Zero means the sweep is yielding, which is correct on a busy machine and a stall if it persists on an idle one.")
+	d(MAuditInFlight, metrics.Gauge, "Backlog verifications running right now.")
+	d(MCPUSelfCores, metrics.Gauge, "CPU cores this container is using, from cgroup v2 cpu.stat.")
+	d(MCPUMachineCores, metrics.Gauge, "CPU cores busy across the whole host, from /proc/stat, which is not namespaced inside a container.")
+	d(MCPUSampleComplete, metrics.Gauge, "1 if the governor could read both CPU figures. At 0 it is pacing blind and holds a conservative single permit.")
 	d(MCosigned, metrics.Counter, "Cosignatures issued, by origin.")
 	d(MConsecutiveWithheld, metrics.Gauge, "Consecutive rounds a log has failed to verify. Resets to 0 on success. Alert above ~20: withholding is the enforcement mechanism, so occasional is healthy and sustained is not.")
 	d(MWithheld, metrics.Counter, "Cosignatures withheld because something could not be verified. Withholding is the enforcement mechanism, so a steady rate for one origin is the signal to look at.")

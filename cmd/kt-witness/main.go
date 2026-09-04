@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -86,14 +87,22 @@ type config struct {
 		// about how fast auditing ought to go. Defaults to 1.
 		SidecarWorkers int `json:"sidecar_workers"`
 
-		// TargetCores is how much CPU the BACKLOG sweep should aim to use. The
-		// live sweep is never paced. Zero disables pacing entirely and falls
-		// back to the fixed per-round budget.
+		// ReserveCores is how many cores to leave free for everything else. The
+		// backlog sweep's budget is derived from the machine: it drives total
+		// usage toward (cores - reserve). Defaults to 1 when pacing is on.
+		//
+		// Derived rather than stated because a core count is a fact about
+		// hardware that changes, and a stale one has already cost this project
+		// twice.
+		ReserveCores float64 `json:"reserve_cores"`
+
+		// TargetCores optionally overrides the derived budget, for an operator
+		// who wants to use less than the machine allows.
 		TargetCores float64 `json:"target_cores"`
 
-		// MachineLimit is the fraction of the host's cores that may be busy in
-		// total before the backlog sweep yields regardless of its own usage.
-		MachineLimit float64 `json:"machine_limit"`
+		// Pace enables CPU pacing of the backlog sweep. Live auditing is never
+		// paced.
+		Pace bool `json:"pace_backlog"`
 
 		SampleRate        float64 `json:"sample_rate"`
 		Interval          string  `json:"interval"`
@@ -490,10 +499,10 @@ func run(cfg *config, log *slog.Logger, once, backfill bool, retractOrigin, retr
 		// cores, and after more cores arrived it left five of them idle while
 		// the backlog still measured months.
 		var governor *audit.Governor
-		if cfg.Audit.TargetCores > 0 {
+		if cfg.Audit.Pace || cfg.Audit.TargetCores > 0 || cfg.Audit.ReserveCores > 0 {
 			governor = &audit.Governor{
+				ReserveCores:  cfg.Audit.ReserveCores,
 				TargetCores:   cfg.Audit.TargetCores,
-				MachineLimit:  cfg.Audit.MachineLimit,
 				MaxConcurrent: workers,
 				Log:           log,
 			}
@@ -635,8 +644,9 @@ func run(cfg *config, log *slog.Logger, once, backfill bool, retractOrigin, retr
 	if auditor != nil && auditor.Governor != nil {
 		go auditor.Governor.Run(ctx)
 		log.Info("backlog sweep paced against CPU",
-			"target_cores", cfg.Audit.TargetCores,
-			"machine_limit", auditor.Governor.MachineLimit,
+			"cores_detected", runtime.NumCPU(),
+			"budget_cores", auditor.Governor.BudgetFor(float64(runtime.NumCPU())),
+			"reserve_cores", cfg.Audit.ReserveCores,
 			"max_concurrent", cfg.Audit.SidecarWorkers,
 			"note", "live auditing is never paced")
 	}

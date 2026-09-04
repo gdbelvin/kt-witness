@@ -135,13 +135,36 @@ func (r *Registry) Write(w io.Writer) error {
 	}
 	r.mu.Unlock()
 
+	// Anything Set but never Described still gets rendered, after the declared
+	// metrics and without a TYPE line.
+	//
+	// It used to be dropped silently. A whole feedback controller published its
+	// state for two deploys and appeared nowhere, because Set stores into the
+	// map and Write only walks the declared order — no error, no warning, just
+	// absence. Undeclared output is untidy; invisible output is a debugging
+	// dead end.
+	declared := make(map[string]bool, len(order))
+	for _, n := range order {
+		declared[n] = true
+	}
+	var undeclared []string
+	for n := range byName {
+		if !declared[n] {
+			undeclared = append(undeclared, n)
+		}
+	}
+	sort.Strings(undeclared)
+	order = append(order, undeclared...)
+
 	var b strings.Builder
 	for _, name := range order {
 		samples := byName[name]
 		if h := help[name]; h != "" {
 			fmt.Fprintf(&b, "# HELP %s %s\n", name, h)
 		}
-		fmt.Fprintf(&b, "# TYPE %s %s\n", name, kind[name])
+		if k, ok := kind[name]; ok {
+			fmt.Fprintf(&b, "# TYPE %s %s\n", name, k)
+		}
 		sort.Slice(samples, func(i, j int) bool { return samples[i].labels < samples[j].labels })
 		for _, s := range samples {
 			b.WriteString(name)

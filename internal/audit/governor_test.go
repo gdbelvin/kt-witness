@@ -17,7 +17,7 @@ func sample(self, machine, total float64) cpuload.Sample {
 
 // TestGovernorConvergesToTarget: under-use raises permits, over-use lowers them.
 func TestGovernorConvergesToTarget(t *testing.T) {
-	g := &Governor{TargetCores: 5, MaxConcurrent: 6}
+	g := &Governor{ReserveCores: 11, MaxConcurrent: 6} // 16-11 = 5 core budget
 	g.permits = 1
 
 	// Idle machine, well under target: permits should climb.
@@ -41,7 +41,7 @@ func TestGovernorConvergesToTarget(t *testing.T) {
 // nuisance: even when our own usage is below target, a busy host must hold us
 // back. This box also runs home automation and a baby monitor.
 func TestGovernorYieldsToABusyMachine(t *testing.T) {
-	g := &Governor{TargetCores: 5, MaxConcurrent: 6}
+	g := &Governor{ReserveCores: 11, MaxConcurrent: 6} // 16-11 = 5 core budget
 	g.permits = 5
 
 	// We are using almost nothing, but the machine is nearly saturated:
@@ -59,7 +59,7 @@ func TestGovernorYieldsToABusyMachine(t *testing.T) {
 // the controller cannot see — nor as a reason to stop, which would freeze the
 // backlog silently.
 func TestGovernorHoldsWhenBlind(t *testing.T) {
-	g := &Governor{TargetCores: 5, MaxConcurrent: 6}
+	g := &Governor{ReserveCores: 11, MaxConcurrent: 6} // 16-11 = 5 core budget
 	g.permits = 4
 	for i := 0; i < 10; i++ {
 		g.step(cpuload.Sample{TotalCores: 16}) // Complete == false
@@ -72,7 +72,7 @@ func TestGovernorHoldsWhenBlind(t *testing.T) {
 // TestGovernorNeverExceedsPoolSize: permits above the sidecar pool buy nothing
 // and would wind the controller up against a limit it cannot reach.
 func TestGovernorNeverExceedsPoolSize(t *testing.T) {
-	g := &Governor{TargetCores: 100, MaxConcurrent: 3}
+	g := &Governor{ReserveCores: 1, MaxConcurrent: 3}
 	g.permits = 1
 	for i := 0; i < 200; i++ {
 		g.step(sample(0.1, 0.5, 64))
@@ -85,7 +85,7 @@ func TestGovernorNeverExceedsPoolSize(t *testing.T) {
 // TestAcquireRespectsPermits checks the gate itself, including that zero
 // permits pauses the sweep rather than letting it through.
 func TestAcquireRespectsPermits(t *testing.T) {
-	g := &Governor{TargetCores: 5, MaxConcurrent: 4}
+	g := &Governor{ReserveCores: 11, MaxConcurrent: 4}
 	g.permits = 2
 
 	ctx := context.Background()
@@ -108,7 +108,7 @@ func TestAcquireRespectsPermits(t *testing.T) {
 	}
 
 	// Zero permits pauses entirely.
-	g2 := &Governor{TargetCores: 5, MaxConcurrent: 4}
+	g2 := &Governor{ReserveCores: 11, MaxConcurrent: 4}
 	g2.permits = 0
 	short2, cancel2 := context.WithTimeout(ctx, 200*time.Millisecond)
 	defer cancel2()
@@ -125,4 +125,60 @@ func TestNilGovernorIsInert(t *testing.T) {
 		t.Fatalf("nil governor blocked: %v", err)
 	}
 	g.Release()
+}
+
+// TestBudgetIsDerivedFromTheMachine is the property that keeps this correct
+// across hardware changes.
+//
+// A fixed number has now been wrong twice here: a per-round budget chosen for a
+// four-core box, then a five-core target on a sixteen-core one. "Leave one core
+// free" survives both.
+func TestBudgetIsDerivedFromTheMachine(t *testing.T) {
+	g := &Governor{} // defaults: reserve 1
+	for _, c := range []struct{ cores, want float64 }{
+		{16, 15}, {4, 3}, {64, 63},
+		{1, 1}, // a one-core box still gets to make progress
+	} {
+		if got := g.BudgetFor(c.cores); got != c.want {
+			t.Errorf("%.0f cores: budget %.1f, want %.1f", c.cores, got, c.want)
+		}
+	}
+
+	// An explicit target overrides the derivation.
+	g2 := &Governor{TargetCores: 5}
+	if got := g2.BudgetFor(64); got != 5 {
+		t.Errorf("explicit target ignored: %.1f", got)
+	}
+
+	// A larger reservation yields more.
+	g3 := &Governor{ReserveCores: 4}
+	if got := g3.BudgetFor(16); got != 12 {
+		t.Errorf("reserve 4 of 16: budget %.1f, want 12", got)
+	}
+}
+
+// TestSelfAndMachineConstraintsCannotContradict: because both are measured
+// against one derived budget, the machine term can only ever bind at or before
+// the self term. The earlier design allowed a self target above the machine
+// ceiling, which silently starved the sweep.
+func TestSelfAndMachineConstraintsCannotContradict(t *testing.T) {
+	g := &Governor{ReserveCores: 1, MaxConcurrent: 3}
+	g.permits = 1
+
+	// Idle box: both terms permit growth, so permits reach the cap.
+	for i := 0; i < 60; i++ {
+		g.step(sample(1.0, 1.5, 16))
+	}
+	if p := g.Permits(); p < 3 {
+		t.Fatalf("permits %.2f on an idle 16-core box, expected the pool cap", p)
+	}
+
+	// Neighbours arrive and push the machine past the budget while our own
+	// usage stays low. The machine term must bind.
+	for i := 0; i < 60; i++ {
+		g.step(sample(2.0, 15.8, 16))
+	}
+	if p := g.Permits(); p > 0.5 {
+		t.Fatalf("permits %.2f with the machine at 15.8 of a 15-core budget", p)
+	}
 }

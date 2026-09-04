@@ -16,8 +16,8 @@
   "audit": {
     "sidecar_path": "./rust/kt-akd-verify/target/release/kt-akd-verify",
     "sidecar_workers": 3,
-    "target_cores": 5,
-    "machine_limit": 0.85,
+    "pace_backlog": true,
+    "reserve_cores": 1,
     "sample_rate": 0.1,
     "interval": "5m",
     "timeout": "5m"

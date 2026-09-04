@@ -92,3 +92,35 @@ func TestLabelOrderIsStable(t *testing.T) {
 		t.Errorf("labels not sorted: %s", b.String())
 	}
 }
+
+// TestUndeclaredMetricsAreStillRendered guards a silent-drop that hid a whole
+// feedback controller for two deployments.
+//
+// Set stores into the map; Write walked only the declared order. A metric that
+// was Set but never Described therefore vanished with no error and no warning —
+// and the thing it was reporting on looked broken rather than unobserved.
+func TestUndeclaredMetricsAreStillRendered(t *testing.T) {
+	r := New()
+	r.Describe("declared_metric", Gauge, "help")
+	r.Set("declared_metric", nil, 1)
+	r.Set("undeclared_metric", nil, 42)
+
+	var b strings.Builder
+	if err := r.Write(&b); err != nil {
+		t.Fatal(err)
+	}
+	out := b.String()
+	if !strings.Contains(out, "declared_metric 1") {
+		t.Errorf("declared metric missing:\n%s", out)
+	}
+	if !strings.Contains(out, "undeclared_metric 42") {
+		t.Errorf("undeclared metric was silently dropped:\n%s", out)
+	}
+	// Declared metrics keep their TYPE; undeclared ones simply go without.
+	if !strings.Contains(out, "# TYPE declared_metric gauge") {
+		t.Errorf("declared metric lost its TYPE:\n%s", out)
+	}
+	if strings.Contains(out, "# TYPE undeclared_metric") {
+		t.Errorf("undeclared metric was given a TYPE it does not have:\n%s", out)
+	}
+}
