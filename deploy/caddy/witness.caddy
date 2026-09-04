@@ -1,4 +1,10 @@
-# Public HTTPS for the witness.
+# Public HTTPS for the witness — THE FALLBACK, not the current plan.
+#
+# Cloudflare Tunnel is what publication uses; see deploy/cloudflared/ and the
+# runbook. This file is kept because it is the right answer under a different
+# constraint: a static address, or a decision that nobody should sit in the
+# delivery path. It needs inbound 80/443 and a stable A record, neither of which
+# holds today.
 #
 # Append to /etc/caddy/Caddyfile on docker-services and reload. Deliberately
 # kept as a separate file in the repository rather than applied automatically:

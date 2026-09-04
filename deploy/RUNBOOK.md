@@ -52,59 +52,90 @@ sudo chown -R 65532:65532 data      # the image runs as distroless nonroot
 
 ## Publishing the witness over HTTPS
 
-The witness identity is `witness.kt.gdbsecurity.com`, and that name is inside
-every cosignature it has issued. Serving it publicly is therefore not a
-deployment step but a decision: it invites reliance. Keep it behind Tailscale
-until the operating record justifies otherwise — the false fork finding against
-the Go checksum database is the kind of thing that argues for waiting.
+The identity `witness.kt.gdbsecurity.com` is inside every cosignature already
+issued, so serving it publicly invites reliance. That is a decision, not a
+deployment step — and the false fork finding against the Go checksum database
+argues for more operating record first.
 
-When it is time, `deploy/caddy/witness.caddy` is the site block. Caddy already
-runs on `docker-services` (every existing site uses a local self-signed cert, so
-this will be the first certificate it obtains from a public CA).
+The site's address is residential and moves, which rules out a plain A record:
+one that goes stale leaves the witness looking, from outside, exactly like a
+witness that has stopped working. Tailscale Funnel cannot help either — it
+presents a certificate valid only for `*.ts.net`, so a CNAME from a custom name
+fails the TLS handshake.
 
-### Why HTTP-01
+So: **Cloudflare Tunnel**. It dials outward, survives an address change, needs no
+inbound ports, and keeps the home address out of public DNS.
 
-`gdbsecurity.com` is registered at Squarespace, which has **no DNS API**. A
-DNS-01 challenge would need a TXT record placed by hand at every renewal, and a
-certificate that renews only when someone remembers is a certificate that
-expires. HTTP-01 needs no API — only inbound port 80.
+### What only you can do
 
-If inbound ports ever become unavailable, the fallback is acme-dns: one CNAME
-from `_acme-challenge.witness.kt.gdbsecurity.com` to a service that does have an
-API, which keeps renewal automatic without moving the zone off Squarespace.
+1. **Add `gdbsecurity.com` to a Cloudflare account** and change the nameservers
+   at Squarespace to the pair Cloudflare gives you. The registrar stays
+   Squarespace; only DNS hosting moves. This also buys a real DNS API, which
+   makes DNS-01 available later if a wildcard is ever wanted.
 
-### Two things only you can do
+2. **Authenticate and create the tunnel** — interactive, once:
 
-1. **Squarespace → DNS → Custom Records**: `A` record for host `witness.kt`
-   pointing at the site's public IP.
+   ```sh
+   # on docker-services
+   cloudflared tunnel login                    # opens a browser
+   cloudflared tunnel create kt-witness        # prints the tunnel UUID
+   cloudflared tunnel route dns kt-witness witness.kt.gdbsecurity.com
+   ```
 
-   Check whether that address is static first. A residential IP that moves
-   leaves the record pointing nowhere, and from outside that is
-   indistinguishable from a witness that has stopped working. If it is dynamic,
-   point the record at a dynamic-DNS name instead.
+3. **Put the pieces where the config expects them**:
 
-2. **Router**: forward inbound TCP 80 and 443 to `192.168.0.10`. Port 80 is
-   needed for the ACME challenge even though nothing is served over it.
+   ```sh
+   mkdir -p ~/kt-witness/secrets/cloudflared
+   cp ~/.cloudflared/<UUID>.json ~/kt-witness/secrets/cloudflared/
+   sed -i "s/TUNNEL_UUID/<UUID>/g" ~/kt-witness/deploy/cloudflared/config.yml
+   ```
+
+   The credentials file authenticates the tunnel to Cloudflare. `.gitignore`
+   covers it; keep it that way.
 
 ### Then
 
+Append `deploy/cloudflared/compose.snippet.yaml` to `compose.yaml` and:
+
 ```sh
-# on docker-services, verify BOTH before reloading — an unresolvable name makes
-# Caddy retry issuance in a loop and buries the real error
-dig +short witness.kt.gdbsecurity.com
-curl -sS -o /dev/null -w '%{http_code}\n' http://witness.kt.gdbsecurity.com/
-
-cat /path/to/repo/deploy/caddy/witness.caddy | sudo tee -a /etc/caddy/Caddyfile
-sudo caddy validate --config /etc/caddy/Caddyfile
-sudo systemctl reload caddy
-
-# confirm a real certificate, not a self-signed one
-curl -sS -o /dev/null -w '%{http_code} %{ssl_verify_result}\n' https://witness.kt.gdbsecurity.com/
+docker compose up -d cloudflared
+docker compose logs -f cloudflared      # expect "Registered tunnel connection"
 ```
 
-`ssl_verify_result 0` means the chain verified. Anything else means the
-certificate did not issue, and the witness is now publicly advertised without
-working TLS — worse than not being published at all.
+Verify from **outside** the tailnet and the LAN, because a check from inside can
+succeed for the wrong reason:
+
+```sh
+curl -sS -o /dev/null -w '%{http_code} verify=%{ssl_verify_result}\n' \
+  https://witness.kt.gdbsecurity.com/
+curl -sS https://witness.kt.gdbsecurity.com/ | head -5
+```
+
+`verify=0` means the chain verified. Then fetch a cosigned checkpoint the way a
+consumer would, since that is the endpoint that matters rather than the pages:
+
+```sh
+curl -sS https://witness.kt.gdbsecurity.com/<origin-hash>/checkpoint
+```
+
+### The alternative
+
+`deploy/caddy/witness.caddy` serves the same site from the Caddy already running
+on this host, with a Let's Encrypt certificate via HTTP-01 and nobody in the
+delivery path. It needs a stable address and inbound 80/443, so it is the right
+answer only if those change. HTTP-01 rather than DNS-01 because Squarespace has
+no DNS API, and a certificate that renews only when someone remembers is a
+certificate that expires.
+
+### If it goes wrong
+
+A tunnel that outlives the witness serves 502s under the witness's own name,
+which is worse than being unreachable — hence `depends_on` in the snippet.
+`docker compose stop cloudflared` withdraws it immediately; DNS keeps pointing
+at a tunnel that is simply not running, and nothing is served rather than
+something wrong being served.
+
+
 
 ## Shipping the source without git
 

@@ -1,0 +1,50 @@
+# Cloudflare Tunnel for the witness.
+#
+# Locally-managed on purpose. A token-based tunnel keeps its routing in the
+# Cloudflare dashboard, which means the answer to "what is this thing serving,
+# and to whom" lives somewhere that is not the repository. For a service whose
+# entire value is that its behaviour can be checked, the ingress rules belong
+# next to the code.
+#
+# ── Why a tunnel rather than an A record ─────────────────────────────────────
+#
+# The site has a residential address that moves. An A record pointing at it goes
+# stale without warning, and a witness that has silently become unreachable
+# looks — to anyone consuming its cosignatures — exactly like a witness that has
+# stopped working. A tunnel dials outward and keeps working across an address
+# change, with no inbound ports and no home IP in public DNS.
+#
+# The cost is that Cloudflare sits in the delivery path. Worth stating plainly:
+# they can serve stale content or refuse to serve it, and they cannot forge a
+# cosignature. The signatures are the product; this is only delivery. But
+# availability is a real property for a witness, so a delivery failure is a
+# genuine failure, not a cosmetic one.
+#
+# ── Placeholders ─────────────────────────────────────────────────────────────
+#
+# TUNNEL_UUID is printed by `cloudflared tunnel create kt-witness`. The
+# credentials file it writes is a secret: it authenticates this tunnel to
+# Cloudflare. Keep it out of the repository — .gitignore already covers *.json
+# under this directory.
+
+tunnel: TUNNEL_UUID
+credentials-file: /etc/cloudflared/TUNNEL_UUID.json
+
+# Keep the connection warm across the dynamic address changes this exists for.
+protocol: quic
+retries: 5
+grace-period: 30s
+
+ingress:
+  - hostname: witness.kt.gdbsecurity.com
+    service: http://127.0.0.1:8088
+    originRequest:
+      # The monitoring endpoint is fetched by other witnesses and by C2SP
+      # tooling, unauthenticated, exactly as the plain-text contract expects.
+      # Nothing here should buffer or rewrite it.
+      connectTimeout: 10s
+      noTLSVerify: false
+      httpHostHeader: witness.kt.gdbsecurity.com
+
+  # Anything else reaching this tunnel is not ours to answer.
+  - service: http_status:404

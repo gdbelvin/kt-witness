@@ -1,0 +1,30 @@
+# Append to compose.yaml on docker-services, alongside the witness service.
+#
+# Runs in the same stack so the tunnel starts and stops with the thing it
+# publishes. A tunnel that outlives its origin serves 502s under the witness's
+# own name, which is a worse look than being unreachable.
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: ["tunnel", "--config", "/etc/cloudflared/config.yml", "run"]
+
+    # The witness listens on the host, and the tunnel dials it over the host's
+    # loopback rather than the Docker network: the ingress rule names
+    # 127.0.0.1:8088, and that has to mean the same interface the witness is
+    # published on.
+    network_mode: host
+
+    volumes:
+      - ./deploy/cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+      # The credentials file that `cloudflared tunnel create` wrote. It
+      # authenticates this tunnel to Cloudflare, so it is mounted read-only and
+      # never committed.
+      - ./secrets/cloudflared:/etc/cloudflared:ro
+
+    depends_on:
+      - kt-witness
+
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
