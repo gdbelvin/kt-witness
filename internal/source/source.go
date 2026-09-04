@@ -226,6 +226,17 @@ type EpochRecorder interface {
 	RecordEpochCommitment(origin string, epochID int64, chainHash string, issuanceTime int64) error
 }
 
+// AuditRecorder persists that one unit of a log's published history has been
+// construction-audited.
+//
+// For an epoch-based directory the unit is an epoch. For an append-only entry
+// log it is an entry index: there is no mutable map to corrupt, so "this leaf
+// is the hash of an entry the log published" IS the construction property, and
+// a log where that holds for every index is correctly built by definition.
+type AuditRecorder interface {
+	RecordConstructionAudit(origin string, index int64) error
+}
+
 type EntryStore interface {
 	LogEntries(origin string) (map[uint64][32]byte, error)
 	PutLogEntries(origin string, entries map[uint64][32]byte) error

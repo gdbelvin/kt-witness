@@ -163,12 +163,13 @@ type logConfig struct {
 	MaxEpochsPerRound int64 `json:"max_epochs_per_round"`
 }
 
-func (l logConfig) build(log *slog.Logger, entries source.EntryStore, epochs source.EpochRecorder, ctLogs []proton.CTLog) (source.Source, error) {
+func (l logConfig) build(log *slog.Logger, entries source.EntryStore, epochs source.EpochRecorder, audits source.AuditRecorder, ctLogs []proton.CTLog) (source.Source, error) {
 	switch l.Type {
 	case "", "c2sp":
 		return c2sp.New(c2sp.Config{
 			Origin: l.Origin, BaseURL: l.BaseURL, VKey: l.VKey,
 			VerifyEntries: l.VerifyEntries,
+			Audits:        audits,
 		})
 	case "akd":
 		return akd.New(akd.Config{
@@ -438,7 +439,7 @@ func run(cfg *config, log *slog.Logger, once, backfill bool, retractOrigin, retr
 
 	var sources []source.Source
 	for _, l := range cfg.Logs {
-		src, err := l.build(log, db, db, ctLogs)
+		src, err := l.build(log, db, db, db, ctLogs)
 		if err != nil {
 			return err
 		}

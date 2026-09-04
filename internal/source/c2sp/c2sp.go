@@ -12,6 +12,7 @@ package c2sp
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"filippo.io/torchwood"
@@ -50,6 +51,17 @@ type Config struct {
 	// package cannot parse by itself. Static CT logs sign with the RFC 6962
 	// tree head signature rather than Ed25519; see internal/staticct.
 	Verifier note.Verifier
+
+	// MaxAuditEntries bounds how large a log may be before per-entry audits are
+	// refused. Each verified index becomes a stored record, so switching entry
+	// verification on for a log with tens of millions of entries would turn the
+	// witness database into a copy of the log's index. Defaults to
+	// defaultMaxAuditEntries.
+	MaxAuditEntries int64
+
+	// Audits, if set, records each entry index whose contents have been checked
+	// against the signed tree, so construction coverage can be measured.
+	Audits source.AuditRecorder
 
 	// VerifyEntries additionally checks that each newly added leaf is the hash
 	// of an entry the log publishes. For an append-only entry log that is the
@@ -299,10 +311,70 @@ func (s *Source) verifyNewEntries(ctx context.Context, from, to int64, tree tlog
 						i, got[:], want[i-start][:]),
 				}
 			}
+
+			// This index is now construction-audited: the entry the log
+			// publishes is the one its signed tree commits to at that position.
+			// For an append-only entry log that is the whole of the property —
+			// there is no mutable map to corrupt.
+			if s.cfg.Audits != nil && to <= s.maxAuditEntries() {
+				if err := s.cfg.Audits.RecordConstructionAudit(s.origin, i); err != nil {
+					return fmt.Errorf("c2sp: recording audit for entry %d: %w", i, err)
+				}
+			}
 		}
 		start = tileEnd
 	}
 	return nil
+}
+
+// Backfill publishes the range of history this log has, so coverage has
+// something to measure against.
+//
+// An entry log's published history is simply entries 0..size-1: unlike a
+// directory there is no epoch numbering to discover, and nothing to walk. The
+// work of actually checking those entries is done by verifyNewEntries.
+//
+// Only offered when entry verification is switched on. Declaring a range we
+// have no intention of auditing would make the coverage denominator real and
+// the numerator permanently zero, which reads as a stalled audit rather than an
+// absent one.
+func (s *Source) Backfill(ctx context.Context, log *slog.Logger) (*source.BackfillResult, error) {
+	if !s.cfg.VerifyEntries {
+		return nil, fmt.Errorf("c2sp: %s does not verify entries, so it has no construction history to report", s.origin)
+	}
+	head, err := s.Fetch(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	if head.Size == 0 {
+		return &source.BackfillResult{}, nil
+	}
+	if lim := s.maxAuditEntries(); head.Size > lim {
+		// Declaring a range we will not audit is worse than declaring none: the
+		// coverage denominator becomes real while the numerator stays near
+		// zero, which reads as a stalled audit rather than an absent one.
+		return nil, fmt.Errorf(
+			"c2sp: %s has %d entries, above the %d limit for per-entry auditing; "+
+				"raise max_audit_entries deliberately if the witness database should hold one record per entry",
+			s.origin, head.Size, lim)
+	}
+	// Verify the whole range now, rather than only declaring it.
+	//
+	// verifyNewEntries otherwise covers just what arrived since the last
+	// observation, so a log we started witnessing at entry 163 would carry a
+	// denominator of 163 and a numerator that only ever counted entry 164
+	// onward — B+ unreachable not because the history is bad but because nobody
+	// ever read it. For an entry log the backwards sweep is simply this.
+	if log != nil {
+		log.Info("verifying published entries", "origin", s.origin, "entries", head.Size)
+	}
+	tree := tlog.Tree{N: head.Size, Hash: head.Hash}
+	if err := s.verifyNewEntries(ctx, 0, head.Size, tree); err != nil {
+		return nil, err
+	}
+	return &source.BackfillResult{
+		From: 0, To: head.Size - 1, Epochs: int(head.Size),
+	}, nil
 }
 
 // splitSumDBEntries parses a go.dev/design/25530-sumdb data tile, where records
@@ -340,4 +412,19 @@ func splitTileEntries(raw []byte) ([][]byte, error) {
 		i += n
 	}
 	return out, nil
+}
+
+// defaultMaxAuditEntries is the largest log for which per-entry construction
+// records are kept by default.
+//
+// Generous for a key directory and far below a CT log: the 69 CT logs witnessed
+// here hold billions of entries between them, and auditing those entry by entry
+// is not a tuning question but a different project.
+const defaultMaxAuditEntries = 1 << 20
+
+func (s *Source) maxAuditEntries() int64 {
+	if s.cfg.MaxAuditEntries > 0 {
+		return s.cfg.MaxAuditEntries
+	}
+	return defaultMaxAuditEntries
 }
