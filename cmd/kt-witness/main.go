@@ -86,6 +86,15 @@ type config struct {
 		// about how fast auditing ought to go. Defaults to 1.
 		SidecarWorkers int `json:"sidecar_workers"`
 
+		// TargetCores is how much CPU the BACKLOG sweep should aim to use. The
+		// live sweep is never paced. Zero disables pacing entirely and falls
+		// back to the fixed per-round budget.
+		TargetCores float64 `json:"target_cores"`
+
+		// MachineLimit is the fraction of the host's cores that may be busy in
+		// total before the backlog sweep yields regardless of its own usage.
+		MachineLimit float64 `json:"machine_limit"`
+
 		SampleRate        float64 `json:"sample_rate"`
 		Interval          string  `json:"interval"`
 		Timeout           string  `json:"timeout"`
@@ -145,7 +154,7 @@ type logConfig struct {
 	MaxEpochsPerRound int64 `json:"max_epochs_per_round"`
 }
 
-func (l logConfig) build(log *slog.Logger, entries source.EntryStore, ctLogs []proton.CTLog) (source.Source, error) {
+func (l logConfig) build(log *slog.Logger, entries source.EntryStore, epochs source.EpochRecorder, ctLogs []proton.CTLog) (source.Source, error) {
 	switch l.Type {
 	case "", "c2sp":
 		return c2sp.New(c2sp.Config{
@@ -215,6 +224,7 @@ func (l logConfig) build(log *slog.Logger, entries source.EntryStore, ctLogs []p
 			APIBase:           l.APIBase,
 			MaxEpochsPerRound: l.MaxEpochsPerRound,
 			CTLogs:            ctLogs,
+			Epochs:            epochs,
 		})
 	case "apple":
 		return apple.New(apple.Config{
@@ -258,6 +268,8 @@ func main() {
 	genkey := flag.Bool("genkey", false, "generate a witness signing key and exit")
 	once := flag.Bool("once", false, "run a single round and exit (for testing)")
 	backfill := flag.Bool("backfill", false, "verify each log's published history before witnessing")
+	retract := flag.String("retract-fork", "", "withdraw a fork finding for this origin and exit; requires -reason")
+	reason := flag.String("reason", "", "why a fork finding is being withdrawn")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	healthcheck := flag.Bool("healthcheck", false, "probe the local monitoring endpoint and exit non-zero if it is not serving")
 	flag.Parse()
@@ -294,7 +306,7 @@ func main() {
 		return
 	}
 
-	if err := run(cfg, log, *once, *backfill); err != nil {
+	if err := run(cfg, log, *once, *backfill, *retract, *reason); err != nil {
 		log.Error("fatal", "err", err)
 		os.Exit(1)
 	}
@@ -376,7 +388,7 @@ func loadSigner(cfg *config) (*torchwood.CosignatureSigner, error) {
 	return torchwood.NewCosignatureSigner(cfg.Name, ed25519.NewKeyFromSeed(seed))
 }
 
-func run(cfg *config, log *slog.Logger, once, backfill bool) error {
+func run(cfg *config, log *slog.Logger, once, backfill bool, retractOrigin, retractReason string) error {
 	signer, err := loadSigner(cfg)
 	if err != nil {
 		return err
@@ -417,7 +429,7 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 
 	var sources []source.Source
 	for _, l := range cfg.Logs {
-		src, err := l.build(log, db, ctLogs)
+		src, err := l.build(log, db, db, ctLogs)
 		if err != nil {
 			return err
 		}
@@ -443,6 +455,8 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 	for _, l := range cfg.Logs {
 		kinds[l.Origin] = kindOf(l)
 	}
+	// Published before any goroutine reads it, and never written again.
+	logKinds = kinds
 
 	refreshInterval, err := time.ParseDuration(cfg.RefreshInterval)
 	if err != nil {
@@ -470,10 +484,25 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 		}
 		sidecar := audit.NewPool(cfg.Audit.SidecarPath, workers)
 		defer sidecar.Close()
+		// Pace the backlog against measured CPU rather than a fixed budget. A
+		// constant is wrong the moment the hardware or the proof sizes change:
+		// the previous value was chosen when a verification took 94 s on four
+		// cores, and after more cores arrived it left five of them idle while
+		// the backlog still measured months.
+		var governor *audit.Governor
+		if cfg.Audit.TargetCores > 0 {
+			governor = &audit.Governor{
+				TargetCores:   cfg.Audit.TargetCores,
+				MachineLimit:  cfg.Audit.MachineLimit,
+				MaxConcurrent: workers,
+				Log:           log,
+			}
+		}
 		auditor = &audit.Auditor{
 			Store: db, Beacon: audit.NewBeacon(cfg.Audit.BeaconURL),
 			Sidecar: sidecar, Log: log, Rate: rate, Timeout: auditTimeout,
 			MaxEpochsPerRound: maxEpochsPerRound(cfg.Audit.MaxEpochsPerRound),
+			Governor:          governor,
 		}
 		for _, src := range sources {
 			if r, ok := src.(audit.Resolver); ok {
@@ -538,6 +567,17 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 		srv.Shutdown(shutdownCtx)
 	}()
 
+	if retractOrigin != "" {
+		// Deliberately explicit: a retraction names its reason, keeps the
+		// original evidence, and is recorded as an event in its own right.
+		if err := db.RetractFork(retractOrigin, retractReason); err != nil {
+			return err
+		}
+		log.Warn("FORK FINDING WITHDRAWN — the accusation is retracted, the evidence is retained",
+			"origin", retractOrigin, "reason", retractReason)
+		return nil
+	}
+
 	if backfill {
 		// Backfill runs in the BACKGROUND, immediately and then on a schedule.
 		//
@@ -590,6 +630,15 @@ func run(cfg *config, log *slog.Logger, once, backfill bool) error {
 	mirror()
 	if once {
 		return nil
+	}
+
+	if auditor != nil && auditor.Governor != nil {
+		go auditor.Governor.Run(ctx)
+		log.Info("backlog sweep paced against CPU",
+			"target_cores", cfg.Audit.TargetCores,
+			"machine_limit", auditor.Governor.MachineLimit,
+			"max_concurrent", cfg.Audit.SidecarWorkers,
+			"note", "live auditing is never paced")
 	}
 
 	if auditor != nil && len(resolvers) > 0 {
@@ -807,7 +856,7 @@ func (f *failureTracker) fail(origin string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.n[origin]++
-	metrics.Set(server.MConsecutiveWithheld, map[string]string{"origin": origin}, float64(f.n[origin]))
+	metrics.Set(server.MConsecutiveWithheld, labelsFor(origin), float64(f.n[origin]))
 	return f.n[origin]
 }
 
@@ -817,7 +866,7 @@ func (f *failureTracker) ok(origin string) {
 	if f.n[origin] != 0 {
 		f.n[origin] = 0
 	}
-	metrics.Set(server.MConsecutiveWithheld, map[string]string{"origin": origin}, 0)
+	metrics.Set(server.MConsecutiveWithheld, labelsFor(origin), 0)
 }
 
 func round(ctx context.Context, w *witness.Witness, sources []source.Source, db *store.Store, log *slog.Logger) {
@@ -835,7 +884,7 @@ func round(ctx context.Context, w *witness.Witness, sources []source.Source, db 
 				return
 			}
 
-			origin := map[string]string{"origin": src.Origin()}
+			origin := labelsFor(src.Origin())
 			roundCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 			started := time.Now()
 			out, err := w.Process(roundCtx, src)
@@ -1047,6 +1096,32 @@ func runProtonStep(ctx context.Context, a *proton.IncrementalAuditor, db *store.
 		"added", res.Stats.Added, "removed", res.Stats.Removed,
 		"root", res.ComputedRoot[:16], "took", res.Elapsed.Round(time.Second))
 
+	// Record the audit so the coverage accounting can see it.
+	//
+	// Without this the strongest construction evidence in the project was
+	// invisible. Proton is the only deployment here that publishes its whole
+	// directory, so it is the only one where the entire tree can be rebuilt and
+	// checked against the signed root — which this has been doing, in
+	// production, while the witness went on reporting tier A+ because
+	// AuditCoverage counts stored records and nothing was storing any.
+	//
+	// Only a success is recorded. A failed rebuild is already logged loudly and
+	// deliberately does not poison the log here; recording it as a settled
+	// negative would also let a transient I/O failure masquerade as a
+	// construction fault, and absence is not evidence.
+	if res.Match {
+		ar := &store.Audit{
+			Origin: origin, Epoch: res.To,
+			// Not drawn by beacon: every epoch is rebuilt in full, so rate 1
+			// records that this epoch was checked outright rather than sampled.
+			Sampled: true, Rate: 1, Strategy: "rebuild",
+			Verified: true, Attempts: 1, DecidedAt: time.Now().UTC(),
+		}
+		if err := db.RecordAudit(ar); err != nil {
+			log.Warn("proton audit: recording", "epoch", res.To, "err", err)
+		}
+	}
+
 	if res.Removals != nil && !res.Removals.Clean() {
 		log.Error("PROTON REMOVALS NOT EXPLAINED BY THE RETENTION WINDOW — "+
 			"withholding judgement, not accusing; the window rule is inferred "+
@@ -1169,3 +1244,26 @@ func maxEpochsPerRound(configured int64) int64 {
 // long enough that re-listing a 536,000-epoch bucket is not a background load
 // worth noticing.
 const backfillRefresh = 6 * time.Hour
+
+// logKinds maps an origin to what it makes transparent, populated once at
+// startup and read-only thereafter.
+//
+// It exists so metric emission sites can label by ecosystem without threading
+// the config through every call. Two metrics went without it for a while and
+// the dashboard quietly lied about them: panels titled "by kind" grouped on a
+// label that was never present, so every log collapsed into one unnamed series
+// and a per-ecosystem rate was really one arbitrary log's counter.
+var logKinds map[string]string
+
+// labelsFor builds the standard metric labels for an origin.
+//
+// An unknown origin is labelled "generic" rather than left blank: an empty
+// label value is indistinguishable in the exposition format from a missing
+// series, which is precisely the confusion this is here to end.
+func labelsFor(origin string) map[string]string {
+	kind := logKinds[origin]
+	if kind == "" {
+		kind = "generic"
+	}
+	return map[string]string{"origin": origin, "kind": kind}
+}

@@ -148,7 +148,12 @@ func (a *Auditor) RunHistory(ctx context.Context, r Resolver, budget int64) (*Hi
 			DecidedAt: time.Now().UTC(), Attempts: 1,
 		}
 
+		// Backlog work waits for CPU allowance. Live auditing does not.
+		if err := a.Governor.Acquire(ctx); err != nil {
+			return res, err
+		}
 		out, err := a.Sidecar.Verify(ctx, ref.LogDirectory, epoch, ref.PrevRoot, ref.CurrRoot, a.Timeout)
+		a.Governor.Release()
 		switch {
 		case err != nil, out != nil && !out.OK && out.Kind != "verify":
 			// Could not check. Not a finding.

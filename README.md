@@ -15,6 +15,10 @@ deployment. One file per ecosystem covers what is unique to it:
 [c2sp](docs/c2sp.md) · [meta](docs/meta.md) · [proton](docs/proton.md) ·
 [signal](docs/signal.md) · [apple](docs/apple.md).
 
+[`docs/threat-model.md`](docs/threat-model.md) enumerates what a dishonest
+server can actually do and which role — client, auditor, or witness — is capable
+of noticing each attack. It is the argument for why this exists.
+
 [`docs/landscape.md`](docs/landscape.md) surveys the whole transparency-log
 world: what exists, what is witnessed here, what is reachable, and what is
 deliberately excluded. [`docs/cost.md`](docs/cost.md) measures what running it

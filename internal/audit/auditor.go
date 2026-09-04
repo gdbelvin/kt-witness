@@ -36,6 +36,11 @@ type Auditor struct {
 	Sidecar Verifier
 	Log     *slog.Logger
 
+	// Governor, if set, paces the BACKWARDS sweep against measured CPU. Live
+	// auditing is never paced: it follows the tip and is what would notice an
+	// operator misbehaving now.
+	Governor *Governor
+
 	// Rate is the fraction of epochs verified, published alongside results.
 	Rate float64
 

@@ -61,6 +61,11 @@ type Config struct {
 	// MaxEpochsPerRound bounds catch-up work per round.
 	MaxEpochsPerRound int64
 
+	// Epochs, if set, records each epoch's commitment so a second differing one
+	// is detected across restarts. This is the non-equivocation duty Proton's
+	// design assigns an external auditor.
+	Epochs source.EpochRecorder
+
 	// CTLogs are the Certificate Transparency logs the tip's certificate may be
 	// confirmed in. Left empty, the adapter behaves as it always has and trusts
 	// the certificate's embedded SCTs; supplied, every fetch additionally
@@ -219,6 +224,24 @@ func (e *epoch) verifyCertificate(now time.Time) error {
 			e.EpochID, want, leaf.DNSNames)
 	}
 
+	// The issuance time Proton commits into the SAN must agree with the
+	// certificate's own notBefore.
+	//
+	// Proton's white paper assigns this to the auditor and bounds it at 24
+	// hours. It matters because CertificateTime is otherwise a number Proton
+	// chooses freely and folds into a name: without tying it to the CA's view
+	// of when the certificate was issued, an operator could backdate or postdate
+	// an epoch's apparent position in time while everything else still verified.
+	const maxCertSkew = 24 * time.Hour
+	issued := time.Unix(e.CertificateTime, 0)
+	if skew := issued.Sub(leaf.NotBefore); skew > maxCertSkew || skew < -maxCertSkew {
+		return fmt.Errorf(
+			"epoch %d: committed issuance time %s is %s from the certificate's notBefore %s, "+
+				"beyond the %s the design allows",
+			e.EpochID, issued.UTC().Format(time.RFC3339), skew.Round(time.Minute),
+			leaf.NotBefore.UTC().Format(time.RFC3339), maxCertSkew)
+	}
+
 	// Verified against the host's trust store. DNSName is deliberately left
 	// empty: we already matched the SAN ourselves, and the commitment name is
 	// not a name anyone connects to.
@@ -331,6 +354,20 @@ func (s *Source) stepTowards(ctx context.Context, prev *source.Head, tip *epoch)
 			return nil, fmt.Errorf("proton: %w", err)
 		}
 		e = got
+	}
+
+	// Record what Proton committed for this epoch. A second, different
+	// commitment for an epoch already recorded is the non-equivocation failure
+	// Proton's design asks an auditor to catch — and it is conclusive, because
+	// both commitments are bound into publicly logged certificates.
+	if s.cfg.Epochs != nil {
+		if err := s.cfg.Epochs.RecordEpochCommitment(
+			s.cfg.Origin, e.EpochID, e.ChainHash, e.CertificateTime); err != nil {
+			return nil, &source.ForkError{
+				Origin: s.cfg.Origin,
+				Reason: fmt.Sprintf("epoch committed twice: %v", err),
+			}
+		}
 	}
 
 	hash, err := hashOf(e.ChainHash)

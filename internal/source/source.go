@@ -215,6 +215,17 @@ type Scanner interface {
 // good as its memory. Held in RAM, that memory resets on every deploy, and the
 // coverage silently becomes "since the last restart" rather than "since we
 // started witnessing".
+// EpochRecorder persists what an operator committed for each epoch, so a second
+// differing commitment is caught across process restarts.
+//
+// Proton's design names this as an auditor duty — exactly one
+// (epochID, chainHash, issuanceTime) per epoch — and it is the non-equivocation
+// check for that scheme. An in-memory version would only catch an operator that
+// equivocates twice while one process happens to be running.
+type EpochRecorder interface {
+	RecordEpochCommitment(origin string, epochID int64, chainHash string, issuanceTime int64) error
+}
+
 type EntryStore interface {
 	LogEntries(origin string) (map[uint64][32]byte, error)
 	PutLogEntries(origin string, entries map[uint64][32]byte) error

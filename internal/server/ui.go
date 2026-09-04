@@ -64,9 +64,12 @@ type statusView struct {
 	Now         time.Time
 	Generated   string
 
-	Logs        []logView
-	Forks       int
-	ForkOrigins []string
+	Logs  []logView
+	Forks int
+	// RetractedForks counts findings that were withdrawn. Reported separately so
+	// a retraction is visible rather than simply making a finding disappear.
+	RetractedForks int
+	ForkOrigins    []string
 
 	// Retired lists origins with stored history that are no longer configured.
 	// Kept visible so removing a log is an observable act rather than a silent
@@ -145,13 +148,30 @@ func (s *Server) buildStatus() (*statusView, error) {
 		v.TotalGaps += len(h.Gaps)
 	}
 
+	// Live fork state excludes retracted findings.
+	//
+	// The evidence bucket keeps every fork ever recorded, deliberately — a
+	// withdrawn accusation should still be readable. But a retracted finding is
+	// not a live one, and reading the evidence as current state would leave a
+	// log permanently marked forked and its alert permanently firing after the
+	// finding had been withdrawn. That happened the first time this was used.
 	forks, _ := s.Store.Forks()
+	retractions, _ := s.Store.Retractions()
+	retracted := map[string]bool{}
+	for _, r := range retractions {
+		retracted[r.Origin] = true
+	}
+
 	forked := map[string]bool{}
 	for _, f := range forks {
+		if retracted[f.Origin] {
+			continue
+		}
 		forked[f.Origin] = true
 		v.ForkOrigins = append(v.ForkOrigins, f.Origin)
 	}
-	v.Forks = len(forks)
+	v.Forks = len(v.ForkOrigins)
+	v.RetractedForks = len(retracted)
 
 	for _, rec := range recs {
 		// A log that has been removed from the configuration keeps its stored

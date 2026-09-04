@@ -173,3 +173,30 @@ nearest available increase in assurance for this witness.
 Tree structure and the empty-node rule recovered from Proton's C verifier;
 epoch and diff formats from `proton.me/kt/` and `api.protonmail.ch/kt/v1/`,
 confirmed by rebuilding.
+
+## Why Proton reported A+ while doing tier-B work
+
+Until now the incremental auditor rebuilt the entire tree, compared it against
+Proton's signed root, and told nobody. Coverage is computed from stored audit
+records — `AuditCoverage` counts them across the backfilled range — and nothing
+was writing any, so the strongest construction evidence in the project was
+invisible to the thing that decides what tier to claim.
+
+Each successful rebuild now records an audit with strategy `rebuild` and rate 1:
+every epoch is checked outright rather than sampled, so recording it as drawn
+would misdescribe it. Only successes are recorded. A failed rebuild is already
+logged loudly and does not poison the log here, and recording it as a settled
+negative would let a transient I/O failure masquerade as a construction fault.
+
+### What this does and does not reach
+
+It gives Proton **forward** coverage from the bootstrap point. The auditor steps
+one epoch at a time toward the tip; it never walks backwards, because going back
+would mean bootstrapping a full ~13.6 GB tree per epoch rather than applying a
+3 MB diff.
+
+So epochs published before the witness bootstrapped stay unaudited, and Proton
+cannot honestly claim B+ across its whole published range on this mechanism
+alone. Tier B — construction audited, growing — is what it earns, and the
+coverage number says exactly how much. Claiming otherwise would be the
+overpromise this project exists not to make.

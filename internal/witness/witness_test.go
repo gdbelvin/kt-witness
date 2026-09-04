@@ -150,8 +150,52 @@ func TestSplitViewAtSameSizeIsFork(t *testing.T) {
 }
 
 // A shrinking tree is a rollback: entries shown to users have been removed.
-func TestSizeRegressionIsFork(t *testing.T) {
-	w, _ := newTestWitness(t)
+// A smaller signed head that IS a prefix of the one we witnessed is a lagging
+// replica, not a fork.
+//
+// This is a regression test for a real false positive. The witness accused the
+// Go checksum database of forking: it had witnessed size 62,033,263 and was
+// then served a validly signed checkpoint at 62,032,989. Both signatures were
+// genuine, and the smaller tree proved to be a prefix of the larger — an older
+// head sum.golang.org really had published, handed back by one CDN frontend
+// among many. The old logic inferred equivocation from ordering alone.
+//
+// Getting this wrong is the most expensive mistake this project can make: a
+// public, permanent accusation against an honest log, on evidence that shows
+// nothing. Withholding costs the log nothing and is always recoverable.
+func TestSizeRegressionWithConsistentTreeIsNotAFork(t *testing.T) {
+	w, db := newTestWitness(t)
+	origin := "example.com/log"
+
+	src := &stubSource{origin: origin, head: head(t, origin, 10, hashOf(1))}
+	if _, err := w.Process(context.Background(), src); err != nil {
+		t.Fatal(err)
+	}
+
+	// Served an older head; the source can prove the larger tree extends it.
+	src.head = head(t, origin, 9, hashOf(3))
+	src.consistencyErr = nil
+
+	_, err := w.Process(context.Background(), src)
+	if err == nil {
+		t.Fatal("an older head must not be cosigned")
+	}
+	var fe *source.ForkError
+	if errors.As(err, &fe) {
+		t.Fatalf("a consistent regression was reported as a fork: %v", err)
+	}
+	if forked, _ := db.IsForked(origin); forked {
+		t.Fatal("the log was poisoned by a stale replica")
+	}
+	if !src.verifyCalled {
+		t.Fatal("the regression was judged without asking for a consistency proof")
+	}
+}
+
+// A smaller signed head that is NOT a prefix of the one we witnessed is the
+// genuine article: the log signed two roots that cannot both be true.
+func TestSizeRegressionWithInconsistentTreeIsAFork(t *testing.T) {
+	w, db := newTestWitness(t)
 	origin := "example.com/log"
 
 	src := &stubSource{origin: origin, head: head(t, origin, 10, hashOf(1))}
@@ -160,9 +204,42 @@ func TestSizeRegressionIsFork(t *testing.T) {
 	}
 
 	src.head = head(t, origin, 9, hashOf(3))
+	src.consistencyErr = &source.ForkError{
+		Origin: origin, Reason: "tree at 9 does not extend to the witnessed root at 10",
+	}
+
 	var fe *source.ForkError
 	if _, err := w.Process(context.Background(), src); !errors.As(err, &fe) {
-		t.Fatalf("want ForkError for rollback, got %v", err)
+		t.Fatalf("want ForkError for an inconsistent rollback, got %v", err)
+	}
+	if forked, _ := db.IsForked(origin); !forked {
+		t.Fatal("a genuine fork must poison the log")
+	}
+}
+
+// When no proof can be obtained either way, withhold. Absence is not evidence.
+func TestSizeRegressionWithNoProofWithholds(t *testing.T) {
+	w, db := newTestWitness(t)
+	origin := "example.com/log"
+
+	src := &stubSource{origin: origin, head: head(t, origin, 10, hashOf(1))}
+	if _, err := w.Process(context.Background(), src); err != nil {
+		t.Fatal(err)
+	}
+
+	src.head = head(t, origin, 9, hashOf(3))
+	src.consistencyErr = errors.New("tile fetch failed: HTTP 503")
+
+	_, err := w.Process(context.Background(), src)
+	var fe *source.ForkError
+	if errors.As(err, &fe) {
+		t.Fatalf("an unobtainable proof was treated as evidence of a fork: %v", err)
+	}
+	if err == nil {
+		t.Fatal("withholding expected")
+	}
+	if forked, _ := db.IsForked(origin); forked {
+		t.Fatal("the log was poisoned because a proof could not be fetched")
 	}
 }
 

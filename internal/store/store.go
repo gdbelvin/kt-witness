@@ -45,6 +45,15 @@ var (
 	// comparison only ever covers one process lifetime, and a container restart
 	// silently resets the coverage to nothing.
 	bucketLogEntries = []byte("log_entries")
+
+	// bucketEpochs records what an operator committed for each epoch, so that a
+	// second, different commitment for the same epoch is caught across restarts
+	// rather than only within one process lifetime.
+	bucketEpochs = []byte("epoch_commitments")
+
+	// bucketRetractions records fork findings that were withdrawn, alongside
+	// the original evidence, so a reversal is as auditable as the accusation.
+	bucketRetractions = []byte("retractions")
 )
 
 // ErrRaced means the stored head changed between verification and persistence,
@@ -81,7 +90,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bucketHeads, bucketForks, bucketPoisoned, bucketAudits, bucketProgress, bucketHistory, bucketAppHeads, bucketLogEntries} {
+		for _, b := range [][]byte{bucketHeads, bucketForks, bucketPoisoned, bucketAudits, bucketProgress, bucketHistory, bucketAppHeads, bucketLogEntries, bucketEpochs, bucketRetractions} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}

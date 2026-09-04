@@ -12,6 +12,7 @@ unique to that deployment:
 | [signal.md](signal.md) | Signal, the one with no published root |
 | [apple.md](apple.md) | Apple, the one with no published directory |
 | [akd-checkpoint.md](akd-checkpoint.md) | The AKD → signed-note canonicalisation, specified so anyone can implement it |
+| [threat-model.md](threat-model.md) | What a dishonest server can do, and which of the three roles — client, auditor, witness — can see each attack |
 | [landscape.md](landscape.md) | The whole transparency-log world: what exists, what is covered, what is deliberately excluded |
 | [cost.md](cost.md) | What it costs to run, measured per log, and what that means for funding |
 

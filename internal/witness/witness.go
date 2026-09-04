@@ -142,9 +142,41 @@ func (w *Witness) Process(ctx context.Context, src source.Source) (*Outcome, err
 			if derived {
 				return nil, fmt.Errorf("witness: %s: %s; head is derived, not signed, so withholding rather than accusing", origin, msg)
 			}
-			return nil, w.fork(&source.ForkError{
-				Origin: origin, Reason: msg, Prev: prev, Next: next,
-			})
+
+			// A smaller signed head is NOT a contradiction on its own.
+			//
+			// This once accused the Go checksum database of forking. Both
+			// checkpoints carried valid sum.golang.org signatures, and the
+			// smaller one turned out to be a prefix of the larger: an older
+			// head the log had genuinely published, served again by a lagging
+			// CDN replica. A log behind many frontends does that routinely.
+			//
+			// The log contradicts itself only if the smaller tree is NOT a
+			// prefix of the larger. So ask exactly that — does the larger tree
+			// extend the smaller? — and let the answer decide, rather than
+			// inferring equivocation from ordering.
+			if err := src.VerifyConsistency(ctx, next, prev); err != nil {
+				var fe *source.ForkError
+				if errors.As(err, &fe) {
+					// The log signed two roots that cannot both be true.
+					return nil, w.fork(&source.ForkError{
+						Origin: origin,
+						Reason: fmt.Sprintf("%s; and the smaller tree is not a prefix of the larger: %s",
+							msg, fe.Reason),
+						Prev: prev, Next: next,
+					})
+				}
+				// No proof either way. Absence is not evidence: withhold.
+				return nil, fmt.Errorf(
+					"witness: %s: %s; could not determine whether this is a stale replica or a fork, withholding: %w",
+					origin, msg, err)
+			}
+			// Consistent, so this is an older head we already witnessed past.
+			// Withhold — we do not re-sign history — and retry.
+			return nil, fmt.Errorf(
+				"witness: %s: %s; the smaller tree is a prefix of the one we witnessed, "+
+					"so this is a stale replica rather than a fork; withholding until it catches up",
+				origin, msg)
 		case next.Size == prev.Size && next.Hash != prev.Hash:
 			msg := fmt.Sprintf("split view at size %d: witnessed root %x, now served %x", prev.Size, prev.Hash[:], next.Hash[:])
 			if derived {

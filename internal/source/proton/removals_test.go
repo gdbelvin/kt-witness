@@ -179,3 +179,67 @@ func TestApplyDiffNoticesRemovalValueMismatch(t *testing.T) {
 		t.Fatal("the removal was dated from the diff's value rather than the tree's")
 	}
 }
+
+func lbl(prefix byte, rev uint32) []byte {
+	l := make([]byte, 32)
+	for i := 0; i < 28; i++ {
+		l[i] = prefix
+	}
+	binary.BigEndian.PutUint32(l[28:], rev)
+	return l
+}
+
+// TestGroupRemovalsByLabel checks the grouping that makes Proton's deletion
+// rules inspectable: removals are keyed by VRF(email)[0:28] || revision, so an
+// address's revisions can be gathered without the address ever being knowable.
+func TestGroupRemovalsByLabel(t *testing.T) {
+	stats := &DiffStats{Removals: []Removal{
+		{Label: lbl(0xaa, 3)}, {Label: lbl(0xaa, 1)}, {Label: lbl(0xaa, 2)},
+		{Label: lbl(0xbb, 1)}, {Label: lbl(0xbb, 4)}, // gap: 2 and 3 absent
+		{Label: lbl(0xcc, 7)}, // does not start at 1
+	}}
+	got := GroupRemovalsByLabel(stats)
+	if len(got) != 3 {
+		t.Fatalf("grouped into %d addresses, want 3", len(got))
+	}
+	by := map[string]LabelRemovals{}
+	for _, g := range got {
+		by[g.Prefix[:2]] = g
+	}
+	if a := by["aa"]; !a.Contiguous || !a.FromOne || len(a.Revisions) != 3 {
+		t.Errorf("aa should be a contiguous run from 1: %+v", a)
+	}
+	if b := by["bb"]; b.Contiguous {
+		t.Errorf("bb has a gap at revisions 2-3 and must not read as contiguous: %+v", b)
+	}
+	if c := by["cc"]; c.FromOne {
+		t.Errorf("cc starts at revision 7, not 1: %+v", c)
+	}
+	// Revisions must be sorted, or contiguity is judged against arrival order.
+	a := by["aa"]
+	for i := 1; i < len(a.Revisions); i++ {
+		if a.Revisions[i] < a.Revisions[i-1] {
+			t.Fatalf("revisions not sorted: %v", a.Revisions)
+		}
+	}
+
+	irr := IrregularRemovals(stats)
+	if len(irr) != 1 || irr[0].Prefix[:2] != "bb" {
+		t.Fatalf("expected only bb to be irregular, got %+v", irr)
+	}
+}
+
+// TestGroupRemovalsIgnoresMalformed keeps a short or unparseable label from
+// silently becoming an address group of its own.
+func TestGroupRemovalsIgnoresMalformed(t *testing.T) {
+	stats := &DiffStats{Removals: []Removal{
+		{Label: []byte{1, 2, 3}},
+		{Label: lbl(0xaa, 1)},
+	}}
+	if got := GroupRemovalsByLabel(stats); len(got) != 1 {
+		t.Fatalf("malformed label was grouped: %+v", got)
+	}
+	if GroupRemovalsByLabel(nil) != nil {
+		t.Error("nil stats should group to nothing")
+	}
+}

@@ -193,3 +193,94 @@ func (v RemovalVerdict) Describe() string {
 	return fmt.Sprintf("label %s revision %d entered at epoch %d, %s",
 		hex.EncodeToString(v.Label), v.Revision, v.MinEpochID, kind)
 }
+
+// Proton's deletion rules, and which of them a diff can actually settle.
+//
+// The white paper gives an auditor three conditions on deletions:
+//
+//  1. a label's latest revision is never deleted
+//  2. only revisions superseded more than 90 days ago may be deleted
+//  3. revisions are deleted contiguously from revision 1
+//
+// JudgeRemovals settles (2): the retention window is published per epoch and
+// each removed leaf carries the epoch it entered, so a removal inside the window
+// is a positive contradiction.
+//
+// (1) and (3) are about a label's revisions as a set, and a single epoch's diff
+// does not contain that set. A gap in the revisions removed *this* epoch is
+// equally consistent with the missing revision having been removed legitimately
+// in an earlier epoch. Reporting a gap as a violation would therefore accuse
+// Proton of something the evidence does not show — the failure mode this
+// project exists to avoid.
+//
+// So the analysis below reports shape rather than judging it: it groups removals
+// by address and names the ones whose revision runs look irregular, which is
+// what a human would want to look at first. Turning that into a finding needs
+// the label's full revision set, which means the rebuilt tree, and is left for
+// when the incremental auditor can supply it.
+
+// LabelRemovals is one address's removals within a single epoch.
+//
+// The address itself is never recoverable: the label is VRF(email)[0:28], and
+// the VRF is precisely what stops a third party enumerating who is in the
+// directory. Grouping by it is possible; naming it is not.
+type LabelRemovals struct {
+	// Prefix is VRF(email)[0:28], hex-encoded.
+	Prefix string
+	// Revisions removed this epoch, ascending.
+	Revisions []int64
+	// Contiguous reports whether Revisions form a run with no gaps. A gap is
+	// not evidence on its own; see the note above.
+	Contiguous bool
+	// FromOne reports whether the run starts at revision 1, which is what rule
+	// (3) requires of a complete deletion history.
+	FromOne bool
+}
+
+// GroupRemovalsByLabel summarises an epoch's removals per address.
+func GroupRemovalsByLabel(stats *DiffStats) []LabelRemovals {
+	if stats == nil {
+		return nil
+	}
+	byPrefix := map[string][]int64{}
+	for _, rm := range stats.Removals {
+		if len(rm.Label) < 32 {
+			continue
+		}
+		rev, err := Revision(rm.Label)
+		if err != nil {
+			continue
+		}
+		p := hex.EncodeToString(rm.Label[:28])
+		byPrefix[p] = append(byPrefix[p], rev)
+	}
+
+	out := make([]LabelRemovals, 0, len(byPrefix))
+	for p, revs := range byPrefix {
+		sort.Slice(revs, func(i, j int) bool { return revs[i] < revs[j] })
+		lr := LabelRemovals{Prefix: p, Revisions: revs, Contiguous: true, FromOne: revs[0] == 1}
+		for i := 1; i < len(revs); i++ {
+			if revs[i] != revs[i-1]+1 {
+				lr.Contiguous = false
+				break
+			}
+		}
+		out = append(out, lr)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Prefix < out[j].Prefix })
+	return out
+}
+
+// IrregularRemovals returns the addresses whose removals this epoch are not a
+// contiguous run, for a human to look at.
+//
+// Deliberately not called "violations". See the note above.
+func IrregularRemovals(stats *DiffStats) []LabelRemovals {
+	var out []LabelRemovals
+	for _, lr := range GroupRemovalsByLabel(stats) {
+		if !lr.Contiguous {
+			out = append(out, lr)
+		}
+	}
+	return out
+}
