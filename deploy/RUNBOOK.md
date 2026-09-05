@@ -68,10 +68,29 @@ inbound ports, and keeps the home address out of public DNS.
 
 ### What only you can do
 
-1. **Add `gdbsecurity.com` to a Cloudflare account** and change the nameservers
-   at Squarespace to the pair Cloudflare gives you. The registrar stays
-   Squarespace; only DNS hosting moves. This also buys a real DNS API, which
-   makes DNS-01 available later if a wildcard is ever wanted.
+1. **Delegate only `kt.gdbsecurity.com` to Cloudflare.** The parent zone does
+   not move: the website, email and everything else stay on Squarespace DNS.
+
+   Cloudflare subdomain zones work on the Free plan, and Squarespace supports NS
+   records, so the delegated subtree can be exactly the namespace the witness
+   already lives in and nothing else.
+
+   - In Cloudflare, add **`kt.gdbsecurity.com`** as a new zone — not
+     `gdbsecurity.com`. It is issued its own nameservers, which are *not* the
+     parent zone's.
+   - At Squarespace → DNS Settings → Custom Records, add **NS** records for host
+     `kt` pointing at them.
+
+   Squarespace issues **four** nameserver values and every one needs its own
+   record. A delegation with one missing looks complete in their interface and
+   does not resolve, which is a tedious thing to debug from the symptom.
+
+   Confirm the delegation before going further, since everything after this
+   depends on it:
+
+   ```sh
+   dig +short NS kt.gdbsecurity.com          # expect the Cloudflare nameservers
+   ```
 
 2. **Authenticate and create the tunnel** — interactive, once:
 

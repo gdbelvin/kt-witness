@@ -20,6 +20,14 @@
 # availability is a real property for a witness, so a delivery failure is a
 # genuine failure, not a cosmetic one.
 #
+# ── Only the subdomain is delegated ──────────────────────────────────────────
+#
+# `kt.gdbsecurity.com` is a Cloudflare zone; `gdbsecurity.com` stays on
+# Squarespace DNS. Cloudflare subdomain zones work on the Free plan and
+# Squarespace supports NS records, so nothing about the website or email moves
+# to make this work — the delegated subtree is exactly the namespace the witness
+# already lives in.
+#
 # ── Placeholders ─────────────────────────────────────────────────────────────
 #
 # TUNNEL_UUID is printed by `cloudflared tunnel create kt-witness`. The
