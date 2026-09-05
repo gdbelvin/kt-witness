@@ -47,9 +47,16 @@
 services:
   tailscale:
     image: tailscale/tailscale:v1.102.2
-    hostname: kt-witness # becomes kt-witness.<tailnet>.ts.net via MagicDNS
     restart: unless-stopped
     environment:
+      # The tailnet name is set through Tailscale, NOT through the container's
+      # hostname. Setting `hostname: kt-witness` here instead looks equivalent
+      # and is not: Docker's embedded DNS resolves a container hostname ahead of
+      # a service name, so the sidecar answered to `kt-witness` itself and its
+      # own proxy resolved http://kt-witness:8080 to 192.168.16.3 — itself —
+      # rather than to the witness at .16.2. The result was a valid certificate
+      # in front of a 502.
+      TS_HOSTNAME: kt-witness
       TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY (see the header of this file)}
       TS_STATE_DIR: /var/lib/tailscale
       TS_SERVE_CONFIG: /config/serve.json
