@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"filippo.io/torchwood"
+	"github.com/gdbsecurity/kt-witness/internal/metrics"
 	"github.com/gdbsecurity/kt-witness/internal/source"
 	"golang.org/x/mod/sumdb/note"
 	"golang.org/x/mod/sumdb/tlog"
@@ -320,6 +321,11 @@ func (s *Source) verifyNewEntries(ctx context.Context, from, to int64, tree tlog
 				if err := s.cfg.Audits.RecordConstructionAudit(s.origin, i); err != nil {
 					return fmt.Errorf("c2sp: recording audit for entry %d: %w", i, err)
 				}
+				// Counted as a verification like any other, so the rate a
+				// dashboard derives covers entry logs rather than silently
+				// treating them as idle.
+				metrics.Inc("kt_witness_audit_verified_total",
+					map[string]string{"origin": s.origin})
 			}
 		}
 		start = tileEnd

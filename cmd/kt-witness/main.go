@@ -722,10 +722,24 @@ func run(cfg *config, log *slog.Logger, once, backfill bool, retractOrigin, retr
 					}(r)
 				}
 				hwg.Wait()
+
+				// A short pause, not a duty cycle.
+				//
+				// This used to sleep the full audit interval, which combined
+				// with a fixed per-round budget to produce a staircase: about
+				// a hundred seconds of work, then five minutes of nothing,
+				// regardless of how idle the machine was. Pacing is the
+				// governor's job now — it measures CPU and grants permits —
+				// and a second throttle here just meant the controller had no
+				// lever to pull.
+				//
+				// Long enough to yield between passes and to notice a context
+				// cancellation promptly; short enough that progress looks like
+				// progress rather than a sawtooth.
 				select {
 				case <-ctx.Done():
 					return
-				case <-time.After(auditInterval):
+				case <-time.After(historyPause):
 				}
 			}
 		}()
@@ -846,13 +860,24 @@ const roundConcurrency = 8
 // roughly twenty minutes of a log not being witnessed at all.
 const sustainedWithholding = 20
 
+// historyPause is the gap between backwards-sweep passes.
+//
+// Deliberately short. What limits the sweep is the CPU governor, not a timer:
+// when the machine is busy the governor withholds permits and the sweep blocks
+// inside Acquire, which is where the waiting belongs. A long sleep here throttles
+// even an idle box, which is exactly the behaviour it used to have.
+const historyPause = 10 * time.Second
+
 // historyBudgetPerRound bounds how many historical epochs one pass audits.
 //
 // Small on purpose. Meta alone has 625,000 published epochs at ~24 s of
 // verification each; sweeping them is a months-long background task, not
 // something to finish today, and it must never crowd out the forward auditing
 // that catches an active equivocation.
-const historyBudgetPerRound = 4
+// Raised from 4 once the governor existed. This is a yield point — how much one
+// origin does before the loop comes back around and gives the others a turn —
+// rather than a throttle. Throttling is measured, and lives in the governor.
+const historyBudgetPerRound = 32
 
 // withholding tracks consecutive failures per origin, so a persistent problem
 // is distinguishable from the ordinary transient one.
@@ -1131,6 +1156,11 @@ func runProtonStep(ctx context.Context, a *proton.IncrementalAuditor, db *store.
 		if err := db.RecordAudit(ar); err != nil {
 			log.Warn("proton audit: recording", "epoch", res.To, "err", err)
 		}
+		// Counted like every other verification. A counter that omits one
+		// ecosystem's work makes its rate read as zero while it is running.
+		lbl := map[string]string{"origin": origin}
+		metrics.Inc(server.MAuditVerified, lbl)
+		metrics.Add(server.MAuditBytes, lbl, float64(res.Stats.Added+res.Stats.Removed))
 	}
 
 	if res.Removals != nil && !res.Removals.Clean() {
