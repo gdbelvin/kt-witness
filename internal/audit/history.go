@@ -2,7 +2,6 @@ package audit
 
 import (
 	"context"
-	"github.com/gdbsecurity/kt-witness/internal/store"
 	"time"
 )
 
@@ -150,107 +149,21 @@ func (a *Auditor) RunHistory(ctx context.Context, r Resolver, budget int64) (*Hi
 		return res, nil
 	}
 
-	// Fetch ahead for this batch AND the next, so the link is filling the cache
-	// while the pool works through it.
-	//
-	// The lookahead used to be a flat 8 against a budget of 64, which quietly
-	// defeated the point: only 8 of every 64 epochs were served from cache and
-	// the other 56 downloaded inside the sidecar — while holding a governor
-	// permit. A permit is the scarce token here (there are three or four of
-	// them), and a proof takes ~5s to fetch against ~37s to verify, so roughly
-	// an eighth of the CPU budget was being spent waiting on bytes. That is
-	// precisely what the prefetcher was built to prevent.
-	//
-	// Twice the budget means the next batch's proofs are already arriving while
-	// this one verifies, so a permit is never held for a download.
-	a.prefetchAhead(ctx, r, cursor, budget*2)
+	// Prime the cache before the window opens, so the first workers are not the
+	// only ones paying for downloads. The streaming sweep keeps it topped up as
+	// the window slides.
+	a.prefetchAhead(ctx, r, cursor, a.windowSize()*2)
 
-	results := a.verifyBatch(ctx, r, cursor, earliest, budget)
-
-	// Advance only over the contiguous run of successes below the cursor.
-	//
-	// Results arrive out of order, and the sweep must never step past an epoch
-	// it has not settled: a hole would make "audited across published history"
-	// false while looking complete. Everything beyond the first gap is simply
-	// left for the next pass, which is what parking did when this was serial.
-	// Record every epoch that verified, then advance the cursor only over the
-	// contiguous run.
-	//
-	// These are two different questions and conflating them threw work away. An
-	// audit of epoch N is true whether or not N-1 could be checked, so it is
-	// recorded; the CURSOR is what must not step past a hole, because that is
-	// the thing claiming "everything below here is settled". Breaking out of the
-	// loop on the first gap discarded verifications that had already been paid
-	// for, and the next pass redid them — which is why coverage sat still while
-	// the sweep was plainly busy.
-	blocked := false
-	for i := int64(0); i < budget; i++ {
-		epoch := cursor - 1 - i
-		if epoch < earliest {
-			break
-		}
-		br := results[epoch]
-		if br == nil {
-			blocked = true
-			continue
-		}
-		if br.fatal != nil {
-			res.Failed++
-			if br.audit != nil {
-				_ = a.Store.RecordAudit(br.audit)
-			}
-			return res, br.fatal
-		}
-		if br.canceled {
-			// We stopped asking. Record nothing at all: an attempt not made is
-			// not an attempt refused, and writing one here would let a run of
-			// deploys retire an epoch's three attempts without the log ever
-			// having declined to serve it. The cursor stays put and the next
-			// pass asks again.
-			blocked = true
-			continue
-		}
-		if br.blocked {
-			// Count the attempt. Absence is still not evidence — the record is
-			// marked unverified, never as a finding — but an epoch that can
-			// never be fetched has to stop consuming every pass.
-			attempts := 1
-			if prior, err := a.Store.GetAudit(origin, epoch); err == nil && prior != nil {
-				attempts = prior.Attempts + 1
-			}
-			now := time.Now().UTC()
-			ar := &store.Audit{
-				Origin: origin, Epoch: epoch, Sampled: true, Rate: 1,
-				Strategy: string(StrategyHistory), Verified: false,
-				Attempts: attempts, DecidedAt: now,
-				// Exhausting the attempts stops the sweep spending every pass
-				// on this epoch; it does not conclude the epoch is unreachable.
-				// The repair pass picks it up again once this elapses.
-				RetryAfter: retryAfter(now, attempts),
-			}
-			_ = a.Store.RecordAudit(ar)
-			if !blocked {
-				a.Log.Warn("history sweep: epoch could not be checked",
-					"origin", origin, "epoch", epoch, "attempt", attempts,
-					"gives_up_after", maxFetchAttempts)
-			}
-			blocked = true
-			continue
-		}
-
-		// Verified. Worth recording wherever it sits.
-		if err := a.Store.RecordAudit(br.audit); err != nil {
-			return res, err
-		}
-		res.Verified++
-
-		// The cursor only moves while nothing below it is outstanding.
-		if !blocked {
-			if err := a.Store.SetBackAuditProgress(origin, epoch); err != nil {
-				return res, err
-			}
-			res.From = epoch
-		}
+	// Sliding window rather than a batch-and-barrier. See history_stream.go for
+	// why, and for the settlement invariants it must preserve.
+	sr := a.sweepStream(ctx, r, cursor, earliest, budget)
+	res.Verified = sr.verified
+	if sr.from < cursor {
+		res.From = sr.from
+	}
+	if sr.fatal != nil {
+		res.Failed++
+		return res, sr.fatal
 	}
 
 	res.Remaining = res.From - earliest

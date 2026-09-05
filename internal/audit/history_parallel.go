@@ -79,105 +79,14 @@ func (a *Auditor) verifyBatch(ctx context.Context, r Resolver, cursor, earliest,
 // per-epoch behaviour — same governor, same prefetch, same accounting — and
 // duplicating that is how the two would drift apart.
 func (a *Auditor) verifyEpochs(ctx context.Context, r Resolver, epochs []int64) map[int64]*batchResult {
-	origin := r.Origin()
 	out := make(map[int64]*batchResult, len(epochs))
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-
 	for _, epoch := range epochs {
 		wg.Add(1)
 		go func(epoch int64) {
 			defer wg.Done()
-			br := &batchResult{epoch: epoch}
-
-			ref, err := r.ResolveEpoch(ctx, epoch)
-			if err != nil {
-				br.blocked = true
-				br.canceled = ctx.Err() != nil
-				mu.Lock()
-				out[epoch] = br
-				mu.Unlock()
-				return
-			}
-
-			ar := &store.Audit{
-				Origin: origin, Epoch: epoch,
-				// Exhaustive, not drawn: the operator cannot retroactively
-				// choose what we replay, so rate 1 records that this epoch was
-				// checked outright.
-				Sampled: true, Rate: 1, Strategy: string(StrategyHistory),
-				DecidedAt: time.Now().UTC(), Attempts: 1,
-			}
-			br.audit = ar
-
-			// Get the bytes BEFORE taking a CPU permit.
-			//
-			// This is what keeps the three resources independent. A permit
-			// exists to bound CPU; a download needs none of it. Holding one
-			// across a fetch means the scarcest token in the system — there are
-			// three or four — is spent on network wait, so the CPU idles while
-			// the permit is nominally in use and neither resource is saturated.
-			//
-			// Fetching here instead lets each resource run to its own limit:
-			// bandwidth against the prefetcher's worker semaphore, disk against
-			// the cache bound and the free-space floor, CPU against the
-			// governor. The sidecar then reads a local file and does no network
-			// I/O at all.
-			cached := a.Prefetch.Path(origin, epoch)
-			if cached == "" && a.Prefetch != nil {
-				// Not prefetched — the lookahead did not reach it, or the cache
-				// was full when it tried. Fetch it now, unmetered by the
-				// governor, and pick it up from the cache below.
-				_ = a.Prefetch.Fetch(ctx, origin, ref.LogDirectory, epoch,
-					ref.PrevRoot, ref.CurrRoot)
-				cached = a.Prefetch.Path(origin, epoch)
-			}
-
-			if err := a.Governor.Acquire(ctx); err != nil {
-				// The governor only ever fails because the context ended, so
-				// this is us stopping, not the log refusing.
-				br.blocked = true
-				br.canceled = true
-				mu.Lock()
-				out[epoch] = br
-				mu.Unlock()
-				return
-			}
-			res, err := a.Sidecar.VerifyCached(ctx, ref.LogDirectory, epoch,
-				ref.PrevRoot, ref.CurrRoot, cached, a.Timeout)
-			a.Governor.Release()
-			if cached != "" {
-				a.Prefetch.Release(origin, epoch)
-			}
-
-			switch {
-			case err != nil, res != nil && !res.OK && res.Kind != "verify":
-				br.blocked = true
-				br.canceled = ctx.Err() != nil
-			case res != nil && !res.OK && res.Kind == "verify":
-				ar.Verified = false
-				br.fatal = fmt.Errorf(
-					"audit: %s: historical construction audit failed at epoch %d: %s",
-					origin, epoch, res.Error)
-			default:
-				ar.Verified = true
-				ar.Bytes = res.Bytes
-				ar.DurationMS = res.VerifyMS
-				br.verified = true
-
-				lbl := map[string]string{"origin": origin}
-				metrics.Inc("kt_witness_audit_verified_total", lbl)
-				metrics.Add("kt_witness_audit_bytes_total", lbl, float64(res.Bytes))
-				// The sidecar fetches over its own stack, so without this the
-				// largest consumer of bandwidth would not appear in the
-				// bandwidth metric. A prefetched proof was already counted when
-				// it was downloaded, so only count it here when it was not.
-				if cached == "" {
-					netmeter.Add(origin, res.Bytes)
-				}
-				a.Log.Info("epoch verified", "origin", origin, "epoch", epoch,
-					"ms", res.VerifyMS, "mb", res.Bytes>>20, "strategy", "history")
-			}
+			br := a.verifyOne(ctx, r, epoch)
 			mu.Lock()
 			out[epoch] = br
 			mu.Unlock()
@@ -185,4 +94,95 @@ func (a *Auditor) verifyEpochs(ctx context.Context, r Resolver, epochs []int64) 
 	}
 	wg.Wait()
 	return out
+}
+
+// verifyOne is the whole of an epoch's verification: resolve it, get its bytes,
+// take a CPU permit, replay the proof, and classify the outcome.
+//
+// Extracted so the batch sweep, the streaming sweep and the repair pass share
+// one implementation. Three copies of this would drift, and the parts that
+// would drift first are exactly the ones that have already caused bugs: whether
+// a cancellation counts as an attempt, and whether a permit is held across a
+// download.
+func (a *Auditor) verifyOne(ctx context.Context, r Resolver, epoch int64) *batchResult {
+	origin := r.Origin()
+
+	ref, err := r.ResolveEpoch(ctx, epoch)
+	if err != nil {
+		return &batchResult{epoch: epoch, blocked: true, canceled: ctx.Err() != nil}
+	}
+
+	// Bytes before permit: a permit bounds CPU, and holding one across a
+	// download spends the scarcest token in the system on network wait.
+	cached := a.Prefetch.Path(origin, epoch)
+	if cached == "" && a.Prefetch != nil {
+		_ = a.Prefetch.Fetch(ctx, origin, ref.LogDirectory, epoch,
+			ref.PrevRoot, ref.CurrRoot)
+		cached = a.Prefetch.Path(origin, epoch)
+	}
+	return a.verifyResolved(ctx, origin, epoch, ref, cached)
+}
+
+// verifyResolved replays one proof that has already been located and, ideally,
+// downloaded.
+//
+// Split from verifyOne so the staged pipeline can run resolution, fetching and
+// verification in separate pools while the repair pass — which handles a
+// handful of scattered epochs and has no use for a pipeline — still gets
+// identical per-epoch behaviour from one implementation.
+func (a *Auditor) verifyResolved(ctx context.Context, origin string, epoch int64,
+	ref *EpochRef, cached string) *batchResult {
+
+	br := &batchResult{epoch: epoch}
+	ar := &store.Audit{
+		Origin: origin, Epoch: epoch,
+		// Exhaustive, not drawn: the operator cannot retroactively choose what
+		// we replay, so rate 1 records that this epoch was checked outright.
+		Sampled: true, Rate: 1, Strategy: string(StrategyHistory),
+		DecidedAt: time.Now().UTC(), Attempts: 1,
+	}
+	br.audit = ar
+
+	if err := a.Governor.Acquire(ctx); err != nil {
+		// The governor only ever fails because the context ended, so this is us
+		// stopping, not the log refusing.
+		br.blocked = true
+		br.canceled = true
+		return br
+	}
+	res, err := a.Sidecar.VerifyCached(ctx, ref.LogDirectory, epoch,
+		ref.PrevRoot, ref.CurrRoot, cached, a.Timeout)
+	a.Governor.Release()
+	if cached != "" {
+		a.Prefetch.Release(origin, epoch)
+	}
+
+	switch {
+	case err != nil, res != nil && !res.OK && res.Kind != "verify":
+		br.blocked = true
+		br.canceled = ctx.Err() != nil
+	case res != nil && !res.OK && res.Kind == "verify":
+		ar.Verified = false
+		br.fatal = fmt.Errorf(
+			"audit: %s: historical construction audit failed at epoch %d: %s",
+			origin, epoch, res.Error)
+	default:
+		ar.Verified = true
+		ar.Bytes = res.Bytes
+		ar.DurationMS = res.VerifyMS
+		br.verified = true
+
+		lbl := map[string]string{"origin": origin}
+		metrics.Inc("kt_witness_audit_verified_total", lbl)
+		metrics.Add("kt_witness_audit_bytes_total", lbl, float64(res.Bytes))
+		// The sidecar fetches over its own stack, so without this the largest
+		// consumer of bandwidth would not appear in the bandwidth metric. A
+		// prefetched proof was already counted when it was downloaded.
+		if cached == "" {
+			netmeter.Add(origin, res.Bytes)
+		}
+		a.Log.Info("epoch verified", "origin", origin, "epoch", epoch,
+			"ms", res.VerifyMS, "mb", res.Bytes>>20, "strategy", "history")
+	}
+	return br
 }
