@@ -15,11 +15,10 @@
   "refresh_interval": "1h",
   "audit": {
     "sidecar_path": "./rust/kt-akd-verify/target/release/kt-akd-verify",
-    "sidecar_workers": 3,
     "pace_backlog": true,
     "reserve_cores": 1,
     "sample_rate": 0.1,
-    "interval": "5m",
+    "interval": "20s",
     "timeout": "5m"
   },
   "logs": [

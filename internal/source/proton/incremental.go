@@ -250,9 +250,10 @@ func (a *IncrementalAuditor) Step(ctx context.Context, from, to int64, meta *Epo
 		// Keep the evidence. A mismatch is the strongest finding this project
 		// can produce and it must be reproducible by someone else.
 		os.Rename(tmp, a.treePath(to)+".mismatch")
-		return res, fmt.Errorf(
-			"proton: epoch %d plus its published diff does not build epoch %d: "+
-				"computed %s, Proton signed %s", from, to, res.ComputedRoot, res.ExpectedRoot)
+		return res, &MismatchError{
+			From: from, To: to,
+			Computed: res.ComputedRoot, Signed: res.ExpectedRoot,
+		}
 	}
 
 	if err := os.Rename(tmp, a.treePath(to)); err != nil {
@@ -276,6 +277,16 @@ func (a *IncrementalAuditor) fetch(ctx context.Context, url string) ([]byte, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
+			// Proton answers 403 for a diff it has not published yet — the diff
+			// lags the epoch it belongs to by a little. Observed directly:
+			// epoch 6725 returned 403 and then 200 about a minute later.
+			//
+			// So this is the ordinary state of being caught up, not a fault. It
+			// gets its own error so the caller can wait quietly instead of
+			// warning every time the auditor reaches the tip.
+			return nil, &NotYetPublishedError{URL: url, Status: resp.StatusCode}
+		}
 		return nil, fmt.Errorf("proton: GET %s: HTTP %d", url, resp.StatusCode)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 1<<30))
@@ -374,4 +385,41 @@ func (a *IncrementalAuditor) FetchEpochMeta(ctx context.Context, epoch int64) (*
 		return nil, fmt.Errorf("proton: epoch %d has no tree hash", epoch)
 	}
 	return &EpochMeta{TreeHash: m.TreeHash, StartEpochID: m.StartEpochID}, nil
+}
+
+// MismatchError is the one Proton failure that is evidence of misconstruction:
+// the retained tree plus the published diff does not rebuild the root Proton
+// signed.
+//
+// It exists as a type so callers can tell it apart from the far more common
+// case of not being able to check at all. A fetch that returns 403, a truncated
+// download, a full disk — none of those say anything about how Proton built its
+// tree, and reporting them in the same breath as a real mismatch is how an
+// honest operator gets accused of misbehaviour. That mistake has already been
+// made once here, against the Go checksum database.
+type MismatchError struct {
+	From, To int64
+	Computed string
+	Signed   string
+}
+
+func (e *MismatchError) Error() string {
+	return fmt.Sprintf(
+		"proton: epoch %d plus its published diff does not build epoch %d: computed %s, Proton signed %s",
+		e.From, e.To, e.Computed, e.Signed)
+}
+
+// NotYetPublishedError is a diff Proton has not made available yet.
+//
+// Distinct from both a mismatch and a genuine fetch failure: nothing is wrong,
+// the auditor has simply caught up with what has been published. Treating it as
+// an error produced a warning every time the sweep reached the tip, which is
+// the fastest way to teach an operator to ignore warnings.
+type NotYetPublishedError struct {
+	URL    string
+	Status int
+}
+
+func (e *NotYetPublishedError) Error() string {
+	return fmt.Sprintf("proton: %s is not published yet (HTTP %d)", e.URL, e.Status)
 }

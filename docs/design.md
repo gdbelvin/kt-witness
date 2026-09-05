@@ -243,6 +243,46 @@ Freshness is gated in the other direction too — the witness refuses to cosign 
 head older than a configured bound, so a stale checkpoint cannot be laundered
 into a fresh-looking cosignature.
 
+
+## Waiting, and what governs it
+
+Every pause in this witness is one of three kinds, and confusing them is how a
+healthy service comes to look broken.
+
+**Politeness to somebody else's server.** These stay fixed timers, because the
+constraint lives at the other end and has nothing to do with our load:
+
+| wait | why |
+|---|---|
+| checkpoint poll | freshness of what we attest, and load on the log |
+| peer poll, hourly | their pages change slowly; a witness that hammers its peers is a bad neighbour |
+| Proton poll, 30 min | Proton publishes roughly every four hours |
+| backfill refresh, 6 h | re-walks listing metadata, which is cheap but not free |
+| corpus capture spacing | two responses a second apart describe the same tree |
+
+**Timeouts.** The sidecar's per-verification limit is a deadline, not a pace.
+
+**Our own throughput.** These must NOT be fixed timers, and every one that was
+has caused a visible fault:
+
+- The backwards sweep did four epochs then slept the full audit interval, so it
+  worked for about a hundred seconds and stopped for five minutes however idle
+  the machine was.
+- The forward pass slept five minutes between passes. WhatsApp publishes an
+  epoch every thirty seconds, so ten accumulated between wakeups and were then
+  verified back to back — a sawtooth in the verification rate that reflected the
+  timer rather than the work.
+
+Both are now short pauses whose only job is to yield and to notice cancellation.
+How much runs at once is the sidecar pool's business, sized from memory; how hard
+the machine is driven is the CPU governor's, targeting cores minus a reservation.
+
+The rule: **if a wait exists to stop us working too hard, it belongs to the
+governor. If it exists because of something outside this process, it stays a
+timer.** A fixed timer in the first category does not reduce load, it only makes
+the same load arrive in lumps — and then the graphs report the timer instead of
+the system.
+
 ## Storage
 
 Two layers, with a deliberate split of responsibility.

@@ -104,11 +104,15 @@ type config struct {
 		// paced.
 		Pace bool `json:"pace_backlog"`
 
-		SampleRate        float64 `json:"sample_rate"`
-		Interval          string  `json:"interval"`
-		Timeout           string  `json:"timeout"`
-		BeaconURL         string  `json:"beacon_url"`
-		MaxEpochsPerRound int64   `json:"max_epochs_per_round"`
+		SampleRate float64 `json:"sample_rate"`
+		// Interval is how often the forward pass LOOKS for new epochs — not a
+		// throttle. Checking is cheap when the auditor is caught up, and pacing
+		// is the governor's job; a long interval only makes work arrive in
+		// bursts rather than making less of it.
+		Interval          string `json:"interval"`
+		Timeout           string `json:"timeout"`
+		BeaconURL         string `json:"beacon_url"`
+		MaxEpochsPerRound int64  `json:"max_epochs_per_round"`
 	} `json:"audit"`
 
 	Logs []logConfig `json:"logs"`
@@ -477,7 +481,7 @@ func run(cfg *config, log *slog.Logger, once, backfill bool, retractOrigin, retr
 	var auditInterval time.Duration
 	var resolvers []audit.Resolver
 	if cfg.Audit.SidecarPath != "" {
-		if auditInterval, err = time.ParseDuration(orDefault(cfg.Audit.Interval, "5m")); err != nil {
+		if auditInterval, err = time.ParseDuration(orDefault(cfg.Audit.Interval, "20s")); err != nil {
 			return fmt.Errorf("audit.interval: %w", err)
 		}
 		auditTimeout, err := time.ParseDuration(orDefault(cfg.Audit.Timeout, "5m"))
@@ -488,9 +492,13 @@ func run(cfg *config, log *slog.Logger, once, backfill bool, retractOrigin, retr
 		if rate <= 0 {
 			rate = 0.1
 		}
+		// Derived from the memory this container may use, unless set. A pool is
+		// bounded by memory rather than cores because a verification is already
+		// multi-threaded, and because overrunning memory is an OOM kill while
+		// overrunning CPU is merely slow — and the governor corrects slow.
 		workers := cfg.Audit.SidecarWorkers
 		if workers < 1 {
-			workers = 1
+			workers = audit.DefaultWorkers()
 		}
 		sidecar := audit.NewPool(cfg.Audit.SidecarPath, workers)
 		defer sidecar.Close()
@@ -522,6 +530,7 @@ func run(cfg *config, log *slog.Logger, once, backfill bool, retractOrigin, retr
 		log.Info("tier B auditing enabled", "sidecar", cfg.Audit.SidecarPath,
 			"sample_rate", rate, "logs", len(resolvers), "interval", auditInterval.String(),
 			"workers", sidecar.Size(),
+			"workers_derived", cfg.Audit.SidecarWorkers < 1,
 			"peak_memory_estimate_gb", float64(sidecar.Size())*3.7)
 	}
 
@@ -648,7 +657,7 @@ func run(cfg *config, log *slog.Logger, once, backfill bool, retractOrigin, retr
 			"cores_detected", runtime.NumCPU(),
 			"budget_cores", auditor.Governor.BudgetFor(float64(runtime.NumCPU())),
 			"reserve_cores", cfg.Audit.ReserveCores,
-			"max_concurrent", cfg.Audit.SidecarWorkers,
+			"max_concurrent", auditor.Governor.MaxConcurrent,
 			"note", "live auditing is never paced")
 	}
 
@@ -1118,11 +1127,30 @@ func runProtonStep(ctx context.Context, a *proton.IncrementalAuditor, db *store.
 
 	res, err := a.Step(ctx, base, next, meta)
 	if err != nil {
-		// A tree-hash mismatch is conclusive and the evidence is retained on
-		// disk, but it is reported rather than used to poison the log here: the
-		// witness core owns that decision, and a human should see this first.
-		log.Error("PROTON CONSTRUCTION AUDIT FAILED — the published diff does not "+
-			"carry one epoch into the next; evidence retained on disk",
+		var mm *proton.MismatchError
+		if errors.As(err, &mm) {
+			// The retained tree plus the published diff does not rebuild the
+			// root Proton signed. Conclusive, and the evidence is on disk —
+			// but reported rather than used to poison the log here, because
+			// the witness core owns that decision and a human should see it.
+			log.Error("PROTON CONSTRUCTION AUDIT FAILED — the published diff does not "+
+				"carry one epoch into the next; evidence retained on disk",
+				"from", base, "to", next, "err", err)
+			return
+		}
+		var pending *proton.NotYetPublishedError
+		if errors.As(err, &pending) {
+			// Caught up: the diff for this epoch is not out yet. Nothing is
+			// wrong, so nothing is said above debug — a warning on every pass
+			// at the tip is how warnings stop being read.
+			log.Debug("proton audit: waiting for the next diff", "epoch", next)
+			return
+		}
+		// Everything else means we could not check: a refused download, a
+		// truncated body, no disk. None of that is evidence about how Proton
+		// built its tree, and saying so at ERROR would accuse an operator of
+		// misbehaviour on the strength of our own failure to fetch.
+		log.Warn("proton audit: could not verify this epoch; withholding judgement, not accusing",
 			"from", base, "to", next, "err", err)
 		return
 	}
