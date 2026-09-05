@@ -128,7 +128,7 @@ func (a *Auditor) RunRepair(ctx context.Context, r Resolver, budget int) (*Repai
 	}
 
 	// Report what is still open, so the metric reflects the pass that just ran.
-	if _, _, holesLeft, err := a.Store.VerifiedRegion(origin, cursor, latest); err == nil {
+	if _, _, _, holesLeft, err := a.Store.VerifiedRegion(origin, cursor, latest); err == nil {
 		res.Remaining = holesLeft
 	}
 	return res, nil

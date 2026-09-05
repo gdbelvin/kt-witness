@@ -154,16 +154,49 @@ func TestVerifiedRegionReportsTheUnbrokenRun(t *testing.T) {
 		}
 	}
 
-	lo, hi, holes, err := db.VerifiedRegion(origin, 100, 110)
+	lo, hi, run, holes, err := db.VerifiedRegion(origin, 100, 110)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if holes != 1 {
 		t.Fatalf("holes=%d, want 1", holes)
 	}
-	if hi-lo+1 != 5 {
+	if run != 5 {
 		t.Fatalf("largest run %d..%d (%d epochs), want 5 — a count of ten "+
-			"audited epochs would hide the gap at 105", lo, hi, hi-lo+1)
+			"audited epochs would hide the gap at 105", lo, hi, run)
+	}
+}
+
+// A log whose history starts at epoch 0 must report its run correctly.
+//
+// The first version derived the run length from lo and hi and used `lo > 0` to
+// mean "no run found". thelemail.com/keys starts at epoch 0, so a fully audited
+// log reported a verified run of zero — the metric said the weakest possible
+// thing about the most completely audited log we have.
+func TestVerifiedRegionHandlesEpochZero(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "zero.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	const origin = "thelemail.test/keys"
+	for e := int64(0); e <= 9; e++ {
+		if err := db.RecordAudit(&store.Audit{
+			Origin: origin, Epoch: e, Sampled: true, Rate: 1,
+			Verified: true, DecidedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	lo, hi, run, holes, err := db.VerifiedRegion(origin, 0, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run != 10 || lo != 0 || hi != 9 || holes != 0 {
+		t.Fatalf("run=%d lo=%d hi=%d holes=%d; want a complete run of 10 from 0..9 — "+
+			"epoch 0 is a real epoch, not an absent one", run, lo, hi, holes)
 	}
 }
 

@@ -238,12 +238,9 @@ func (s *Server) buildStatus() (*statusView, error) {
 				// audited count says how much work was done, not whether the
 				// result is a solid range or a sieve, and only a solid range
 				// supports "this log's history is construction audited".
-				if lo, hi, holes, err := s.Store.VerifiedRegion(rec.Origin, h.From, h.To); err == nil {
+				if lo, hi, run, holes, err := s.Store.VerifiedRegion(rec.Origin, h.From, h.To); err == nil {
 					lv.VerifiedFrom, lv.VerifiedTo = lo, hi
-					lv.Holes = holes
-					if hi >= lo && lo > 0 {
-						lv.VerifiedRun = hi - lo + 1
-					}
+					lv.VerifiedRun, lv.Holes = run, holes
 				}
 				switch {
 				case total > 0 && verified >= total:

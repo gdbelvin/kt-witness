@@ -767,7 +767,12 @@ func (s *Store) HolesDue(origin string, from, to int64, now time.Time, limit int
 // result is a solid range or a sieve, and only a solid range supports "this
 // log's history is construction audited". Two logs with identical audited
 // counts can differ entirely in what they actually establish.
-func (s *Store) VerifiedRegion(origin string, from, to int64) (lo, hi, holes int64, err error) {
+// The run length is returned explicitly rather than left to the caller to
+// compute from lo and hi. Deriving it invites a guard like `lo > 0` to mean "no
+// run found", which is wrong for any log whose history starts at epoch 0 —
+// thelemail.com/keys does, and reported a verified run of zero across a fully
+// audited log because of exactly that.
+func (s *Store) VerifiedRegion(origin string, from, to int64) (lo, hi, run, holes int64, err error) {
 	verified := make(map[int64]bool)
 	err = s.db.View(func(tx *bolt.Tx) error {
 		c := tx.Bucket(bucketAudits).Cursor()
@@ -789,7 +794,7 @@ func (s *Store) VerifiedRegion(origin string, from, to int64) (lo, hi, holes int
 		return nil
 	})
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("store: verified region for %s: %w", origin, err)
+		return 0, 0, 0, 0, fmt.Errorf("store: verified region for %s: %w", origin, err)
 	}
 
 	// Longest run of consecutive verified epochs. Walked over the keys we hold
@@ -807,5 +812,5 @@ func (s *Store) VerifiedRegion(origin string, from, to int64) (lo, hi, holes int
 			bestLen, bestLo, bestHi = n, epoch, end
 		}
 	}
-	return bestLo, bestHi, holes, nil
+	return bestLo, bestHi, bestLen, holes, nil
 }
