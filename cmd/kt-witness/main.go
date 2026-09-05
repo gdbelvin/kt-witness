@@ -979,7 +979,18 @@ const historyPause = 10 * time.Second
 // Raised from 4 once the governor existed. This is a yield point — how much one
 // origin does before the loop comes back around and gives the others a turn —
 // rather than a throttle. Throttling is measured, and lives in the governor.
-const historyBudgetPerRound = 32
+// Measured: with a budget of 32 the permit count sat at 4 while in-flight
+// verifications fell to 1 and then 0 — the tail of each batch draining with
+// capacity idle, because every epoch in a batch must finish before the next
+// batch begins and Meta's proofs take ~37s against WhatsApp's ~7s.
+//
+// A larger budget does not remove that barrier, it amortises it: the idle tail
+// is roughly constant per batch, so tripling the batch cuts its share of the
+// round by the same factor. The real fix is a sliding window that admits a new
+// epoch as each one completes, which is a rewrite of the cursor-settlement
+// logic — and that logic has produced four bugs this week, so it wants its own
+// change with its own tests rather than riding along with a constant.
+const historyBudgetPerRound = 96
 
 // repairBudgetPerRound bounds how many holes one pass retries.
 //
