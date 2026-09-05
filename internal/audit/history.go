@@ -124,8 +124,17 @@ func (a *Auditor) RunHistory(ctx context.Context, r Resolver, budget int64) (*Hi
 		if prior == nil {
 			break
 		}
-		if !prior.Verified && prior.Attempts < maxFetchAttempts {
-			break
+		if !prior.Verified {
+			// Not yet out of attempts: take it now.
+			if prior.Attempts < maxFetchAttempts {
+				break
+			}
+			// Out of attempts, but the backoff has elapsed: try again. This is
+			// what keeps a hole from being permanent — the sweep stops spending
+			// every pass on a dead epoch without ever concluding it is dead.
+			if !prior.RetryAfter.IsZero() && !time.Now().Before(prior.RetryAfter) {
+				break
+			}
 		}
 		if err := a.Store.SetBackAuditProgress(origin, cursor-1); err != nil {
 			return res, err
@@ -206,10 +215,15 @@ func (a *Auditor) RunHistory(ctx context.Context, r Resolver, budget int64) (*Hi
 			if prior, err := a.Store.GetAudit(origin, epoch); err == nil && prior != nil {
 				attempts = prior.Attempts + 1
 			}
+			now := time.Now().UTC()
 			ar := &store.Audit{
 				Origin: origin, Epoch: epoch, Sampled: true, Rate: 1,
 				Strategy: string(StrategyHistory), Verified: false,
-				Attempts: attempts, DecidedAt: time.Now().UTC(),
+				Attempts: attempts, DecidedAt: now,
+				// Exhausting the attempts stops the sweep spending every pass
+				// on this epoch; it does not conclude the epoch is unreachable.
+				// The repair pass picks it up again once this elapses.
+				RetryAfter: retryAfter(now, attempts),
 			}
 			_ = a.Store.RecordAudit(ar)
 			if !blocked {
@@ -252,6 +266,20 @@ func (a *Auditor) earliestPublished(origin string) (int64, error) {
 	for _, h := range hs {
 		if h.Origin == origin {
 			return h.From, nil
+		}
+	}
+	return 0, nil
+}
+
+// latestPublished is the top of the backfilled range.
+func (a *Auditor) latestPublished(origin string) (int64, error) {
+	hs, err := a.Store.Histories()
+	if err != nil {
+		return 0, err
+	}
+	for _, h := range hs {
+		if h.Origin == origin {
+			return h.To, nil
 		}
 	}
 	return 0, nil
@@ -305,5 +333,37 @@ func (a *Auditor) prefetchAhead(ctx context.Context, r Resolver, epoch, lookahea
 // transient refusal or a stale cache entry.
 //
 // The epoch is recorded unverified, never as a finding. Absence remains
-// evidence of nothing — what changes is only that we stop asking.
+// evidence of nothing — what changes is only that we stop asking *for now*.
 const maxFetchAttempts = 3
+
+// Backoff for an epoch that has exhausted its attempts.
+//
+// "Stop asking every pass" and "give up forever" are different, and only the
+// first is justified. Nearly every reason a proof cannot be fetched is
+// temporary — a CDN serving a stale negative listing, a 403 that clears, a diff
+// that lags its epoch — so a permanent verdict on that evidence leaves a hole
+// that never heals, in precisely the range tier B+ claims to have covered.
+//
+// The delay doubles per exhausted round from one hour to a week. A transient
+// refusal is picked up within the hour; a genuinely pruned blob settles at a
+// handful of requests a week, which is cheap enough to keep paying indefinitely
+// rather than close the door on it.
+const (
+	retryBackoffBase = time.Hour
+	retryBackoffMax  = 7 * 24 * time.Hour
+)
+
+// retryAfter returns when an epoch with this many attempts may be tried again.
+func retryAfter(now time.Time, attempts int) time.Time {
+	if attempts < maxFetchAttempts {
+		return time.Time{} // not exhausted; the next pass may take it
+	}
+	d := retryBackoffBase
+	for i := maxFetchAttempts; i < attempts && d < retryBackoffMax; i++ {
+		d *= 2
+	}
+	if d > retryBackoffMax {
+		d = retryBackoffMax
+	}
+	return now.Add(d)
+}

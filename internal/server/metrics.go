@@ -32,8 +32,12 @@ const (
 	// the stored record rather than claimed by a source.
 	MHistoryAudited    = "kt_witness_history_audited_epochs"
 	MHistoryUnverified = "kt_witness_history_unverified_epochs"
-	MHistoryTotal    = "kt_witness_history_total_epochs"
-	MHistoryCoverage = "kt_witness_history_audit_coverage"
+	MVerifiedRun       = "kt_witness_verified_region_epochs"
+	MVerifiedFrom      = "kt_witness_verified_region_from"
+	MVerifiedTo        = "kt_witness_verified_region_to"
+	MHoles             = "kt_witness_history_holes"
+	MHistoryTotal      = "kt_witness_history_total_epochs"
+	MHistoryCoverage   = "kt_witness_history_audit_coverage"
 
 	MAuditEpochs   = "kt_witness_audit_epochs_total"
 	MAppHeads      = "kt_witness_application_heads"
@@ -94,6 +98,10 @@ func Init(version string) {
 	d(MBackfillGaps, metrics.Gauge, "Gaps found in a log's published history. Not evidence of misbehaviour by itself: retention limits produce them too.")
 	d(MHistoryAudited, metrics.Gauge, "Epochs of published history with a settled construction-audit decision.")
 	d(MHistoryUnverified, metrics.Gauge, "Epochs settled WITHOUT being verified — ones we gave up fetching after repeated attempts. These are holes inside the swept range: they count toward audited, so a rising value means coverage is less complete than the audited figure suggests. Alert on this being non-zero and growing.")
+	d(MVerifiedRun, metrics.Gauge, "Length of the largest UNBROKEN run of verified epochs. This is the honest form of the coverage claim: the audited count says how much work was done, this says whether the result is a solid range or a sieve.")
+	d(MVerifiedFrom, metrics.Gauge, "First epoch of the largest unbroken verified run.")
+	d(MVerifiedTo, metrics.Gauge, "Last epoch of the largest unbroken verified run.")
+	d(MHoles, metrics.Gauge, "Epochs inside the swept range that are settled but unverified — gaps in coverage. Retried on a growing backoff rather than abandoned, so a persistently non-zero value means genuinely unfetchable proofs, not a transient refusal.")
 	d(MHistoryTotal, metrics.Gauge, "Epochs of published history in total.")
 	d(MHistoryCoverage, metrics.Gauge, "Fraction of published history construction audited, 0 to 1. Reaching 1 is what earns tier B+ — a bare tier B only covers epochs published since we started watching.")
 	d(MAuditEpochs, metrics.Counter, "Epochs considered for construction auditing, by outcome: sampled, declined, verified, unavailable.")
@@ -207,6 +215,13 @@ func (s *Server) refreshStoreMetrics() error {
 			// it, because a coverage figure that hides them reads as a
 			// completeness it has not earned.
 			metrics.Set(MHistoryUnverified, origin, float64(lg.HistoryUnverified))
+			// The contiguous verified region, and the holes outside it. A
+			// coverage count alone cannot distinguish a solid range from a
+			// sieve, and only the solid range supports the tier B+ claim.
+			metrics.Set(MVerifiedRun, origin, float64(lg.VerifiedRun))
+			metrics.Set(MVerifiedFrom, origin, float64(lg.VerifiedFrom))
+			metrics.Set(MVerifiedTo, origin, float64(lg.VerifiedTo))
+			metrics.Set(MHoles, origin, float64(lg.Holes))
 			metrics.Set(MHistoryAudited, origin, float64(lg.HistoryAudited))
 			metrics.Set(MHistoryTotal, origin, float64(lg.HistoryTotal))
 			metrics.Set(MHistoryCoverage, origin, float64(lg.HistoryAudited)/float64(lg.HistoryTotal))

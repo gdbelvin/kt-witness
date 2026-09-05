@@ -764,6 +764,24 @@ func run(cfg *config, log *slog.Logger, once, backfill bool, retractOrigin, retr
 								"from", out.From, "to", out.To, "verified", out.Verified,
 								"remaining", out.Remaining, "complete", out.Complete)
 						}
+
+						// Revisit holes the sweep left behind. It runs here, on
+						// the sweep's own goroutine and after it, so repair can
+						// never crowd out forward progress: the cursor moving
+						// down is the primary job and closing gaps is the
+						// cleanup. The budget is deliberately a fraction of the
+						// sweep's — holes are few, and each has already waited
+						// at least an hour.
+						rep, err := auditor.RunRepair(ctx, r, repairBudgetPerRound)
+						if err != nil && ctx.Err() == nil {
+							log.Warn("hole repair", "origin", r.Origin(), "err", err)
+							return
+						}
+						if rep != nil && rep.Attempted > 0 {
+							log.Info("holes retried", "origin", rep.Origin,
+								"attempted", rep.Attempted, "repaired", rep.Repaired,
+								"still_open", rep.Remaining)
+						}
 					}(r)
 				}
 				hwg.Wait()
@@ -962,6 +980,14 @@ const historyPause = 10 * time.Second
 // origin does before the loop comes back around and gives the others a turn —
 // rather than a throttle. Throttling is measured, and lives in the governor.
 const historyBudgetPerRound = 32
+
+// repairBudgetPerRound bounds how many holes one pass retries.
+//
+// Small on purpose. Holes are rare — a healthy log has none — and each has
+// already waited out at least an hour of backoff, so there is no urgency. What
+// matters is that the number is nonzero: a gap nobody ever revisits is a
+// permanent subtraction from the coverage claim.
+const repairBudgetPerRound = 4
 
 // withholding tracks consecutive failures per origin, so a persistent problem
 // is distinguishable from the ordinary transient one.

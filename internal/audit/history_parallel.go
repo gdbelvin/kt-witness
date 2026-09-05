@@ -60,16 +60,31 @@ type batchResult struct {
 // Returns results keyed by epoch. Concurrency is bounded by the governor, which
 // is what keeps this from simply moving the bottleneck onto the CPU.
 func (a *Auditor) verifyBatch(ctx context.Context, r Resolver, cursor, earliest, budget int64) map[int64]*batchResult {
-	origin := r.Origin()
-	out := make(map[int64]*batchResult, budget)
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
+	epochs := make([]int64, 0, budget)
 	for i := int64(0); i < budget; i++ {
 		epoch := cursor - 1 - i
 		if epoch < earliest {
 			break
 		}
+		epochs = append(epochs, epoch)
+	}
+	return a.verifyEpochs(ctx, r, epochs)
+}
+
+// verifyEpochs verifies an arbitrary set of epochs concurrently.
+//
+// Separate from verifyBatch because the backwards sweep is not the only thing
+// that needs to verify epochs: the repair pass revisits holes scattered above
+// the cursor, which is not a contiguous descending run. Both want identical
+// per-epoch behaviour — same governor, same prefetch, same accounting — and
+// duplicating that is how the two would drift apart.
+func (a *Auditor) verifyEpochs(ctx context.Context, r Resolver, epochs []int64) map[int64]*batchResult {
+	origin := r.Origin()
+	out := make(map[int64]*batchResult, len(epochs))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, epoch := range epochs {
 		wg.Add(1)
 		go func(epoch int64) {
 			defer wg.Done()
@@ -95,7 +110,29 @@ func (a *Auditor) verifyBatch(ctx context.Context, r Resolver, cursor, earliest,
 			}
 			br.audit = ar
 
+			// Get the bytes BEFORE taking a CPU permit.
+			//
+			// This is what keeps the three resources independent. A permit
+			// exists to bound CPU; a download needs none of it. Holding one
+			// across a fetch means the scarcest token in the system — there are
+			// three or four — is spent on network wait, so the CPU idles while
+			// the permit is nominally in use and neither resource is saturated.
+			//
+			// Fetching here instead lets each resource run to its own limit:
+			// bandwidth against the prefetcher's worker semaphore, disk against
+			// the cache bound and the free-space floor, CPU against the
+			// governor. The sidecar then reads a local file and does no network
+			// I/O at all.
 			cached := a.Prefetch.Path(origin, epoch)
+			if cached == "" && a.Prefetch != nil {
+				// Not prefetched — the lookahead did not reach it, or the cache
+				// was full when it tried. Fetch it now, unmetered by the
+				// governor, and pick it up from the cache below.
+				_ = a.Prefetch.Fetch(ctx, origin, ref.LogDirectory, epoch,
+					ref.PrevRoot, ref.CurrRoot)
+				cached = a.Prefetch.Path(origin, epoch)
+			}
+
 			if err := a.Governor.Acquire(ctx); err != nil {
 				// The governor only ever fails because the context ended, so
 				// this is us stopping, not the log refusing.

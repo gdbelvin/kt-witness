@@ -273,6 +273,23 @@ type Audit struct {
 	// blob cannot stall auditing for good.
 	Attempts int `json:"attempts,omitempty"`
 
+	// RetryAfter is when an exhausted epoch becomes eligible to be tried again.
+	//
+	// Giving up permanently was wrong. The reasons an epoch cannot be fetched
+	// are mostly temporary — a CDN serving a stale negative listing, a 403 that
+	// clears a minute later, a diff that lags its epoch — and a permanent
+	// verdict on temporary evidence leaves a hole that never heals. Worse, it is
+	// a hole in the very claim tier B+ makes, so the cheapest way to lose the
+	// strongest assertion this witness publishes is to be briefly unlucky.
+	//
+	// So exhausting the attempts stops the sweep spending every pass on the
+	// epoch — which is what the stall fix was for — without ever declaring it
+	// beyond hope. The backoff grows so a genuinely dead blob costs a handful of
+	// requests a week rather than a burst on every round.
+	//
+	// Zero means "not exhausted, retry whenever the sweep reaches it".
+	RetryAfter time.Time `json:"retry_after,omitempty"`
+
 	Kind       string `json:"kind,omitempty"`
 	Error      string `json:"error,omitempty"`
 	DurationMS int64  `json:"duration_ms,omitempty"`
@@ -703,4 +720,92 @@ func (s *Store) AuditCoverage(origin string, from, to int64) (settled, verified 
 		return 0, 0, fmt.Errorf("store: audit coverage for %s: %w", origin, err)
 	}
 	return settled, verified, nil
+}
+
+// HolesDue lists epochs that were settled without being verified and whose
+// retry backoff has elapsed, soonest-eligible first.
+//
+// These are the gaps in the swept range. The backwards cursor cannot find them
+// again — it only ever walks down, so anything it has already passed is behind
+// it forever — which is why they need their own pass.
+func (s *Store) HolesDue(origin string, from, to int64, now time.Time, limit int) ([]int64, error) {
+	var out []int64
+	err := s.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket(bucketAudits).Cursor()
+		prefix := []byte(origin + "|")
+		for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+			if len(out) >= limit {
+				return nil
+			}
+			var a Audit
+			if json.Unmarshal(v, &a) != nil {
+				continue
+			}
+			if a.Verified || a.Epoch < from || a.Epoch > to {
+				continue
+			}
+			// Zero means it has not exhausted its attempts, so the ordinary
+			// sweep still owns it and this pass must not race it.
+			if a.RetryAfter.IsZero() || now.Before(a.RetryAfter) {
+				continue
+			}
+			out = append(out, a.Epoch)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: holes due for %s: %w", origin, err)
+	}
+	return out, nil
+}
+
+// VerifiedRegion returns the largest unbroken run of verified epochs in range,
+// and how many epochs in that range are settled but unverified.
+//
+// The contiguous region is the honest form of the coverage claim. A count of
+// audited epochs says how much work was done; it says nothing about whether the
+// result is a solid range or a sieve, and only a solid range supports "this
+// log's history is construction audited". Two logs with identical audited
+// counts can differ entirely in what they actually establish.
+func (s *Store) VerifiedRegion(origin string, from, to int64) (lo, hi, holes int64, err error) {
+	verified := make(map[int64]bool)
+	err = s.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket(bucketAudits).Cursor()
+		prefix := []byte(origin + "|")
+		for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+			var a Audit
+			if json.Unmarshal(v, &a) != nil {
+				continue
+			}
+			if a.Epoch < from || a.Epoch > to {
+				continue
+			}
+			if a.Verified {
+				verified[a.Epoch] = true
+			} else {
+				holes++
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("store: verified region for %s: %w", origin, err)
+	}
+
+	// Longest run of consecutive verified epochs. Walked over the keys we hold
+	// rather than the whole range, so an unswept log costs nothing here.
+	var bestLo, bestHi, bestLen int64
+	for epoch := range verified {
+		if verified[epoch-1] {
+			continue // not the start of a run
+		}
+		end := epoch
+		for verified[end+1] {
+			end++
+		}
+		if n := end - epoch + 1; n > bestLen {
+			bestLen, bestLo, bestHi = n, epoch, end
+		}
+	}
+	return bestLo, bestHi, holes, nil
 }

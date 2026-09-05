@@ -36,23 +36,31 @@ type logView struct {
 	// successful verification — ones we gave up fetching. Published because a
 	// coverage figure that hides them reads as completeness it has not earned.
 	HistoryUnverified int64
-	HistoryTotal   int64
-	Origin         string
-	Size           int64
-	Root           string
-	RootShort      string
-	Path           string
-	WitnessedAt    time.Time
-	Age            string
-	Stale          bool
-	Forked         bool
-	Audited        int
-	Sampled        int
-	Declined       int
-	Unavailable    int
-	LastEpoch      int64
-	History        *historyView
-	CheckpointID   string
+
+	// The largest unbroken run of verified epochs, and the number of holes in
+	// the swept range. Published together because either alone misleads: a run
+	// without a hole count hides what it excludes, and a hole count without the
+	// run says nothing about what was actually established.
+	VerifiedFrom, VerifiedTo int64
+	VerifiedRun              int64
+	Holes                    int64
+	HistoryTotal             int64
+	Origin                   string
+	Size                     int64
+	Root                     string
+	RootShort                string
+	Path                     string
+	WitnessedAt              time.Time
+	Age                      string
+	Stale                    bool
+	Forked                   bool
+	Audited                  int
+	Sampled                  int
+	Declined                 int
+	Unavailable              int
+	LastEpoch                int64
+	History                  *historyView
+	CheckpointID             string
 }
 
 type historyView struct {
@@ -226,6 +234,17 @@ func (s *Server) buildStatus() (*statusView, error) {
 				lv.HistoryAudited = settled
 				lv.HistoryTotal = total
 				lv.HistoryUnverified = settled - verified
+				// The contiguous run is the honest shape of the claim: an
+				// audited count says how much work was done, not whether the
+				// result is a solid range or a sieve, and only a solid range
+				// supports "this log's history is construction audited".
+				if lo, hi, holes, err := s.Store.VerifiedRegion(rec.Origin, h.From, h.To); err == nil {
+					lv.VerifiedFrom, lv.VerifiedTo = lo, hi
+					lv.Holes = holes
+					if hi >= lo && lo > 0 {
+						lv.VerifiedRun = hi - lo + 1
+					}
+				}
 				switch {
 				case total > 0 && verified >= total:
 					// Every epoch in the published range was actually replayed
