@@ -1,0 +1,75 @@
+# The witness as its own node on the tailnet.
+#
+#     docker compose -f compose.yaml -f deploy/tailscale/compose.tailscale.yaml up -d
+#
+# ── Why a sidecar rather than `tailscale serve` on the host ──────────────────
+#
+# The obvious move is to serve the witness from the host's existing tailnet
+# node. Two things argue against it. The name would be the host's
+# (`docker-services.…`), so the witness would be reachable at an address that
+# says nothing about what it serves and changes meaning if the service ever
+# moves. And Tailscale *Services* — which would give a distinct name on the
+# existing node — can only be hosted by tagged nodes; `docker-services` is
+# user-owned, and retagging it changes the identity of a host that is also
+# running unrelated things.
+#
+# A sidecar sidesteps both. The witness gets `kt-witness.<tailnet>.ts.net`, a
+# name that travels with the service rather than the machine, and nothing else
+# on the host is touched.
+#
+# ── What this is and is not ─────────────────────────────────────────────────
+#
+# This publishes to the *tailnet*, not the internet. It is how the operator
+# reaches the dashboard from anywhere, and it is not a substitute for public
+# HTTPS: other witnesses and C2SP tooling cannot fetch cosignatures over
+# Tailscale. Public publication remains the separate, deliberate decision
+# tracked in TODO.md — and it stays deliberate because publishing a verifier
+# key invites reliance on it.
+#
+# Funnel is deliberately NOT enabled here. Turning it on would make this
+# internet-reachable as a side effect of an operator-convenience change, which
+# is exactly the kind of quiet scope creep that decision is meant to resist.
+#
+# ── The auth key is a secret ────────────────────────────────────────────────
+#
+# TS_AUTHKEY authenticates a new node onto the tailnet; anyone holding it can
+# join. It is read from the environment, never from a file in this repository,
+# and the intended path is 1Password at launch time:
+#
+#     op run --env-file deploy/tailscale/tailscale.env -- \
+#       docker compose -f compose.yaml -f deploy/tailscale/compose.tailscale.yaml up -d
+#
+# Generate the key at https://login.tailscale.com/admin/settings/keys as
+# *reusable* and *ephemeral*: reusable so a container rebuild does not need a
+# new one, ephemeral so a node that stops is removed from the tailnet rather
+# than lingering as a stale entry that looks like a live witness.
+
+services:
+  tailscale:
+    image: tailscale/tailscale:v1.102.2
+    hostname: kt-witness # becomes kt-witness.<tailnet>.ts.net via MagicDNS
+    restart: unless-stopped
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY (see the header of this file)}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+      # Userspace networking needs no TUN device and no NET_ADMIN, so this runs
+      # without extra kernel capabilities. The cost is that the container cannot
+      # route for others, which it has no business doing anyway.
+      TS_USERSPACE: "true"
+    volumes:
+      - ./data/tailscale:/var/lib/tailscale
+      - ./deploy/tailscale/serve.json:/config/serve.json:ro
+    healthcheck:
+      test: ["CMD", "tailscale", "status"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+# Note what this override does NOT do: it does not put the witness into the
+# sidecar's network namespace. That is the more common pattern and it is wrong
+# here, because sharing the namespace removes the published host port — and
+# that port is what Prometheus scrapes on 8088. Adding a convenience name would
+# have silently taken the monitoring with it. Proxying over the compose network
+# instead leaves the existing deployment exactly as it is, and the sidecar
+# reaches the witness by service name.

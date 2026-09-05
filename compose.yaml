@@ -20,7 +20,11 @@ services:
       - ./deploy/witness.json:/config/witness.json:ro
 
     # Read the mounted config, not the copy under /data.
-    command: ["-config", "/config/witness.json"]
+    # -backfill walks each log's published history and records the verified
+    # range. It runs in the background, so it never delays witnessing, and it
+    # repeats every 6h so the recorded range keeps up with the tip. Without it
+    # the history-coverage metric counts against a range frozen in the past.
+    command: ["-config", "/config/witness.json", "-backfill"]
 
     # Tier B streams a ~284 MB proof per verified epoch. tmpfs keeps that churn
     # off disk; 1g leaves room for one proof plus slack.
@@ -36,7 +40,17 @@ services:
     # One AKD verification peaks around 3.7 GB RSS. The limit is above that with
     # headroom, and deliberately not far above: exceeding it should kill the
     # container loudly rather than drive the host into swap.
-    mem_limit: 6g
+    # Three sidecar workers, each peaking near 3.7 GB on a Meta proof, so the
+    # working set is ~11 GB. The limit is above that with headroom and
+    # deliberately not far above: exceeding it should kill the container loudly
+    # rather than drive the host into swap. Raise this and sidecar_workers
+    # together — one without the other is either wasted memory or an OOM kill.
+    # 24g of the VM's 31g. The sidecar pool is sized from this limit
+    # (see audit.DefaultWorkers), so raising it buys workers: 24 * 0.75 / 4 = 4.
+    # The rest of the box holds roughly 6g, which leaves about 7g spare — and
+    # overrunning memory is an OOM kill that takes equivocation detection down
+    # with the audit, so the margin is the point.
+    mem_limit: 24g
 
     # The monitoring endpoint is the product. If it stops serving, the witness is
     # cosigning into the void and should be restarted.

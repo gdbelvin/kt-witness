@@ -20,3 +20,9 @@ rust/**/target/
 # config beside them is public; these are not.
 /deploy/cloudflared/*.json
 /secrets/
+
+# The runtime volume: the witness key, the bolt database, and the tailnet node
+# state. The last one is easy to overlook — it authenticates this node to the
+# tailnet, so it is credential material even though nothing about the path says
+# so. deploy/tailscale/serve.json is config and stays tracked; this is not.
+/data/
