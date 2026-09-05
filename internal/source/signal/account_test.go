@@ -57,6 +57,11 @@ func TestACISearchKeyRejectsGarbage(t *testing.T) {
 // TestRedactACINeverLeaks is a guard on the one rule that protects a real
 // person: the identifier must not appear in anything we log or publish.
 func TestRedactACINeverLeaks(t *testing.T) {
+	// The UUID here is wholly synthetic. An earlier version of this test used
+	// the operator's real prefix and suffix with zeros between them, which put
+	// 48 bits of a live identifier into the repository — in the test written to
+	// prove that identifier never escapes. Fixtures that resemble real data are
+	// how real data ends up committed.
 	const aci = "3f8c1d42-9a7b-4e15-8c60-2b9df04a7e31"
 	red := redactACI(aci)
 	if strings.Contains(red, "3f8c1d42") || strings.Contains(red, "7e31") {
