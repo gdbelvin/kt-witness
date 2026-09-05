@@ -12,7 +12,8 @@
   },
   "export_dir": "/data/public",
   "proton_audit": {
-    "dir": "/data/proton-tree"
+    "dir": "/data/proton-tree",
+    "history": true
   },
   "poll_interval": "60s",
   "max_sign_delay": "120s",

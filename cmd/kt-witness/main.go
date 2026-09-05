@@ -77,6 +77,24 @@ type config struct {
 		DumpBase     string `json:"dump_base"`
 		ShardDepth   int    `json:"shard_depth"`
 		MinFreeBytes uint64 `json:"min_free_bytes"`
+
+		// History bootstraps at the EARLIEST epoch Proton still publishes
+		// rather than at the tip, so the replay covers the whole published
+		// history instead of only what appeared after we started watching.
+		//
+		// This is the only way Proton can reach B+. Its construction audit is a
+		// stateful forward replay — each epoch is checked by applying a
+		// published diff to the previous epoch's tree — so unlike AKD there is
+		// no self-contained per-epoch proof and no way to sweep backwards. The
+		// only route to full coverage is to start at the bottom and walk up.
+		//
+		// The cost is real and worth stating: one step is ~19 minutes, so ~500
+		// epochs is about six days of continuous disk-bound work, preceded by a
+		// one-off ~13.6 GB download. During the replay the TIP is not
+		// construction-audited, because there is a single retained tree and it
+		// is down in the history. Equivocation detection is unaffected — that
+		// is tier A+ witnessing, which runs independently.
+		History bool `json:"history"`
 	} `json:"proton_audit"`
 
 	Audit struct {
@@ -1188,53 +1206,110 @@ func startProtonAudit(ctx context.Context, cfg *config, sources []source.Source,
 		ShardDepth: cfg.ProtonAudit.ShardDepth, MinFreeBytes: cfg.ProtonAudit.MinFreeBytes,
 	}
 
-	go func() {
-		// Proton publishes roughly every four hours; checking every thirty
-		// minutes catches a new epoch promptly without polling hard.
-		t := time.NewTicker(30 * time.Minute)
-		defer t.Stop()
-		for {
-			runProtonStep(ctx, a, db, origin, log)
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-			}
+	// The tip replay: follows Proton forward as it publishes.
+	go runProtonLoop(ctx, a, db, origin, false, "tip", log)
+
+	// The history replay, on its own retained tree.
+	//
+	// Two trees rather than one, because the alternative is a false choice. The
+	// audit is a stateful forward replay, so a single tree can be either at the
+	// tip or down in the history, never both — and moving the existing tree to
+	// the bottom would surrender construction coverage of the tip for the six
+	// days the replay takes. Tip coverage is the more perishable of the two: an
+	// operator misbehaving today is a live incident, while an unaudited epoch
+	// from last month will still be there next week.
+	//
+	// The second tree costs ~27 GB at peak against 626 GB free, and the two
+	// converge: once the history replay reaches the tip the ranges meet and one
+	// of them becomes redundant.
+	if cfg.ProtonAudit.History {
+		h := &proton.IncrementalAuditor{
+			Dir: cfg.ProtonAudit.Dir + "-history", APIBase: api, DumpBase: dumps,
+			ShardDepth: cfg.ProtonAudit.ShardDepth, MinFreeBytes: cfg.ProtonAudit.MinFreeBytes,
 		}
-	}()
+		go runProtonLoop(ctx, h, db, origin, true, "history", log)
+	}
 }
 
-func runProtonStep(ctx context.Context, a *proton.IncrementalAuditor, db *store.Store, origin string, log *slog.Logger) {
+// runProtonLoop steps one retained tree forward for as long as there is ground
+// to make up.
+//
+// This used to run exactly one step per thirty-minute tick, which is fine at
+// the tip — Proton publishes every four hours — and hopeless for a backlog:
+// replaying five hundred epochs one per tick would add ten days of idle waiting
+// on top of the six days of actual work. When there is a backlog the right
+// cadence is "immediately".
+func runProtonLoop(ctx context.Context, a *proton.IncrementalAuditor, db *store.Store,
+	origin string, history bool, mode string, log *slog.Logger) {
+
+	log = log.With("proton_replay", mode)
+	for {
+		stepped := runProtonStep(ctx, a, db, origin, history, log)
+		if ctx.Err() != nil {
+			return
+		}
+		if stepped {
+			continue // more to do; do not wait
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(30 * time.Minute):
+		}
+	}
+}
+
+// runProtonStep advances the retained tree by at most one epoch. It reports
+// whether it did work, so the caller knows whether to come straight back.
+func runProtonStep(ctx context.Context, a *proton.IncrementalAuditor, db *store.Store,
+	origin string, history bool, log *slog.Logger) bool {
+
 	base, err := a.Base()
 	if err != nil {
 		log.Warn("proton audit: reading retained tree", "err", err)
-		return
+		return false
 	}
 	rec, err := db.Get(origin)
 	if err != nil || rec == nil {
-		return // nothing witnessed yet
+		return false // nothing witnessed yet
 	}
 	tip := rec.Size
 
 	if base == 0 {
-		// Cold start: ~13.6 GB and about eight minutes, once. Everything about
-		// this design exists to avoid needing it again.
-		log.Info("proton audit: bootstrapping retained tree — this is a one-off "+
-			"~13.6 GB download", "epoch", tip)
-		if err := a.Bootstrap(ctx, tip); err != nil {
-			log.Warn("proton audit: bootstrap", "epoch", tip, "err", err)
+		// Cold start: ~13.6 GB, once. Everything about this design exists to
+		// avoid needing it again.
+		//
+		// Where we start decides what can ever be claimed. Bootstrapping at the
+		// tip means the replay only ever covers epochs published after we
+		// showed up, so "tier B" for Proton means "since we arrived" and B+ is
+		// unreachable by construction — which is exactly where this sat, at 11
+		// epochs of a 501-epoch published history. Starting at the earliest
+		// epoch Proton still publishes is the only way the whole history gets
+		// checked, because the audit is a forward replay and cannot sweep back.
+		start := tip
+		if history {
+			if from, ok := earliestProtonEpoch(db, origin); ok {
+				start = from
+			}
 		}
-		return
+		log.Info("proton audit: bootstrapping retained tree — this is a one-off "+
+			"~13.6 GB download", "epoch", start, "mode", protonMode(history),
+			"tip", tip)
+		if err := a.Bootstrap(ctx, start); err != nil {
+			log.Warn("proton audit: bootstrap", "epoch", start, "err", err)
+			return false
+		}
+		return true
 	}
 	if base >= tip {
-		return // already caught up
+		return false // already caught up
 	}
 
 	next := base + 1
 	meta, err := a.FetchEpochMeta(ctx, next)
 	if err != nil {
 		log.Warn("proton audit: epoch metadata", "epoch", next, "err", err)
-		return
+		return false
 	}
 
 	res, err := a.Step(ctx, base, next, meta)
@@ -1248,7 +1323,7 @@ func runProtonStep(ctx context.Context, a *proton.IncrementalAuditor, db *store.
 			log.Error("PROTON CONSTRUCTION AUDIT FAILED — the published diff does not "+
 				"carry one epoch into the next; evidence retained on disk",
 				"from", base, "to", next, "err", err)
-			return
+			return false
 		}
 		var pending *proton.NotYetPublishedError
 		if errors.As(err, &pending) {
@@ -1256,7 +1331,7 @@ func runProtonStep(ctx context.Context, a *proton.IncrementalAuditor, db *store.
 			// wrong, so nothing is said above debug — a warning on every pass
 			// at the tip is how warnings stop being read.
 			log.Debug("proton audit: waiting for the next diff", "epoch", next)
-			return
+			return false
 		}
 		// Everything else means we could not check: a refused download, a
 		// truncated body, no disk. None of that is evidence about how Proton
@@ -1264,7 +1339,7 @@ func runProtonStep(ctx context.Context, a *proton.IncrementalAuditor, db *store.
 		// misbehaviour on the strength of our own failure to fetch.
 		log.Warn("proton audit: could not verify this epoch; withholding judgement, not accusing",
 			"from", base, "to", next, "err", err)
-		return
+		return false
 	}
 
 	log.Info("proton epoch construction audited",
@@ -1309,6 +1384,32 @@ func runProtonStep(ctx context.Context, a *proton.IncrementalAuditor, db *store.
 			"from behaviour rather than promised",
 			"epoch", res.To, "summary", res.Removals.Summary())
 	}
+	return true
+}
+
+// earliestProtonEpoch is the bottom of Proton's published history, as
+// established by backfill.
+//
+// Reported rather than assumed: Proton retains a moving window, so the earliest
+// epoch is whatever it currently serves, not a constant.
+func earliestProtonEpoch(db *store.Store, origin string) (int64, bool) {
+	hs, err := db.Histories()
+	if err != nil {
+		return 0, false
+	}
+	for _, h := range hs {
+		if h.Origin == origin && h.From > 0 {
+			return h.From, true
+		}
+	}
+	return 0, false
+}
+
+func protonMode(history bool) string {
+	if history {
+		return "history (whole published range)"
+	}
+	return "tip only (epochs published from now on)"
 }
 
 // startPeerPolling compares other witnesses' published views against our own.
