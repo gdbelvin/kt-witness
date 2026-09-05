@@ -1309,10 +1309,24 @@ func maxEpochsPerRound(configured int64) int64 {
 // backfillRefresh is how often published history is re-walked so the recorded
 // range keeps up with the tip.
 //
-// Six hours is short enough that the coverage metric stays close to true and
-// long enough that re-listing a 536,000-epoch bucket is not a background load
-// worth noticing.
-const backfillRefresh = 6 * time.Hour
+// A timer rather than something driven by CPU, and deliberately so. Backfill is
+// network work against somebody else's CDN — roughly 500 paginated listing
+// requests, almost all of it spent waiting — so pacing it by our own idleness
+// would mean hammering Meta hardest whenever this box had nothing to do. That
+// is the distinction in docs/design.md: waits that exist because of another
+// party's server stay timers.
+//
+// Nor can it be made incremental, which would otherwise be the answer. Object
+// keys sort lexicographically rather than numerically ("99999" > "624700"), so
+// there is no start-after meaning "epochs above N"; finding new ones means
+// listing all of them.
+//
+// An hour rather than the six it used to be. The cost is about two minutes of
+// listing, which is nothing; the consequence of waiting is that the coverage
+// denominator lags the tip, and audits landing above the recorded range are
+// real work that no metric counts. At six hours WhatsApp drifted past its own
+// recorded history by seven hundred epochs.
+const backfillRefresh = time.Hour
 
 // logKinds maps an origin to what it makes transparent, populated once at
 // startup and read-only thereafter.
