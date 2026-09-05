@@ -32,6 +32,18 @@ struct Request {
     epoch: u64,
     prev_root: String,
     curr_root: String,
+
+    /// A proof already on local disk.
+    ///
+    /// When set, the download is skipped and this file is verified instead.
+    /// Downloading inside verification serialises two resources that do not
+    /// compete: the link sits idle while a proof is being checked, and the CPU
+    /// sits idle while the next one arrives. Letting the caller fetch ahead
+    /// keeps both busy.
+    ///
+    /// The file is NOT deleted here — whoever cached it owns its lifetime.
+    #[serde(default)]
+    proof_path: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -134,13 +146,26 @@ fn handle(rt: &tokio::runtime::Runtime, req: &Request) -> Result<Success, Failur
     let url = format!("{}/{}", req.log_directory.trim_end_matches('/'), key);
 
     let t = Instant::now();
-    let (proof_file, bytes) = download(&url)?;
+    let (data, bytes) = match req.proof_path.as_deref() {
+        Some(path) => {
+            // Prefetched. Read it and leave it alone: the caller caches these
+            // and decides when they go.
+            let data = std::fs::read(path)
+                .map_err(|e| fail(Kind::Fetch, format!("read cached proof {path}: {e}")))?;
+            let n = data.len() as u64;
+            (data, n)
+        }
+        None => {
+            let (proof_file, bytes) = download(&url)?;
+            let data = std::fs::read(proof_file.path())
+                .map_err(|e| fail(Kind::Fetch, format!("read temp proof: {e}")))?;
+            // Temp file is no longer needed; free the disk before the
+            // memory-heavy part.
+            drop(proof_file);
+            (data, bytes)
+        }
+    };
     let download_ms = t.elapsed().as_millis();
-
-    let data = std::fs::read(proof_file.path())
-        .map_err(|e| fail(Kind::Fetch, format!("read temp proof: {e}")))?;
-    // Temp file is no longer needed; free the disk before the memory-heavy part.
-    drop(proof_file);
 
     let name = AuditBlobName::try_from(key.as_str())
         .map_err(|e| fail(Kind::Decode, format!("bad blob name {key}: {e:?}")))?;

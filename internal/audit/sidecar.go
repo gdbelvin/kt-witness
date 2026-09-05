@@ -32,6 +32,11 @@ type request struct {
 	Epoch        int64  `json:"epoch"`
 	PrevRoot     string `json:"prev_root"`
 	CurrRoot     string `json:"curr_root"`
+
+	// ProofPath, when set, is a proof already on local disk. The sidecar reads
+	// it instead of downloading, which is what lets the link run ahead of the
+	// CPU rather than taking turns with it.
+	ProofPath string `json:"proof_path,omitempty"`
 }
 
 // Result is the sidecar's verdict.
@@ -104,6 +109,12 @@ func (s *Sidecar) Close() {
 // Meta); on timeout the sidecar is killed rather than left mid-proof, because a
 // half-consumed stdout stream would desynchronise every later request.
 func (s *Sidecar) Verify(ctx context.Context, logDirectory string, epoch int64, prevRoot, currRoot string, timeout time.Duration) (*Result, error) {
+	return s.VerifyCached(ctx, logDirectory, epoch, prevRoot, currRoot, "", timeout)
+}
+
+// VerifyCached replays a proof, reading it from proofPath when that is set
+// rather than downloading it.
+func (s *Sidecar) VerifyCached(ctx context.Context, logDirectory string, epoch int64, prevRoot, currRoot, proofPath string, timeout time.Duration) (*Result, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -113,7 +124,7 @@ func (s *Sidecar) Verify(ctx context.Context, logDirectory string, epoch int64, 
 
 	req, err := json.Marshal(request{
 		LogDirectory: logDirectory, Epoch: epoch,
-		PrevRoot: prevRoot, CurrRoot: currRoot,
+		PrevRoot: prevRoot, CurrRoot: currRoot, ProofPath: proofPath,
 	})
 	if err != nil {
 		return nil, err
@@ -170,6 +181,7 @@ func (s *Sidecar) Verify(ctx context.Context, logDirectory string, epoch int64, 
 // of auditing.
 type Verifier interface {
 	Verify(ctx context.Context, logDirectory string, epoch int64, prevRoot, currRoot string, timeout time.Duration) (*Result, error)
+	VerifyCached(ctx context.Context, logDirectory string, epoch int64, prevRoot, currRoot, proofPath string, timeout time.Duration) (*Result, error)
 	Close()
 }
 
@@ -229,12 +241,17 @@ func (p *Pool) Size() int { return cap(p.free) }
 // worker heals rather than permanently shrinking the pool. Losing capacity to
 // transient failures would degrade the witness quietly over days.
 func (p *Pool) Verify(ctx context.Context, logDirectory string, epoch int64, prevRoot, currRoot string, timeout time.Duration) (*Result, error) {
+	return p.VerifyCached(ctx, logDirectory, epoch, prevRoot, currRoot, "", timeout)
+}
+
+// VerifyCached checks out a worker and verifies, optionally from a cached file.
+func (p *Pool) VerifyCached(ctx context.Context, logDirectory string, epoch int64, prevRoot, currRoot, proofPath string, timeout time.Duration) (*Result, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case s := <-p.free:
 		defer func() { p.free <- s }()
-		return s.Verify(ctx, logDirectory, epoch, prevRoot, currRoot, timeout)
+		return s.VerifyCached(ctx, logDirectory, epoch, prevRoot, currRoot, proofPath, timeout)
 	}
 }
 

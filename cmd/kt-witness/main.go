@@ -96,6 +96,25 @@ type config struct {
 		// twice.
 		ReserveCores float64 `json:"reserve_cores"`
 
+		// PrefetchDir enables downloading proofs ahead of verification. Empty
+		// disables it, and verification then downloads its own proof as before.
+		PrefetchDir string `json:"prefetch_dir"`
+
+		// PrefetchBytes caps the on-disk cache. Bytes rather than a count
+		// because proof sizes vary by tens of megabytes and disk is what runs
+		// out.
+		PrefetchBytes int64 `json:"prefetch_bytes"`
+
+		// PrefetchWorkers is how many downloads run at once — this is what
+		// saturates the link.
+		PrefetchWorkers int `json:"prefetch_workers"`
+
+		// PrefetchMinFreeBytes is free space the cache will not consume,
+		// whatever its own cap says. The volume also holds the store and
+		// Proton's retained tree, and filling it stops the witness recording
+		// what it has attested.
+		PrefetchMinFreeBytes uint64 `json:"prefetch_min_free_bytes"`
+
 		// TargetCores optionally overrides the derived budget, for an operator
 		// who wants to use less than the machine allows.
 		TargetCores float64 `json:"target_cores"`
@@ -516,11 +535,28 @@ func run(cfg *config, log *slog.Logger, once, backfill bool, retractOrigin, retr
 				Log:           log,
 			}
 		}
+		// Fetch proofs ahead of verifying them so the link and the CPU are busy
+		// at once rather than taking turns. Bounded by disk, and every cached
+		// proof is released the moment it has been verified.
+		var prefetch *audit.Prefetcher
+		if d := cfg.Audit.PrefetchDir; d != "" {
+			prefetch = &audit.Prefetcher{
+				Dir:          d,
+				MaxBytes:     cfg.Audit.PrefetchBytes,
+				Workers:      cfg.Audit.PrefetchWorkers,
+				MinFreeBytes: cfg.Audit.PrefetchMinFreeBytes,
+				Log:          log,
+			}
+			files, bytes := prefetch.Stats()
+			log.Info("proof prefetch enabled", "dir", d,
+				"cap_gb", prefetch.MaxBytes>>30, "adopted_files", files, "adopted_gb", bytes>>30)
+		}
 		auditor = &audit.Auditor{
 			Store: db, Beacon: audit.NewBeacon(cfg.Audit.BeaconURL),
 			Sidecar: sidecar, Log: log, Rate: rate, Timeout: auditTimeout,
 			MaxEpochsPerRound: maxEpochsPerRound(cfg.Audit.MaxEpochsPerRound),
 			Governor:          governor,
+			Prefetch:          prefetch,
 		}
 		for _, src := range sources {
 			if r, ok := src.(audit.Resolver); ok {

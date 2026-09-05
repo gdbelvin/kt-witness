@@ -148,12 +148,28 @@ func (a *Auditor) RunHistory(ctx context.Context, r Resolver, budget int64) (*Hi
 			DecidedAt: time.Now().UTC(), Attempts: 1,
 		}
 
+		// Start the next proofs downloading before this one is verified.
+		//
+		// Download and verification use different resources, so running them in
+		// lockstep leaves each idle while the other works. Filling the cache
+		// ahead means the pool always has something to chew on and the link is
+		// never waiting for a verification to finish.
+		a.prefetchAhead(ctx, r, epoch)
+
+		cached := a.Prefetch.Path(origin, epoch)
+
 		// Backlog work waits for CPU allowance. Live auditing does not.
 		if err := a.Governor.Acquire(ctx); err != nil {
 			return res, err
 		}
-		out, err := a.Sidecar.Verify(ctx, ref.LogDirectory, epoch, ref.PrevRoot, ref.CurrRoot, a.Timeout)
+		out, err := a.Sidecar.VerifyCached(ctx, ref.LogDirectory, epoch, ref.PrevRoot, ref.CurrRoot, cached, a.Timeout)
 		a.Governor.Release()
+
+		// The bytes are dead weight the moment they have been verified, and the
+		// next download needs the room.
+		if cached != "" {
+			a.Prefetch.Release(origin, epoch)
+		}
 		switch {
 		case err != nil, out != nil && !out.OK && out.Kind != "verify":
 			// Could not check. Not a finding.
@@ -212,4 +228,33 @@ func (a *Auditor) earliestPublished(origin string) (int64, error) {
 		}
 	}
 	return 0, nil
+}
+
+// prefetchAhead starts downloads for the epochs this sweep will reach next.
+//
+// Fire and forget: a prefetch that fails is not a problem, because the verifier
+// falls back to downloading the proof itself. That fallback is what keeps this
+// an optimisation rather than a new way for auditing to break.
+func (a *Auditor) prefetchAhead(ctx context.Context, r Resolver, epoch int64) {
+	if a.Prefetch == nil {
+		return
+	}
+	const lookahead = 8
+	origin := r.Origin()
+	for i := int64(1); i <= lookahead; i++ {
+		next := epoch - i // the backwards sweep walks down
+		if next < 1 {
+			return
+		}
+		if a.Prefetch.Path(origin, next) != "" {
+			continue
+		}
+		go func(e int64) {
+			ref, err := r.ResolveEpoch(ctx, e)
+			if err != nil {
+				return // absence is not evidence; the sweep will find out
+			}
+			_ = a.Prefetch.Fetch(ctx, origin, ref.LogDirectory, e, ref.PrevRoot, ref.CurrRoot)
+		}(next)
+	}
 }
