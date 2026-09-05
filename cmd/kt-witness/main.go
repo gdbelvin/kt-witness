@@ -1140,6 +1140,15 @@ func kindOf(l logConfig) string {
 	if strings.HasSuffix(l.Origin, ".rekor.sigstore.dev") {
 		return "software"
 	}
+	// Same reasoning for entry logs that carry key material. thelemail.com/keys
+	// is a plain tlog read by the c2sp adapter, so type alone would classify it
+	// "generic" — and it is the only log here at B+, so the one ecosystem this
+	// project exists for would have had its best result filed under "Other".
+	// Grouping the page by ecosystem is what surfaced that; a flat list had
+	// hidden it for weeks.
+	if strings.HasSuffix(l.Origin, "/keys") {
+		return "kt"
+	}
 	switch l.Type {
 	case "akd", "proton", "signal":
 		return "kt"
