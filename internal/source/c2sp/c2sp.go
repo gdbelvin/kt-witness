@@ -344,9 +344,13 @@ func (s *Source) verifyNewEntries(ctx context.Context, from, to int64, tree tlog
 // have no intention of auditing would make the coverage denominator real and
 // the numerator permanently zero, which reads as a stalled audit rather than an
 // absent one.
+// BackfillApplicable reports whether this log verifies entries, which is the
+// only configuration in which it has a construction history to walk.
+func (s *Source) BackfillApplicable() bool { return s.cfg.VerifyEntries }
+
 func (s *Source) Backfill(ctx context.Context, log *slog.Logger) (*source.BackfillResult, error) {
 	if !s.cfg.VerifyEntries {
-		return nil, fmt.Errorf("c2sp: %s does not verify entries, so it has no construction history to report", s.origin)
+		return nil, source.ErrNotBackfillable
 	}
 	head, err := s.Fetch(ctx, nil)
 	if err != nil {

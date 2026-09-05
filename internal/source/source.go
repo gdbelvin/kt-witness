@@ -7,6 +7,7 @@ package source
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -168,6 +169,38 @@ type BackfillResult struct {
 // This matters because trust-on-first-use otherwise leaves everything before we
 // showed up unattested, and for logs that publish their whole history that is a
 // large amount of evidence left on the table.
+// IncrementalBackfiller can extend a previously verified range instead of
+// re-walking the whole of published history.
+//
+// Worth its own interface because the cost difference is large — a full listing
+// against a few requests per new epoch — and because it is only sound when the
+// starting point came from this witness's own stored history.
+type IncrementalBackfiller interface {
+	Backfiller
+	BackfillFrom(ctx context.Context, log *slog.Logger, from int64) (*BackfillResult, error)
+}
+
+// ErrNotBackfillable is returned by a source that implements Backfiller but has
+// nothing to walk in its current configuration.
+//
+// The alternative would be for the caller to know which sources are backfillable
+// under which settings, which puts that knowledge in two places. This keeps it
+// with the source and lets the caller skip quietly — 71 CT logs each warning
+// once an hour that they are not entry-verifying is noise that teaches people to
+// stop reading warnings.
+var ErrNotBackfillable = errors.New("source: nothing to backfill in this configuration")
+
+// BackfillProbe lets a Backfiller say, without doing any work, whether it has
+// anything to walk in its current configuration.
+//
+// Optional: a source that does not implement it is assumed applicable. It
+// exists so the caller can skip before announcing a pass, rather than logging a
+// start line that is immediately followed by a refusal — 71 CT logs doing that
+// hourly is how a log stops being read.
+type BackfillProbe interface {
+	BackfillApplicable() bool
+}
+
 type Backfiller interface {
 	Source
 

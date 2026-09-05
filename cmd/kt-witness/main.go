@@ -781,10 +781,49 @@ func runBackfill(ctx context.Context, db *store.Store, sources []source.Source, 
 		if !ok {
 			continue
 		}
-		log.Info("backfill starting", "origin", src.Origin())
-		start := time.Now()
+		// Extend the range we already verified, rather than re-walking it.
+		//
+		// A full listing is ~500 paginated requests to somebody else's CDN, and
+		// doing that hourly to learn about a hundred new epochs spends most of a
+		// scan rediscovering verified history. Extension costs a few requests per
+		// new epoch. A full walk still happens periodically, because only that
+		// re-reads old objects — and an operator rewriting history would rewrite
+		// the part nobody looks at twice.
+		var (
+			res *source.BackfillResult
+			err error
+		)
+		// Ask before announcing. A source that knows it has nothing to walk is
+		// skipped silently rather than logging a start with no finish.
+		if probe, ok := src.(source.BackfillProbe); ok && !probe.BackfillApplicable() {
+			continue
+		}
 
-		res, err := b.Backfill(ctx, log)
+		inc, canExtend := src.(source.IncrementalBackfiller)
+		prior := storedHistory(db, src.Origin())
+		full := prior == nil || !canExtend || time.Since(prior.VerifiedAt) > fullBackfillEvery
+
+		start := time.Now()
+		if full {
+			log.Info("backfill starting", "origin", src.Origin(), "mode", "full walk")
+			res, err = b.Backfill(ctx, log)
+		} else {
+			log.Info("backfill starting", "origin", src.Origin(),
+				"mode", "extend", "from", prior.To)
+			res, err = inc.BackfillFrom(ctx, log, prior.To)
+			if err == nil && res != nil {
+				// The extension only covers the new tail; the recorded range is
+				// the union with what was already verified.
+				res.From = prior.From
+				res.Epochs += prior.Epochs - 1
+				res.Gaps = append(prior.Gaps, res.Gaps...)
+			}
+		}
+		if errors.Is(err, source.ErrNotBackfillable) {
+			// Nothing to walk in this configuration. Skipped before it is
+			// announced, so the log does not carry a start line with no finish.
+			continue
+		}
 		if err != nil {
 			var fe *source.ForkError
 			if errors.As(err, &fe) {
@@ -1350,3 +1389,26 @@ func labelsFor(origin string) map[string]string {
 	}
 	return map[string]string{"origin": origin, "kind": kind}
 }
+
+// storedHistory returns what we have already verified for an origin, or nil.
+func storedHistory(db *store.Store, origin string) *store.History {
+	hs, err := db.Histories()
+	if err != nil {
+		return nil
+	}
+	for _, h := range hs {
+		if h.Origin == origin {
+			return h
+		}
+	}
+	return nil
+}
+
+// fullBackfillEvery is how often published history is re-walked in full rather
+// than extended.
+//
+// Extension checks the new tail and trusts what an earlier pass verified. That
+// is sound against an append-only operator and blind to one that goes back and
+// rewrites an object nobody re-reads — which is exactly where a rewrite would
+// be put. A daily full walk closes that, at two minutes of listing.
+const fullBackfillEvery = 24 * time.Hour

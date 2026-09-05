@@ -2,8 +2,10 @@ package c2sp
 
 import (
 	"context"
-	"strings"
+	"errors"
 	"testing"
+
+	"github.com/gdbsecurity/kt-witness/internal/source"
 )
 
 type recorder struct{ idx []int64 }
@@ -21,9 +23,21 @@ func TestBackfillRefusedWithoutEntryVerification(t *testing.T) {
 	// before any network or key handling, and a fixture key that fails to parse
 	// would turn this into a skipped test that checks nothing.
 	s := &Source{origin: "example.com/log", cfg: Config{VerifyEntries: false}}
+
+	// The probe answers without doing any work, so the caller can skip before
+	// announcing a pass.
+	if s.BackfillApplicable() {
+		t.Fatal("a log that does not verify entries has nothing to backfill")
+	}
 	_, err := s.Backfill(context.Background(), nil)
-	if err == nil || !strings.Contains(err.Error(), "does not verify entries") {
-		t.Fatalf("want a refusal naming entry verification, got %v", err)
+	if !errors.Is(err, source.ErrNotBackfillable) {
+		t.Fatalf("want ErrNotBackfillable so the caller can skip quietly, got %v", err)
+	}
+
+	// And it is applicable once entry verification is on.
+	s2 := &Source{origin: "example.com/log", cfg: Config{VerifyEntries: true}}
+	if !s2.BackfillApplicable() {
+		t.Fatal("an entry-verifying log does have a construction history")
 	}
 }
 
