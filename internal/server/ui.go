@@ -228,7 +228,8 @@ func (s *Server) buildStatus() (*statusView, error) {
 		// An earlier version asked the source whether it was tier B, which meant
 		// B+ could never be reached by any of the logs that are actually audited.
 		if h := lv.History; h != nil {
-			settled, verified, err := s.Store.AuditCoverage(rec.Origin, h.From, h.To)
+			cov, err := s.cov().get(s.Store, rec.Origin, h.From, h.To)
+			settled, verified := cov.Settled, cov.Verified
 			if err == nil && verified > 0 {
 				total := h.To - h.From + 1
 				lv.HistoryAudited = settled
@@ -238,10 +239,8 @@ func (s *Server) buildStatus() (*statusView, error) {
 				// audited count says how much work was done, not whether the
 				// result is a solid range or a sieve, and only a solid range
 				// supports "this log's history is construction audited".
-				if lo, hi, run, holes, err := s.Store.VerifiedRegion(rec.Origin, h.From, h.To); err == nil {
-					lv.VerifiedFrom, lv.VerifiedTo = lo, hi
-					lv.VerifiedRun, lv.Holes = run, holes
-				}
+				lv.VerifiedFrom, lv.VerifiedTo = cov.From, cov.To
+				lv.VerifiedRun, lv.Holes = cov.Run, cov.Holes
 				switch {
 				case total > 0 && verified >= total:
 					// Every epoch in the published range was actually replayed

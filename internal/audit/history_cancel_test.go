@@ -84,7 +84,7 @@ func TestShutdownDoesNotConsumeFetchAttempts(t *testing.T) {
 	}
 
 	// And the cursor must not have advanced over them.
-	back, err := db.BackAuditProgress(origin)
+	back, _, err := db.BackAuditProgress(origin)
 	if err != nil {
 		t.Fatal(err)
 	}

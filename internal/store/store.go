@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"sync"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -73,7 +74,15 @@ type Record struct {
 	WitnessedAt time.Time `json:"witnessed_at"`
 }
 
-type Store struct{ db *bolt.DB }
+type Store struct {
+	db *bolt.DB
+
+	// Retained-audit population per origin, so the retention cap can be
+	// enforced without counting the bucket on every write. Counted once per
+	// origin on first use and maintained from there.
+	auditMu sync.Mutex
+	auditN  map[string]int
+}
 
 func Open(path string) (*Store, error) {
 	// bbolt takes an exclusive flock on the file, so a second writer cannot
@@ -310,7 +319,23 @@ func auditKey(origin string, epoch int64) []byte {
 // not return freed pages to the filesystem. The oldest decisions are dropped
 // first: recent coverage is what anyone checking would ask about, and the file
 // mirror in internal/export keeps a copy outside the database anyway.
-const maxAuditsPerOrigin = 200_000
+//
+// # Why this is 750,000 and not 200,000
+//
+// It has to exceed the largest published history we audit, or the cap silently
+// becomes a ceiling on the strongest claim we make. Meta publishes ~538,000
+// epochs and WhatsApp ~502,000. At a 200,000 cap the trim drops the LOWEST
+// epochs — which is exactly what the backwards sweep has just written, since it
+// walks downward — so coverage would stall at 200,000, B+ would be permanently
+// unreachable for both large logs, and nothing would look wrong: the sweep
+// would keep verifying, the counter would keep rising, and the coverage figure
+// would sit still. At ~190 epochs an hour that was about six weeks away.
+//
+// The cost is disk. A record is roughly 300 bytes of JSON, so 750,000 is around
+// 225 MB per origin and under 500 MB for the two large logs together — small
+// beside the proof cache, and the retention window is now bounded by the logs'
+// own published history rather than by an arbitrary number.
+const maxAuditsPerOrigin = 750_000
 
 func (s *Store) RecordAudit(a *Audit) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
@@ -319,24 +344,106 @@ func (s *Store) RecordAudit(a *Audit) error {
 		if err != nil {
 			return err
 		}
-		if err := b.Put(auditKey(a.Origin, a.Epoch), enc); err != nil {
+		key := auditKey(a.Origin, a.Epoch)
+		// Whether this Put grows the population, decided before writing. An
+		// overwrite — which is most writes, since epochs are re-recorded as
+		// their attempts change — cannot push the origin over the cap.
+		grew := b.Get(key) == nil
+		if err := b.Put(key, enc); err != nil {
 			return err
 		}
-		return trimAudits(b, a.Origin)
+		if !grew {
+			return nil
+		}
+		n := s.auditCount(b, a.Origin)
+		if n <= maxAuditsPerOrigin {
+			return nil
+		}
+		if err := trimAudits(b, a.Origin, n-maxAuditsPerOrigin); err != nil {
+			return err
+		}
+		s.setAuditCount(a.Origin, maxAuditsPerOrigin)
+		return nil
 	})
 }
 
-// trimAudits drops the oldest decisions for one origin once the cap is passed.
-func trimAudits(b *bolt.Bucket, origin string) error {
-	prefix := []byte(origin + "|")
-	var keys [][]byte
-	c := b.Cursor()
-	for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = c.Next() {
-		keys = append(keys, append([]byte(nil), k...))
+// auditCount returns the retained decisions for an origin, counting the bucket
+// once and then maintaining the number in memory.
+//
+// The count used to be recomputed by scanning every key for the origin on EVERY
+// write — hundreds of thousands of key copies per audit, growing linearly with
+// coverage, on the hot path of the thing whose throughput we care about most.
+func (s *Store) auditCount(b *bolt.Bucket, origin string) int {
+	s.auditMu.Lock()
+	defer s.auditMu.Unlock()
+	if s.auditN == nil {
+		s.auditN = make(map[string]int)
 	}
-	// Keys embed a zero-padded epoch, so this is oldest-first.
-	for i := 0; i+maxAuditsPerOrigin < len(keys); i++ {
-		if err := b.Delete(keys[i]); err != nil {
+	n, known := s.auditN[origin]
+	if !known {
+		prefix := []byte(origin + "|")
+		c := b.Cursor()
+		for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = c.Next() {
+			n++
+		}
+	}
+	n++ // the key just written
+	s.auditN[origin] = n
+	return n
+}
+
+// AuditPopulation returns how many audit records are retained for an origin.
+//
+// Cheap after the first call: the number is maintained in memory. Exposed so a
+// caller caching a derived figure can tell whether the underlying record has
+// actually changed, rather than relying on elapsed time alone — a coverage
+// figure that lags a write by a full TTL would let a log sit at the wrong tier
+// for no reason other than a clock.
+func (s *Store) AuditPopulation(origin string) (int, error) {
+	s.auditMu.Lock()
+	if n, ok := s.auditN[origin]; ok {
+		s.auditMu.Unlock()
+		return n, nil
+	}
+	s.auditMu.Unlock()
+
+	var n int
+	err := s.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket(bucketAudits).Cursor()
+		prefix := []byte(origin + "|")
+		for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = c.Next() {
+			n++
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("store: audit population for %s: %w", origin, err)
+	}
+	s.setAuditCount(origin, n)
+	return n, nil
+}
+
+func (s *Store) setAuditCount(origin string, n int) {
+	s.auditMu.Lock()
+	defer s.auditMu.Unlock()
+	if s.auditN == nil {
+		s.auditN = make(map[string]int)
+	}
+	s.auditN[origin] = n
+}
+
+// trimAudits drops the `excess` oldest decisions for one origin.
+func trimAudits(b *bolt.Bucket, origin string, excess int) error {
+	prefix := []byte(origin + "|")
+	c := b.Cursor()
+	// Keys embed a zero-padded epoch, so the cursor walks oldest-first and only
+	// the keys actually being deleted are touched.
+	var doomed [][]byte
+	for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix) && len(doomed) < excess; k, _ = c.Next() {
+		doomed = append(doomed, append([]byte(nil), k...))
+	}
+	for _, k := range doomed {
+		if err := b.Delete(k); err != nil {
 			return err
 		}
 	}
@@ -659,25 +766,33 @@ func (s *Store) PutLogEntries(origin string, entries map[uint64][32]byte) error 
 // forward one, which uses the bare origin.
 func backProgressKey(origin string) []byte { return []byte("back|" + origin) }
 
-// BackAuditProgress is the LOWEST epoch the historical sweep has reached, or 0
-// if it has not started.
+// BackAuditProgress is the LOWEST epoch the historical sweep has reached. The
+// bool reports whether the sweep has started at all.
 //
 // The forward auditor only ever moves from where witnessing began, so "tier B"
 // otherwise means "epochs since we showed up" rather than "this log's published
 // history is construction audited". Sweeping backwards is what closes that gap,
 // and it needs its own high-water mark because it moves the other way.
-func (s *Store) BackAuditProgress(origin string) (int64, error) {
+//
+// The bool is not decoration. Returning a bare 0 makes "has not started" and
+// "swept all the way down to epoch 0" the same value, so a log whose history
+// begins at zero would be read as unstarted the moment it finished and swept
+// from the top again, forever. Two bugs in this codebase have already come from
+// exactly this conflation, so the ambiguity is removed rather than documented.
+func (s *Store) BackAuditProgress(origin string) (int64, bool, error) {
 	var out int64
+	var set bool
 	err := s.db.View(func(tx *bolt.Tx) error {
 		if v := tx.Bucket(bucketProgress).Get(backProgressKey(origin)); v != nil {
 			out, _ = strconv.ParseInt(string(v), 10, 64)
+			set = true
 		}
 		return nil
 	})
 	if err != nil {
-		return 0, fmt.Errorf("store: back audit progress for %s: %w", origin, err)
+		return 0, false, fmt.Errorf("store: back audit progress for %s: %w", origin, err)
 	}
-	return out, nil
+	return out, set, nil
 }
 
 func (s *Store) SetBackAuditProgress(origin string, epoch int64) error {
@@ -757,6 +872,71 @@ func (s *Store) HolesDue(origin string, from, to int64, now time.Time, limit int
 		return nil, fmt.Errorf("store: holes due for %s: %w", origin, err)
 	}
 	return out, nil
+}
+
+// Coverage is everything the tier calculation and the coverage metrics need
+// about one origin, gathered in a single pass.
+type Coverage struct {
+	Settled  int64 // epochs in range with any decision
+	Verified int64 // epochs in range actually replayed and checked
+	Holes    int64 // settled but not verified: gaps inside the range
+	// The largest unbroken run of verified epochs.
+	From, To, Run int64
+}
+
+// CoverageOf gathers coverage for one origin in one scan.
+//
+// AuditCoverage and VerifiedRegion each walked every audit record for the
+// origin and JSON-decoded it, and both ran per origin on every metrics scrape
+// AND every page load. That is two full decodes of a bucket that grows toward
+// the retention cap, several times a minute, to answer questions that share all
+// of their work. One scan answers both.
+func (s *Store) CoverageOf(origin string, from, to int64) (Coverage, error) {
+	var cov Coverage
+	verified := make(map[int64]bool)
+	err := s.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket(bucketAudits).Cursor()
+		prefix := []byte(origin + "|")
+		for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+			var a Audit
+			if json.Unmarshal(v, &a) != nil {
+				continue
+			}
+			if a.Epoch < from || a.Epoch > to {
+				continue
+			}
+			cov.Settled++
+			if a.Verified {
+				cov.Verified++
+				verified[a.Epoch] = true
+			} else {
+				cov.Holes++
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return cov, fmt.Errorf("store: coverage for %s: %w", origin, err)
+	}
+	cov.From, cov.To, cov.Run = longestRun(verified)
+	return cov, nil
+}
+
+// longestRun finds the longest consecutive span in a set of epochs.
+func longestRun(verified map[int64]bool) (lo, hi, run int64) {
+	for epoch := range verified {
+		if verified[epoch-1] {
+			continue // not the start of a run
+		}
+		end := epoch
+		for verified[end+1] {
+			end++
+		}
+		if n := end - epoch + 1; n > run {
+			run, lo, hi = n, epoch, end
+		}
+	}
+	return lo, hi, run
 }
 
 // VerifiedRegion returns the largest unbroken run of verified epochs in range,

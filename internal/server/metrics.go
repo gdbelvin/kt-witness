@@ -43,6 +43,7 @@ const (
 	MAppHeads      = "kt_witness_application_heads"
 	MAppConflicts  = "kt_witness_application_conflicts"
 	MScrapeSeconds = "kt_witness_metrics_scrape_duration_seconds"
+	MCoverageAge   = "kt_witness_coverage_cache_age_seconds"
 
 	// Storage. A witness that runs out of disk stops witnessing, and the
 	// database is the only thing on it that cannot be rebuilt from the network.
@@ -108,6 +109,7 @@ func Init(version string) {
 	d(MAppHeads, metrics.Gauge, "Per-application heads observed. These are observations, never cosigned.")
 	d(MAppConflicts, metrics.Gauge, "Contradictions recorded among observed application heads.")
 	d(MScrapeSeconds, metrics.Gauge, "How long it took to gather these metrics from the store.")
+	d(MCoverageAge, metrics.Gauge, "Age of the oldest cached coverage figure. Coverage is scanned from the audit record on a background cadence; if this grows without bound the cache has stopped refreshing and every coverage gauge is frozen — which looks identical to coverage that has stopped moving.")
 	d(MDBBytes, metrics.Gauge, "Size of the bbolt database on disk. Note bbolt never returns freed pages to the filesystem, so this only grows; a large drop means the file was replaced.")
 	d(MExportBytes, metrics.Gauge, "Size of the published file mirror.")
 	d(MDiskFreeBytes, metrics.Gauge, "Bytes free on the filesystem holding the database.")
@@ -148,6 +150,11 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	// Coverage is served from a cache. If that cache stopped refreshing, every
+	// coverage gauge would freeze at its last value and look exactly like
+	// coverage that had stopped moving — the failure this codebase has now
+	// rediscovered three times. Export the age so the two are distinguishable.
+	metrics.Set(MCoverageAge, nil, s.coverage.oldest().Seconds())
 	metrics.Set(MScrapeSeconds, nil, time.Since(start).Seconds())
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")

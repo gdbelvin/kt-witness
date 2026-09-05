@@ -18,6 +18,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gdbsecurity/kt-witness/internal/store"
 )
@@ -40,6 +42,29 @@ type Server struct {
 
 	// Storage locates the database and mirror so their size can be reported.
 	Storage StoragePaths
+
+	// CoverageTTL bounds how stale a coverage figure may be. Zero uses the
+	// default of one minute; negative disables caching entirely and pays the
+	// full audit scan on every read.
+	//
+	// Coverage moves by a few hundred epochs an hour, so a minute of staleness
+	// is invisible on the dashboard and removes a scan of the whole audit
+	// history from the request path. It is configurable because the tier is
+	// derived from the same figure, and a caller that wants the tier to be
+	// exact the instant an audit lands should be able to say so.
+	CoverageTTL time.Duration
+
+	// coverage caches the per-origin audit scan, which is otherwise recomputed
+	// from every audit record on every scrape and every page load.
+	coverage coverageCache
+
+	coverageOnce sync.Once
+}
+
+// cov returns the coverage cache, applying CoverageTTL on first use.
+func (s *Server) cov() *coverageCache {
+	s.coverageOnce.Do(func() { s.coverage.ttl = s.CoverageTTL })
+	return &s.coverage
 }
 
 // originHashes returns the identifiers a log may be addressed by.

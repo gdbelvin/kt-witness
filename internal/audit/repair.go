@@ -61,19 +61,23 @@ func (a *Auditor) RunRepair(ctx context.Context, r Resolver, budget int) (*Repai
 	// down, so the epochs it has already dealt with — and the ones it failed to
 	// fetch along the way — are the ones it has passed. Below the cursor is
 	// simply the work it has not reached yet, which needs no repair.
-	latest, err := a.latestPublished(origin)
+	latest, known, err := a.latestPublished(origin)
 	if err != nil {
 		return nil, err
 	}
-	if latest <= 0 {
+	if !known {
 		return res, nil
 	}
-	cursor, err := a.Store.BackAuditProgress(origin)
+	// `started`, not `cursor > 0`: a sweep that has walked all the way down
+	// parks at epoch 0, and testing the value would make repair skip precisely
+	// the logs whose history is complete — the ones whose remaining holes are
+	// the only thing standing between them and B+.
+	cursor, started, err := a.Store.BackAuditProgress(origin)
 	if err != nil {
 		return nil, err
 	}
-	if cursor <= 0 {
-		return res, nil // the sweep has not started, so there is nothing behind it
+	if !started {
+		return res, nil // nothing swept yet, so nothing is behind us
 	}
 
 	if budget <= 0 {

@@ -72,19 +72,22 @@ func (a *Auditor) RunHistory(ctx context.Context, r Resolver, budget int64) (*Hi
 	// The earliest epoch this log actually published, as established by
 	// backfill. Without it we do not know where history ends and would sweep
 	// toward zero forever against a log that starts at 89,395.
-	earliest, err := a.earliestPublished(origin)
+	// `known` rather than a zero test: a log whose published history begins at
+	// epoch 0 has a legitimate earliest of 0, and treating that as "nothing
+	// backfilled" would silently exclude it from the sweep entirely.
+	earliest, known, err := a.earliestPublished(origin)
 	if err != nil {
 		return nil, err
 	}
-	if earliest <= 0 {
+	if !known {
 		return res, nil // nothing backfilled yet; nothing to sweep toward
 	}
 
-	cursor, err := a.Store.BackAuditProgress(origin)
+	cursor, started, err := a.Store.BackAuditProgress(origin)
 	if err != nil {
 		return nil, err
 	}
-	if cursor == 0 {
+	if !started {
 		// Start just below where the forward auditor began, so the two meet
 		// rather than overlap.
 		fwd, err := a.Store.AuditProgress(origin)
@@ -258,31 +261,34 @@ func (a *Auditor) RunHistory(ctx context.Context, r Resolver, budget int64) (*Hi
 	return res, nil
 }
 
-func (a *Auditor) earliestPublished(origin string) (int64, error) {
+// earliestPublished is the bottom of the backfilled range. The bool reports
+// whether a range is recorded at all — epoch 0 is a legitimate floor, and a
+// bare zero cannot be told apart from "no history yet".
+func (a *Auditor) earliestPublished(origin string) (int64, bool, error) {
 	hs, err := a.Store.Histories()
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	for _, h := range hs {
 		if h.Origin == origin {
-			return h.From, nil
+			return h.From, true, nil
 		}
 	}
-	return 0, nil
+	return 0, false, nil
 }
 
 // latestPublished is the top of the backfilled range.
-func (a *Auditor) latestPublished(origin string) (int64, error) {
+func (a *Auditor) latestPublished(origin string) (int64, bool, error) {
 	hs, err := a.Store.Histories()
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	for _, h := range hs {
 		if h.Origin == origin {
-			return h.To, nil
+			return h.To, true, nil
 		}
 	}
-	return 0, nil
+	return 0, false, nil
 }
 
 // prefetchAhead starts downloads for the epochs this sweep will reach next.

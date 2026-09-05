@@ -65,7 +65,7 @@ func TestForwardAndHistoryProgressAreIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	back, err := db.BackAuditProgress(origin)
+	back, _, err := db.BackAuditProgress(origin)
 	if err != nil {
 		t.Fatal(err)
 	}

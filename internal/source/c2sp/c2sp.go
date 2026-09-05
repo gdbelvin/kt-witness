@@ -375,11 +375,35 @@ func (s *Source) Backfill(ctx context.Context, log *slog.Logger) (*source.Backfi
 	// denominator of 163 and a numerator that only ever counted entry 164
 	// onward — B+ unreachable not because the history is bad but because nobody
 	// ever read it. For an entry log the backwards sweep is simply this.
+	// Resume rather than restart.
+	//
+	// This verified from zero on every pass, so a 172-entry log replayed its
+	// whole tree each time backfill ran: real work producing no new information,
+	// and a sub-second burst that a one-minute rate window extrapolated into an
+	// apparent ten thousand verifications an hour. The entries already checked
+	// are recorded; there is no reason to read them again.
+	//
+	// Only a run starting at zero can be resumed from. A higher index with a gap
+	// below it would let the unchecked portion be skipped silently, which is the
+	// one outcome worse than re-reading.
+	from := int64(0)
+	if s.cfg.Audits != nil {
+		if through, ok, err := s.cfg.Audits.ConstructionAuditedThrough(s.origin); err == nil && ok {
+			from = through + 1
+		}
+	}
+	if from >= head.Size {
+		// Everything published is already audited.
+		return &source.BackfillResult{
+			From: 0, To: head.Size - 1, Epochs: int(head.Size),
+		}, nil
+	}
 	if log != nil {
-		log.Info("verifying published entries", "origin", s.origin, "entries", head.Size)
+		log.Info("verifying published entries", "origin", s.origin,
+			"from", from, "to", head.Size-1, "entries", head.Size-from)
 	}
 	tree := tlog.Tree{N: head.Size, Hash: head.Hash}
-	if err := s.verifyNewEntries(ctx, 0, head.Size, tree); err != nil {
+	if err := s.verifyNewEntries(ctx, from, head.Size, tree); err != nil {
 		return nil, err
 	}
 	return &source.BackfillResult{

@@ -268,6 +268,20 @@ type EpochRecorder interface {
 // a log where that holds for every index is correctly built by definition.
 type AuditRecorder interface {
 	RecordConstructionAudit(origin string, index int64) error
+
+	// ConstructionAuditedThrough reports the end of the unbroken run of
+	// audited indices starting at zero, and whether any run exists at all.
+	//
+	// Backfill re-verified an entry log from index zero on every pass, so a
+	// 172-entry log replayed its whole tree each time — real work, no new
+	// information, and a burst that a short rate window extrapolated into an
+	// apparent ten thousand verifications an hour. Resuming needs exactly this
+	// one number.
+	//
+	// The bool is not decoration: index 0 is a legitimate answer and must not be
+	// confused with "nothing audited". That conflation has already produced two
+	// separate bugs in this codebase.
+	ConstructionAuditedThrough(origin string) (through int64, ok bool, err error)
 }
 
 type EntryStore interface {

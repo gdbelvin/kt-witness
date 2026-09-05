@@ -222,6 +222,11 @@ func TestEffectiveTierComesFromTheAuditRecord(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Coverage is cached, and the tier is derived from it. This test asserts the
+	// tier the instant an audit lands, so it asks for the exact figure rather
+	// than a cached one — which is the case the knob exists for.
+	s.CoverageTTL = -1
+
 	v, err := s.buildStatus()
 	if err != nil {
 		t.Fatal(err)

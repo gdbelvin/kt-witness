@@ -8,12 +8,28 @@ import (
 	"github.com/gdbsecurity/kt-witness/internal/source"
 )
 
-type recorder struct{ idx []int64 }
+type recorder struct {
+	idx []int64
+	// through/ok stand in for what the store already holds, so a test can place
+	// the resume point wherever it needs it.
+	through int64
+	ok      bool
+}
 
 func (r *recorder) RecordConstructionAudit(_ string, i int64) error {
 	r.idx = append(r.idx, i)
 	return nil
 }
+
+func (r *recorder) ConstructionAuditedThrough(string) (int64, bool, error) {
+	return r.through, r.ok, nil
+}
+
+// The recorder must satisfy the interface the source actually consumes.
+// Asserted explicitly because this type was previously declared and never
+// instantiated, so a change to the interface compiled cleanly while leaving the
+// behaviour untested.
+var _ source.AuditRecorder = (*recorder)(nil)
 
 // TestBackfillRefusedWithoutEntryVerification: declaring a construction history
 // we have no intention of checking would make the coverage denominator real and
