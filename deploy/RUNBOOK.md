@@ -156,6 +156,36 @@ something wrong being served.
 
 
 
+
+## Scrape interval and rate windows
+
+Telegraf scrapes `http://192.168.0.10:8088/metrics` every **15s**
+(`/home/<user>/monitoring/telegraf.conf`). It was 60s, which was fine when a
+construction audit took a minute and is not now that one completes every few
+seconds.
+
+The two numbers are coupled, and getting the pairing wrong is what makes a
+dashboard look broken when the service is healthy. A rate window must span
+several scrapes: below that it contains one sample or none, and the delta is
+taken across whatever gap happens to fall out. Measured on this deployment, a
+30s and a 1m window over 60s-interval data produced *identical* output with 92%
+jitter, because sub-scrape windows only split the same points into more buckets.
+At 5m the jitter halved.
+
+So: **rate windows are floored at 4x the scrape interval** — 1m against the
+current 15s. Every rate panel carries the floor in its query:
+
+```flux
+w = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod
+```
+
+If the scrape interval changes, change the floor with it, or the graphs go back
+to reporting sampling artefacts as though they were behaviour.
+
+Residual jitter after that is real: proof sizes vary between epochs, and the CPU
+governor re-evaluates permits every 15s. Smoothing it further would hide the
+system rather than measure it.
+
 ## Shipping the source without git
 
 The server is not a git checkout, so the source arrives by tar over ssh. There
