@@ -42,6 +42,35 @@ hardware, because publishing is what invites people to depend on it.
       c2sp.org/tlog-witness specifies only `POST <submission prefix>/add-checkpoint`
       and never defines what the prefix contains, so there is nothing to pin to.
       Accepting both encodings is the considered design, and now says so.
+- [ ] **Publish the witness over HTTPS.** Everything is prepared and nothing is
+      applied; picking this up is three steps, all of which need a human.
+      `deploy/cloudflared/` holds the tunnel config and compose snippet, and
+      `deploy/RUNBOOK.md` has the procedure with verification from outside the
+      tailnet.
+
+      1. Add **`kt.gdbsecurity.com`** as a Cloudflare zone — not the parent.
+         Subdomain zones work on the Free plan, so `gdbsecurity.com` keeps its
+         website, email and DNS at Squarespace and nothing else moves.
+      2. At Squarespace, add **NS** records for host `kt` pointing at the child
+         zone's nameservers. All four: a delegation with one missing looks
+         complete in their interface and does not resolve.
+      3. `cloudflared tunnel login` / `create kt-witness` / `route dns`, then put
+         the credentials file in `secrets/cloudflared/` and substitute the UUID.
+
+      A tunnel rather than an A record because the address is residential and
+      moves, and a stale record makes the witness look — from outside — exactly
+      like one that has stopped working. Tailscale Funnel cannot serve the name:
+      its certificate covers only `*.ts.net`.
+
+      **This is a decision, not a deployment step.** The identity
+      `witness.kt.gdbsecurity.com` is already inside every cosignature issued,
+      so serving it publicly invites reliance. The false fork finding against
+      the Go checksum database — a reasoning error that survived review and a
+      green suite — is the argument for more operating record first.
+
+      `deploy/caddy/witness.caddy` is the fallback: right under a static address
+      or a decision that nobody should sit in the delivery path.
+
 - [ ] **Publish the verifier key** at a stable location and get it into consumer
       trust policies. Deliberately last of these three: publishing is what
       invites people to depend on us.
