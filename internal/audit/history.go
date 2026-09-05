@@ -2,12 +2,6 @@ package audit
 
 import (
 	"context"
-	"fmt"
-	"time"
-
-	"github.com/gdbsecurity/kt-witness/internal/metrics"
-	"github.com/gdbsecurity/kt-witness/internal/netmeter"
-	"github.com/gdbsecurity/kt-witness/internal/store"
 )
 
 // Auditing backwards through published history.
@@ -110,113 +104,79 @@ func (a *Auditor) RunHistory(ctx context.Context, r Resolver, budget int64) (*Hi
 	}
 	res.To = cursor - 1
 
-	for epoch := cursor - 1; epoch >= earliest && budget > 0; epoch-- {
-		select {
-		case <-ctx.Done():
-			return res, ctx.Err()
-		default:
-		}
-
-		if prior, err := a.Store.GetAudit(origin, epoch); err != nil {
-			return res, err
-		} else if prior != nil && prior.Verified {
-			// Already settled by an earlier pass or by the forward sweep.
-			if err := a.Store.SetBackAuditProgress(origin, epoch); err != nil {
-				return res, err
-			}
-			res.From = epoch
-			continue
-		}
-
-		ref, err := r.ResolveEpoch(ctx, epoch)
+	// Skip anything already settled, without spending a verification on it.
+	// The forward sweep meets this one coming the other way, so the overlap is
+	// normal rather than exceptional.
+	for cursor-1 >= earliest {
+		prior, err := a.Store.GetAudit(origin, cursor-1)
 		if err != nil {
-			// Absence is not evidence, and a gap would silently falsify the
-			// completeness claim. Park here and let the next pass retry.
-			a.Log.Warn("history sweep parked: epoch unfetchable",
-				"origin", origin, "epoch", epoch, "err", err)
-			res.Remaining = epoch - earliest + 1
-			return res, nil
-		}
-
-		ar := &store.Audit{
-			Origin: origin, Epoch: epoch,
-			// Sampled, not selected by beacon: history is audited exhaustively
-			// because the operator cannot retroactively choose what we replay.
-			// Rate 1 is recorded so the published record shows this epoch was
-			// checked outright rather than drawn.
-			Sampled: true, Rate: 1, Strategy: string(StrategyHistory),
-			DecidedAt: time.Now().UTC(), Attempts: 1,
-		}
-
-		// Start the next proofs downloading before this one is verified.
-		//
-		// Download and verification use different resources, so running them in
-		// lockstep leaves each idle while the other works. Filling the cache
-		// ahead means the pool always has something to chew on and the link is
-		// never waiting for a verification to finish.
-		a.prefetchAhead(ctx, r, epoch)
-
-		cached := a.Prefetch.Path(origin, epoch)
-
-		// Backlog work waits for CPU allowance. Live auditing does not.
-		if err := a.Governor.Acquire(ctx); err != nil {
 			return res, err
 		}
-		out, err := a.Sidecar.VerifyCached(ctx, ref.LogDirectory, epoch, ref.PrevRoot, ref.CurrRoot, cached, a.Timeout)
-		a.Governor.Release()
-
-		// The bytes are dead weight the moment they have been verified, and the
-		// next download needs the room.
-		if cached != "" {
-			a.Prefetch.Release(origin, epoch)
+		if prior == nil || !prior.Verified {
+			break
 		}
-		switch {
-		case err != nil, out != nil && !out.OK && out.Kind != "verify":
-			// Could not check. Not a finding.
-			a.Log.Warn("history sweep parked: epoch unverifiable",
-				"origin", origin, "epoch", epoch, "err", err)
-			res.Remaining = epoch - earliest + 1
-			return res, nil
+		if err := a.Store.SetBackAuditProgress(origin, cursor-1); err != nil {
+			return res, err
+		}
+		cursor--
+		res.From = cursor
+	}
+	if cursor <= earliest {
+		res.Complete = true
+		return res, nil
+	}
 
-		case out != nil && !out.OK && out.Kind == "verify":
-			// A construction proof that fails to verify is conclusive, and just
-			// as conclusive in history as at the tip.
+	// Fetch ahead for the whole batch, so the link is filling the cache while
+	// the pool works through it.
+	a.prefetchAhead(ctx, r, cursor)
+
+	results := a.verifyBatch(ctx, r, cursor, earliest, budget)
+
+	// Advance only over the contiguous run of successes below the cursor.
+	//
+	// Results arrive out of order, and the sweep must never step past an epoch
+	// it has not settled: a hole would make "audited across published history"
+	// false while looking complete. Everything beyond the first gap is simply
+	// left for the next pass, which is what parking did when this was serial.
+	for i := int64(0); i < budget; i++ {
+		epoch := cursor - 1 - i
+		if epoch < earliest {
+			break
+		}
+		br := results[epoch]
+		if br == nil {
+			break
+		}
+		if br.fatal != nil {
 			res.Failed++
-			ar.Verified = false
-			_ = a.Store.RecordAudit(ar)
-			return res, fmt.Errorf(
-				"audit: %s: historical construction audit failed at epoch %d: %s",
-				origin, epoch, out.Error)
+			if br.audit != nil {
+				_ = a.Store.RecordAudit(br.audit)
+			}
+			return res, br.fatal
 		}
-
-		ar.Verified = true
-		ar.Bytes = out.Bytes
-		ar.DurationMS = out.VerifyMS
-		if err := a.Store.RecordAudit(ar); err != nil {
+		if br.blocked {
+			a.Log.Warn("history sweep parked: epoch could not be checked",
+				"origin", origin, "epoch", epoch)
+			break
+		}
+		if err := a.Store.RecordAudit(br.audit); err != nil {
 			return res, err
 		}
 		if err := a.Store.SetBackAuditProgress(origin, epoch); err != nil {
 			return res, err
 		}
-
-		lbl := map[string]string{"origin": origin}
-		metrics.Inc("kt_witness_audit_verified_total", lbl)
-		metrics.Add("kt_witness_audit_bytes_total", lbl, float64(out.Bytes))
-		netmeter.Add(origin, out.Bytes)
-
 		res.Verified++
 		res.From = epoch
-		budget--
 	}
 
-	if remaining, err := a.Store.BackAuditProgress(origin); err == nil {
-		res.Remaining = remaining - earliest
-		res.Complete = res.Remaining <= 0
+	res.Remaining = res.From - earliest
+	if res.Remaining < 0 {
+		res.Remaining = 0
 	}
+	res.Complete = res.From <= earliest
 	return res, nil
 }
 
-// earliestPublished is the lowest epoch backfill established for this log.
 func (a *Auditor) earliestPublished(origin string) (int64, error) {
 	hs, err := a.Store.Histories()
 	if err != nil {
