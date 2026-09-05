@@ -30,7 +30,8 @@ const (
 	// How much of a log's PUBLISHED history has a settled construction-audit
 	// decision. This is what separates tier B from B+, and it is measured from
 	// the stored record rather than claimed by a source.
-	MHistoryAudited  = "kt_witness_history_audited_epochs"
+	MHistoryAudited    = "kt_witness_history_audited_epochs"
+	MHistoryUnverified = "kt_witness_history_unverified_epochs"
 	MHistoryTotal    = "kt_witness_history_total_epochs"
 	MHistoryCoverage = "kt_witness_history_audit_coverage"
 
@@ -92,6 +93,7 @@ func Init(version string) {
 	d(MBackfillEpochs, metrics.Gauge, "Epochs of published history verified by backfill.")
 	d(MBackfillGaps, metrics.Gauge, "Gaps found in a log's published history. Not evidence of misbehaviour by itself: retention limits produce them too.")
 	d(MHistoryAudited, metrics.Gauge, "Epochs of published history with a settled construction-audit decision.")
+	d(MHistoryUnverified, metrics.Gauge, "Epochs settled WITHOUT being verified — ones we gave up fetching after repeated attempts. These are holes inside the swept range: they count toward audited, so a rising value means coverage is less complete than the audited figure suggests. Alert on this being non-zero and growing.")
 	d(MHistoryTotal, metrics.Gauge, "Epochs of published history in total.")
 	d(MHistoryCoverage, metrics.Gauge, "Fraction of published history construction audited, 0 to 1. Reaching 1 is what earns tier B+ — a bare tier B only covers epochs published since we started watching.")
 	d(MAuditEpochs, metrics.Counter, "Epochs considered for construction auditing, by outcome: sampled, declined, verified, unavailable.")
@@ -200,6 +202,11 @@ func (s *Server) refreshStoreMetrics() error {
 			metrics.Set(MBackfillGaps, origin, float64(lg.History.Gaps))
 		}
 		if lg.HistoryTotal > 0 {
+			// Epochs settled without being verified: holes inside the swept
+			// range. Exported beside the audited count rather than folded into
+			// it, because a coverage figure that hides them reads as a
+			// completeness it has not earned.
+			metrics.Set(MHistoryUnverified, origin, float64(lg.HistoryUnverified))
 			metrics.Set(MHistoryAudited, origin, float64(lg.HistoryAudited))
 			metrics.Set(MHistoryTotal, origin, float64(lg.HistoryTotal))
 			metrics.Set(MHistoryCoverage, origin, float64(lg.HistoryAudited)/float64(lg.HistoryTotal))

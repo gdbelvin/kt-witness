@@ -32,6 +32,10 @@ type logView struct {
 	Tier           string
 	Kind           string
 	HistoryAudited int64
+	// HistoryUnverified counts epochs with a settled decision that is NOT a
+	// successful verification — ones we gave up fetching. Published because a
+	// coverage figure that hides them reads as completeness it has not earned.
+	HistoryUnverified int64
 	HistoryTotal   int64
 	Origin         string
 	Size           int64
@@ -221,9 +225,20 @@ func (s *Server) buildStatus() (*statusView, error) {
 				total := h.To - h.From + 1
 				lv.HistoryAudited = settled
 				lv.HistoryTotal = total
+				lv.HistoryUnverified = settled - verified
 				switch {
-				case total > 0 && settled >= total:
-					// Every epoch in the published range has a settled decision.
+				case total > 0 && verified >= total:
+					// Every epoch in the published range was actually replayed
+					// and checked.
+					//
+					// Gated on `verified`, not `settled`. Settled includes
+					// epochs we gave up fetching after three attempts: they
+					// carry a decision, but the decision is "we could not look".
+					// Claiming B+ over those would assert construction across a
+					// range containing holes — and overpromising the tier is the
+					// single largest reputational risk this project has. A log
+					// with even one unfetchable epoch stays at B, which is the
+					// honest description of what we did.
 					lv.Tier = source.TierBPlus.String()
 				default:
 					lv.Tier = source.TierB.String()

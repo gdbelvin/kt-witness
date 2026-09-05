@@ -42,6 +42,17 @@ type batchResult struct {
 	// blocked means we could not check — absence, a refused download, a
 	// timeout. Not a finding, and the reason the run stops here.
 	blocked bool
+	// canceled means WE stopped asking: a shutdown or a cancelled context, not
+	// anything the log did.
+	//
+	// Kept separate from blocked because the two look identical at this layer
+	// and must not be counted alike. A blocked epoch spends one of its three
+	// fetch attempts; a cancelled one must spend none. Otherwise three deploys
+	// landing while the sweep sits near the same epochs exhaust their attempts
+	// without a single request having been refused, the skip loop treats them as
+	// settled, and the cursor steps over a permanent hole — a gap in "audited
+	// across published history" manufactured entirely by restarts.
+	canceled bool
 }
 
 // verifyBatch verifies up to `budget` epochs below cursor, concurrently.
@@ -67,6 +78,7 @@ func (a *Auditor) verifyBatch(ctx context.Context, r Resolver, cursor, earliest,
 			ref, err := r.ResolveEpoch(ctx, epoch)
 			if err != nil {
 				br.blocked = true
+				br.canceled = ctx.Err() != nil
 				mu.Lock()
 				out[epoch] = br
 				mu.Unlock()
@@ -85,7 +97,10 @@ func (a *Auditor) verifyBatch(ctx context.Context, r Resolver, cursor, earliest,
 
 			cached := a.Prefetch.Path(origin, epoch)
 			if err := a.Governor.Acquire(ctx); err != nil {
+				// The governor only ever fails because the context ended, so
+				// this is us stopping, not the log refusing.
 				br.blocked = true
+				br.canceled = true
 				mu.Lock()
 				out[epoch] = br
 				mu.Unlock()
@@ -101,6 +116,7 @@ func (a *Auditor) verifyBatch(ctx context.Context, r Resolver, cursor, earliest,
 			switch {
 			case err != nil, res != nil && !res.OK && res.Kind != "verify":
 				br.blocked = true
+				br.canceled = ctx.Err() != nil
 			case res != nil && !res.OK && res.Kind == "verify":
 				ar.Verified = false
 				br.fatal = fmt.Errorf(

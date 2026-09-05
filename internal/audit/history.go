@@ -138,9 +138,20 @@ func (a *Auditor) RunHistory(ctx context.Context, r Resolver, budget int64) (*Hi
 		return res, nil
 	}
 
-	// Fetch ahead for the whole batch, so the link is filling the cache while
-	// the pool works through it.
-	a.prefetchAhead(ctx, r, cursor)
+	// Fetch ahead for this batch AND the next, so the link is filling the cache
+	// while the pool works through it.
+	//
+	// The lookahead used to be a flat 8 against a budget of 64, which quietly
+	// defeated the point: only 8 of every 64 epochs were served from cache and
+	// the other 56 downloaded inside the sidecar — while holding a governor
+	// permit. A permit is the scarce token here (there are three or four of
+	// them), and a proof takes ~5s to fetch against ~37s to verify, so roughly
+	// an eighth of the CPU budget was being spent waiting on bytes. That is
+	// precisely what the prefetcher was built to prevent.
+	//
+	// Twice the budget means the next batch's proofs are already arriving while
+	// this one verifies, so a permit is never held for a download.
+	a.prefetchAhead(ctx, r, cursor, budget*2)
 
 	results := a.verifyBatch(ctx, r, cursor, earliest, budget)
 
@@ -177,6 +188,15 @@ func (a *Auditor) RunHistory(ctx context.Context, r Resolver, budget int64) (*Hi
 				_ = a.Store.RecordAudit(br.audit)
 			}
 			return res, br.fatal
+		}
+		if br.canceled {
+			// We stopped asking. Record nothing at all: an attempt not made is
+			// not an attempt refused, and writing one here would let a run of
+			// deploys retire an epoch's three attempts without the log ever
+			// having declined to serve it. The cursor stays put and the next
+			// pass asks again.
+			blocked = true
+			continue
 		}
 		if br.blocked {
 			// Count the attempt. Absence is still not evidence — the record is
@@ -242,11 +262,13 @@ func (a *Auditor) earliestPublished(origin string) (int64, error) {
 // Fire and forget: a prefetch that fails is not a problem, because the verifier
 // falls back to downloading the proof itself. That fallback is what keeps this
 // an optimisation rather than a new way for auditing to break.
-func (a *Auditor) prefetchAhead(ctx context.Context, r Resolver, epoch int64) {
+func (a *Auditor) prefetchAhead(ctx context.Context, r Resolver, epoch, lookahead int64) {
 	if a.Prefetch == nil {
 		return
 	}
-	const lookahead = 8
+	if lookahead < 1 {
+		lookahead = 1
+	}
 	origin := r.Origin()
 	for i := int64(1); i <= lookahead; i++ {
 		next := epoch - i // the backwards sweep walks down
@@ -255,6 +277,14 @@ func (a *Auditor) prefetchAhead(ctx context.Context, r Resolver, epoch int64) {
 		}
 		if a.Prefetch.Path(origin, next) != "" {
 			continue
+		}
+		// Stop before resolving once the cache is full. Fetch would decline
+		// anyway, but only after the resolve had already been paid for — and
+		// with a lookahead of twice the batch that is a burst of listing
+		// requests per round against somebody else's CDN, issued purely to
+		// discover work there is no room to do.
+		if _, held := a.Prefetch.Stats(); held >= a.Prefetch.maxBytes() {
+			return
 		}
 		go func(e int64) {
 			ref, err := r.ResolveEpoch(ctx, e)
