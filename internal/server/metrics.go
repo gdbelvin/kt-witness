@@ -45,6 +45,14 @@ const (
 	MScrapeSeconds = "kt_witness_metrics_scrape_duration_seconds"
 	MCoverageAge   = "kt_witness_coverage_cache_age_seconds"
 
+	// The proof cache sits between the link and the CPU, and its occupancy is
+	// the only thing that distinguishes a bandwidth-bound pipeline from a
+	// CPU-bound one.
+	MPrefetchBytes    = "kt_witness_prefetch_cache_bytes"
+	MPrefetchFiles    = "kt_witness_prefetch_cache_files"
+	MPrefetchMax      = "kt_witness_prefetch_cache_max_bytes"
+	MPrefetchDiskFree = "kt_witness_prefetch_disk_free_bytes"
+
 	// Storage. A witness that runs out of disk stops witnessing, and the
 	// database is the only thing on it that cannot be rebuilt from the network.
 	MDBBytes        = "kt_witness_database_bytes"
@@ -109,6 +117,10 @@ func Init(version string) {
 	d(MAppHeads, metrics.Gauge, "Per-application heads observed. These are observations, never cosigned.")
 	d(MAppConflicts, metrics.Gauge, "Contradictions recorded among observed application heads.")
 	d(MScrapeSeconds, metrics.Gauge, "How long it took to gather these metrics from the store.")
+	d(MPrefetchBytes, metrics.Gauge, "Bytes of proofs downloaded and waiting to be verified. AT THE CAP means downloads are outrunning verification, so the link has headroom and CPU is the constraint. NEAR ZERO while CPU is idle means the opposite: verification is starved and the link or the CDN is the constraint. This is the metric that tells those apart.")
+	d(MPrefetchFiles, metrics.Gauge, "Proofs held in the disk cache awaiting verification.")
+	d(MPrefetchMax, metrics.Gauge, "Configured cap on the proof cache, so occupancy can be read as a fraction without hardcoding the limit in a dashboard.")
+	d(MPrefetchDiskFree, metrics.Gauge, "Free space on the volume holding the proof cache. The cache stops filling before this reaches the floor, because filling the volume would stop the witness recording what it has attested.")
 	d(MCoverageAge, metrics.Gauge, "Age of the oldest cached coverage figure. Coverage is scanned from the audit record on a background cadence; if this grows without bound the cache has stopped refreshing and every coverage gauge is frozen — which looks identical to coverage that has stopped moving.")
 	d(MDBBytes, metrics.Gauge, "Size of the bbolt database on disk. Note bbolt never returns freed pages to the filesystem, so this only grows; a large drop means the file was replaced.")
 	d(MExportBytes, metrics.Gauge, "Size of the published file mirror.")

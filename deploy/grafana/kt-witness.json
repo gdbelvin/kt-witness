@@ -1428,6 +1428,483 @@
       ],
       "title": "Audited now",
       "type": "stat"
+    },
+    {
+      "id": 19,
+      "type": "row",
+      "title": "Pipeline health & bottlenecks",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 73
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Pipeline bottleneck \u2014 CPU against budget",
+      "description": "The single most useful panel here. cpu_self_cores is what this container actually burns; audit_permits is what the governor is willing to grant the backlog sweep. When CPU sits at the budget and permits fall toward 1, CPU is the binding constraint. When permits are high and in-flight is below them, the sweep is NOT taking what it was offered \u2014 that means it is blocked on something else (bytes, disk, or a barrier), and the bottleneck is downstream.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 74
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and (r._field == \"kt_witness_cpu_self_cores\" or r._field == \"kt_witness_cpu_machine_cores\"))\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\",\"_field\",\"_value\"])",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and (r._field == \"kt_witness_audit_permits\" or r._field == \"kt_witness_audit_in_flight\"))\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\",\"_field\",\"_value\"])",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Governor allowance actually taken",
+      "description": "in_flight divided by permits. At 1.0 the sweep is using everything the governor grants and more CPU would buy more throughput. Persistently below 1.0 means the CPU allowance is going unused and adding cores would buy nothing \u2014 look at bandwidth, the disk cache, or a barrier in the sweep instead.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 83
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "percentunit",
+          "max": 1.2,
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and (r._field == \"kt_witness_audit_in_flight\" or r._field == \"kt_witness_audit_permits\"))\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({_time: r._time, _value: if r.kt_witness_audit_permits > 0.0 then r.kt_witness_audit_in_flight / r.kt_witness_audit_permits else 0.0, _field: \"allowance taken\"}))",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Proof cache \u2014 the buffer between link and CPU",
+      "description": "The disk cache sits between downloading and verifying. FULL means downloads are outrunning verification, so bandwidth has headroom and CPU is the constraint. EMPTY while CPU is idle means the opposite: verification is starved and the link (or the CDN) is the constraint. This is the panel that tells the two apart.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 83
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_prefetch_cache_bytes\")\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\",\"_value\"])",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Download rate by ecosystem",
+      "description": "Derived from the per-origin byte counters. Compare against the host NIC to see how much of the link the witness is responsible for, and against the proof cache above to see whether the link is the limit or merely keeping up.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 91
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_network_bytes_in_total\")\n  |> derivative(unit: 1s, nonNegative: true)\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> group(columns: [\"kind\"])\n  |> aggregateWindow(every: 1m, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\",\"kind\",\"_value\"])",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Epochs verified per hour, by log",
+      "description": "The pipeline's actual output. Read it together with the bottleneck panel: throughput flat while CPU is pinned means we are at capacity; throughput flat while CPU is idle means something upstream is starving it.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 91
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_audit_verified_total\")\n  |> derivative(unit: 1h, nonNegative: true)\n  |> aggregateWindow(every: 5m, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\",\"origin\",\"_value\"])",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Coverage integrity \u2014 holes in the swept range",
+      "description": "Epochs settled without being verified. These are gaps INSIDE the audited range, so they make the audited count overstate what was actually established. Retried on a growing backoff, so a value that keeps climbing means genuinely unfetchable proofs rather than a transient refusal. Non-zero here is why a log can be at B rather than B+.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 99
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_history_holes\")\n  |> aggregateWindow(every: 5m, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\",\"origin\",\"_value\"])",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Largest unbroken verified run",
+      "description": "The honest form of the coverage claim. An audited COUNT says how much work was done and nothing about whether the result is a solid range or a sieve; only a solid range supports \u201cthis log's history is construction audited\u201d. This line rising is real progress; the audited count rising while this stays flat is not.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 99
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_verified_region_epochs\")\n  |> aggregateWindow(every: 5m, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\",\"origin\",\"_value\"])",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ]
     }
   ],
   "refresh": "1m",

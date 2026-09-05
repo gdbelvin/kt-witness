@@ -48,6 +48,20 @@ const uiHTML = `<!doctype html>
 </p>
 
 <h2>Witnessed logs</h2>
+<p class="note">
+  Grouped by what each log makes transparent. A tier-A cosignature over a certificate log and a
+  tier-A cosignature over a key directory are the same strength of claim about very different
+  objects, and the tiers available differ by ecosystem — see below.
+</p>
+
+{{range .Groups}}
+<h3 class="grouphead">{{.Label}}
+  <span class="pill{{if .Forked}} bad{{else}} ok{{end}}">{{commai .Count}} log{{if ne .Count 1}}s{{end}}</span>
+  {{if .TopTier}}<span class="pill ok">best: {{.TopTier}}{{if gt .AtTop 0}} ({{commai .AtTop}}){{end}}</span>{{end}}
+  {{if .Forked}}<span class="pill bad">{{commai .Forked}} FORKED</span>{{end}}
+  {{if .Stale}}<span class="pill warn">{{commai .Stale}} stale</span>{{end}}
+</h3>
+{{if .Blurb}}<p class="note">{{.Blurb}}</p>{{end}}
 <div class="tablewrap">
 <table>
   <thead><tr>
@@ -61,7 +75,7 @@ const uiHTML = `<!doctype html>
       <a class="origin" href="/log?origin={{.Origin}}">{{.Origin}}</a>
       {{if .Forked}} <span class="pill bad">FORKED</span>{{end}}
       {{if .Stale}} <span class="pill warn">STALE</span>{{end}}
-      {{if .History}}<div class="root">history {{comma .History.From}}–{{comma .History.To}} · {{commai .History.Epochs}} epochs · {{commai .History.Gaps}} gaps{{if .HistoryTotal}} · construction audited {{comma .HistoryAudited}}/{{comma .HistoryTotal}}{{end}}</div>{{end}}
+      {{if .History}}<div class="root">history {{comma .History.From}}–{{comma .History.To}} · {{commai .History.Epochs}} epochs · {{commai .History.Gaps}} gaps{{if .HistoryTotal}} · construction audited {{comma .HistoryAudited}}/{{comma .HistoryTotal}}{{if .Holes}} · <span class="pill warn">{{commai .Holes}} holes</span>{{end}}{{end}}</div>{{end}}
     </td>
     <td>{{if .Tier}}<span class="pill ok">{{.Tier}}</span>{{else}}<span class="pill warn">?</span>{{end}}</td>
     <td class="n">{{comma .Size}}</td>
@@ -75,6 +89,8 @@ const uiHTML = `<!doctype html>
   </tbody>
 </table>
 </div>
+{{end}}
+
 <p class="note">
   A <em>size</em> that never moves is normal for a quiet log; the cosignature is refreshed hourly so
   its timestamp stays a liveness signal. <strong>STALE</strong> means this witness has not refreshed
@@ -172,6 +188,9 @@ a{color:var(--ok)}
 h1{font-size:1.5rem;margin:0 0 .2rem;letter-spacing:-.01em}
 h2{font-size:.78rem;text-transform:uppercase;letter-spacing:.11em;color:var(--muted);
    margin:2.4rem 0 .7rem;font-weight:600}
+.grouphead{font-size:1rem;font-weight:600;margin:1.8rem 0 .3rem;
+   display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.grouphead .pill{font-weight:500;text-transform:none;letter-spacing:0}
 .sub{color:var(--muted);margin:0 0 1.6rem;font-size:.92rem}
 code,.m{font-family:var(--mono);font-variant-numeric:tabular-nums}
 

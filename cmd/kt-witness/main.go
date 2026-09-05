@@ -705,6 +705,23 @@ func run(cfg *config, log *slog.Logger, once, backfill bool, retractOrigin, retr
 		return nil
 	}
 
+	if auditor != nil && auditor.Prefetch != nil {
+		// The cache occupancy is what distinguishes a CPU-bound pipeline from a
+		// bandwidth-bound one, so it is sampled on its own cadence rather than
+		// only when something happens to touch the cache.
+		go func() {
+			t := time.NewTicker(15 * time.Second)
+			defer t.Stop()
+			for {
+				auditor.Prefetch.ReportMetrics()
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+				}
+			}
+		}()
+	}
 	if auditor != nil && auditor.Governor != nil {
 		go auditor.Governor.Run(ctx)
 		log.Info("backlog sweep paced against CPU",

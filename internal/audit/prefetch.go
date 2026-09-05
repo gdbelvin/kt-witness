@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gdbsecurity/kt-witness/internal/metrics"
 	"github.com/gdbsecurity/kt-witness/internal/netmeter"
 )
 
@@ -320,5 +321,26 @@ func (p *Prefetcher) Prune() {
 		delete(p.cached, e.key)
 		p.bytes -= e.size
 		_ = os.Remove(filepath.Join(p.Dir, e.key))
+	}
+}
+
+// ReportMetrics publishes the cache's occupancy.
+//
+// This is the panel that tells a CPU-bound pipeline from a bandwidth-bound one,
+// and nothing else can. The cache sits between downloading and verifying: full
+// means downloads are outrunning verification, so the link has headroom and the
+// CPU is the constraint; empty while the CPU idles means the opposite. Without
+// it, "are we saturating both?" can only be answered by inference — which is
+// how this project spent an afternoon reasoning about the wrong resource.
+func (p *Prefetcher) ReportMetrics() {
+	if p == nil || p.Dir == "" {
+		return
+	}
+	files, bytes := p.Stats()
+	metrics.Set("kt_witness_prefetch_cache_bytes", nil, float64(bytes))
+	metrics.Set("kt_witness_prefetch_cache_files", nil, float64(files))
+	metrics.Set("kt_witness_prefetch_cache_max_bytes", nil, float64(p.maxBytes()))
+	if free, err := freeBytes(p.Dir); err == nil {
+		metrics.Set("kt_witness_prefetch_disk_free_bytes", nil, float64(free))
 	}
 }

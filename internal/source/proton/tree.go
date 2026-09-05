@@ -3,7 +3,9 @@ package proton
 import (
 	"crypto/sha256"
 	"fmt"
+	"os"
 	"runtime"
+	"strconv"
 	"sync"
 )
 
@@ -231,7 +233,7 @@ func TreeRootParallel(leaves Leaves, shardDepth int) ([]byte, error) {
 	}
 
 	roots := make([][]byte, shards)
-	sem := make(chan struct{}, runtime.NumCPU())
+	sem := make(chan struct{}, treeWorkers())
 	var wg sync.WaitGroup
 	for s := 0; s < shards; s++ {
 		wg.Add(1)
@@ -446,4 +448,35 @@ type Removal struct {
 // should not.
 func (d *DiffStats) Suspicious() bool {
 	return d.Removed > 0 || d.Overwritten > 0 || d.PhantomRemovals > 0 || d.ValueMismatches > 0
+}
+
+// treeWorkers bounds how much of the machine a tree rebuild may take.
+//
+// This used to be runtime.NumCPU(), which meant the rebuild ran completely
+// outside the CPU governor that paces everything else. The effect was visible
+// the moment the history replay started: the governor measured total CPU at the
+// budget, concluded it was over, and throttled the AKD backlog sweep from ~3.9
+// permits to 1.4 — the paced work yielding all of its allowance to the unpaced
+// work beside it. Two consumers, one governed, and the governed one loses.
+//
+// A static share rather than a governor permit, because the two are not the
+// same shape. A permit bounds a ~37-second verification; a Proton rebuild runs
+// for ~19 minutes, and holding a permit that long would starve the sweep just
+// as thoroughly from the other direction. Capping the parallelism instead lets
+// both run, with the rebuild taking a predictable slice.
+//
+// PROTON_TREE_WORKERS overrides it for an operator who wants the replay to
+// finish sooner and is willing to give it the machine.
+func treeWorkers() int {
+	if v := os.Getenv("PROTON_TREE_WORKERS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	// A quarter of the machine, at least one. Leaves the governor a budget it
+	// can actually allocate rather than one already spent.
+	if n := runtime.NumCPU() / 4; n > 0 {
+		return n
+	}
+	return 1
 }

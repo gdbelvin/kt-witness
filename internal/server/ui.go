@@ -76,8 +76,12 @@ type statusView struct {
 	Now         time.Time
 	Generated   string
 
-	Logs  []logView
-	Forks int
+	Logs []logView
+	// Groups is Logs partitioned by ecosystem. A certificate log and a key
+	// directory are not the same kind of object, and a flat list of eighty rows
+	// gives a reader no way to hold that distinction.
+	Groups []logGroup
+	Forks  int
 	// RetractedForks counts findings that were withdrawn. Reported separately so
 	// a retraction is visible rather than simply making a finding disappear.
 	RetractedForks int
@@ -300,6 +304,7 @@ func (s *Server) buildStatus() (*statusView, error) {
 	}
 	sort.Slice(v.Logs, func(i, j int) bool { return v.Logs[i].Size > v.Logs[j].Size })
 	v.TotalLogs = len(v.Logs)
+	v.Groups = groupByKind(v.Logs)
 
 	if apps, err := s.Store.AppHeads(); err == nil {
 		v.Apps = len(apps)
