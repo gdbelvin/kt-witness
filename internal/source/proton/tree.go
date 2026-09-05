@@ -473,10 +473,24 @@ func treeWorkers() int {
 			return n
 		}
 	}
-	// A quarter of the machine, at least one. Leaves the governor a budget it
-	// can actually allocate rather than one already spent.
-	if n := runtime.NumCPU() / 4; n > 0 {
-		return n
+	// A fixed four cores, not a fraction of the machine.
+	//
+	// A fraction looks more adaptive and scales the wrong way: the AKD sweep is
+	// what benefits from a bigger box, while Proton's replay is a fixed amount
+	// of work that finishes when it finishes. At 16 cores a quarter is 4; at 32
+	// it would quietly become 8, handing the extra hardware to the one consumer
+	// that cannot use it to reduce the backlog — and taking it from the one that
+	// can. Four cores keeps a ~19-minute step at ~19 minutes on any host.
+	const share = 4
+	if n := runtime.NumCPU(); n < share {
+		return maxInt(1, n)
 	}
-	return 1
+	return share
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

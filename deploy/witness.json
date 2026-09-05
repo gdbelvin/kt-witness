@@ -21,8 +21,8 @@
   "audit": {
     "sidecar_path": "/usr/local/bin/kt-akd-verify",
     "prefetch_dir": "/data/proof-cache",
-    "prefetch_bytes": 32212254720,
-    "prefetch_workers": 6,
+    "prefetch_bytes": 68719476736,
+    "prefetch_workers": 8,
     "prefetch_min_free_bytes": 5368709120,
     "pace_backlog": true,
     "reserve_cores": 1,

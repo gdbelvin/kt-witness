@@ -52,6 +52,20 @@ func DefaultWorkers() int {
 	if !ok {
 		return 1
 	}
+	// A memory LIMIT is a promise about what we may use, not evidence the
+	// machine has it. Docker will happily accept `mem_limit: 44g` on a 31 GB
+	// host, and the pool would then size itself for eight workers and OOM the
+	// box — taking equivocation detection down with the audit.
+	//
+	// This is the same class of mistake as a hardcoded core count: a fact about
+	// hardware, written down somewhere, that stopped being true. It bites hardest
+	// exactly when the config is raised in anticipation of a resize that has not
+	// happened yet, which is precisely the order these changes tend to land in.
+	if total, ok := machineMemory(); ok {
+		if avail := int64(float64(total) * memoryHeadroom); avail < limit {
+			limit = avail
+		}
+	}
 	n := int(float64(limit) * memoryHeadroom / float64(peakVerificationBytes))
 	if n < 1 {
 		n = 1
@@ -92,6 +106,33 @@ func cgroupMemoryLimit() (int64, bool) {
 			return 0, false
 		}
 		return n, true
+	}
+	return 0, false
+}
+
+// machineMemory reports the host's total RAM.
+//
+// /proc/meminfo is not namespaced, so inside a container this is the machine's
+// memory rather than the container's share — which is exactly what is wanted
+// here: the question is whether the limit we were handed is physically backed.
+func machineMemory() (int64, bool) {
+	b, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0, false
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if !strings.HasPrefix(line, "MemTotal:") {
+			continue
+		}
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			return 0, false
+		}
+		kb, err := strconv.ParseInt(f[1], 10, 64)
+		if err != nil || kb <= 0 {
+			return 0, false
+		}
+		return kb * 1024, true
 	}
 	return 0, false
 }
