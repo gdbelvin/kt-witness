@@ -44,13 +44,15 @@ func TestGovernorYieldsToABusyMachine(t *testing.T) {
 	g := &Governor{ReserveCores: 11, MaxConcurrent: 6} // 16-11 = 5 core budget
 	g.permits = 5
 
-	// We are using almost nothing, but the machine is nearly saturated:
-	// 15.5 of 16 cores busy, against a default 0.85 limit (13.6).
-	for i := 0; i < 40; i++ {
+	// We are using almost nothing, but the machine is nearly saturated by work
+	// that is not ours: 15.5 of 16 cores, with only 0.2 of it ours. The backlog
+	// must get out of the way entirely — the floor protects it from our own
+	// live auditing, not from the neighbours.
+	for i := 0; i < 60; i++ {
 		g.step(sample(0.2, 15.5, 16))
 	}
 	if p := g.Permits(); p > 0.5 {
-		t.Fatalf("permits %.2f on a saturated host; the sweep must yield to its neighbours", p)
+		t.Fatalf("permits %.2f while others hold the machine; the sweep must yield", p)
 	}
 }
 
@@ -173,12 +175,14 @@ func TestSelfAndMachineConstraintsCannotContradict(t *testing.T) {
 		t.Fatalf("permits %.2f on an idle 16-core box, expected the pool cap", p)
 	}
 
-	// Neighbours arrive and push the machine past the budget while our own
-	// usage stays low. The machine term must bind.
+	// Neighbours arrive and take the machine past the budget on their own —
+	// 15.8 busy of which only 0.3 is ours. There is no room for us, so the
+	// backlog yields completely; the floor protects it from our own live
+	// auditing, not from other tenants.
 	for i := 0; i < 60; i++ {
-		g.step(sample(2.0, 15.8, 16))
+		g.step(sample(0.3, 15.8, 16))
 	}
 	if p := g.Permits(); p > 0.5 {
-		t.Fatalf("permits %.2f with the machine at 15.8 of a 15-core budget", p)
+		t.Fatalf("permits %.2f while others hold 15.5 cores of a 15-core budget", p)
 	}
 }

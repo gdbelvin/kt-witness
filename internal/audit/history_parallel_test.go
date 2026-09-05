@@ -74,3 +74,48 @@ func TestVerifyBatchRespectsBudget(t *testing.T) {
 		t.Fatalf("planned %d epochs below the floor, want 3", len(planned))
 	}
 }
+
+// TestVerifiedEpochsBehindAGapAreStillRecorded separates the two questions that
+// were conflated, at real cost.
+//
+// The cursor must not step past a hole: it is the claim that everything below
+// is settled. But an audit of epoch N is true whether or not N-1 could be
+// checked, so it should be recorded. Discarding those cost every verification
+// behind a gap, and the next pass redid them — coverage sat still while the
+// sweep was visibly busy.
+func TestVerifiedEpochsBehindAGapAreStillRecorded(t *testing.T) {
+	results := map[int64]*batchResult{
+		99: {epoch: 99, verified: true},
+		98: {epoch: 98, blocked: true},
+		97: {epoch: 97, verified: true},
+		96: {epoch: 96, verified: true},
+	}
+
+	var recorded, advanced []int64
+	blocked := false
+	cursor, earliest, budget := int64(100), int64(1), int64(4)
+	for i := int64(0); i < budget; i++ {
+		epoch := cursor - 1 - i
+		if epoch < earliest {
+			break
+		}
+		br := results[epoch]
+		if br == nil || br.blocked {
+			blocked = true
+			continue
+		}
+		recorded = append(recorded, epoch)
+		if !blocked {
+			advanced = append(advanced, epoch)
+		}
+	}
+
+	// All three verifications are kept, including the two behind the gap.
+	if len(recorded) != 3 {
+		t.Fatalf("recorded %v; verified work behind a gap must not be discarded", recorded)
+	}
+	// But the cursor stops at the hole.
+	if len(advanced) != 1 || advanced[0] != 99 {
+		t.Fatalf("cursor advanced over %v; it must stop at the gap at 98", advanced)
+	}
+}

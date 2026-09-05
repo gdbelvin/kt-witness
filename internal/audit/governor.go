@@ -56,6 +56,20 @@ type Governor struct {
 	// wants to use less than the machine allows. Zero means derive.
 	TargetCores float64
 
+	// MinPermits is the allowance the backlog keeps however busy the machine
+	// is. Zero means the default of one.
+	//
+	// Without a floor the sweep starves. Live auditing does not ask this
+	// governor — it follows the tip and must not be throttled — so it can hold
+	// the CPU at budget on its own, at which point the error term goes to zero,
+	// permits decay, and the backlog stops entirely. That was observed:
+	// permits at 0.47 with the machine pinned, and coverage flat.
+	//
+	// One permit is a small, permanent share rather than a fair one. The
+	// backlog is a completeness exercise and should yield to the tip; it should
+	// not yield forever.
+	MinPermits float64
+
 	// MaxConcurrent caps permits however much headroom appears. The sidecar
 	// pool is the real ceiling — permits above it buy nothing and would let the
 	// controller wind up against a limit it cannot reach.
@@ -84,6 +98,13 @@ const (
 	// correcting the full error at once oscillates.
 	gain = 0.35
 )
+
+func (g *Governor) minPermits() float64 {
+	if g.MinPermits > 0 {
+		return g.MinPermits
+	}
+	return 1
+}
 
 func (g *Governor) reserve() float64 {
 	if g.ReserveCores > 0 {
@@ -123,7 +144,7 @@ func (g *Governor) Run(ctx context.Context) {
 	// stall the sweep silently, and silence is the failure mode this project
 	// keeps having to design against.
 	g.mu.Lock()
-	g.permits = 1
+	g.permits = g.minPermits()
 	g.mu.Unlock()
 
 	t := time.NewTicker(governorInterval)
@@ -188,6 +209,27 @@ func (g *Governor) step(sample cpuload.Sample) {
 	}
 
 	g.permits += err * gain
+
+	// The floor holds against our own load, not against the neighbours'.
+	//
+	// Live auditing does not ask this governor, so it can pin the machine by
+	// itself; without a floor the backlog would then stop forever, which is how
+	// permits reached 0.47 with coverage flat. But when the machine is busy with
+	// work that is not ours, yielding is the whole point — this host also runs
+	// the home automation and a baby monitor, and holding four cores against
+	// them to make a completeness metric move would be the wrong trade.
+	//
+	// So: if everything else on the box already exceeds the budget, we get out
+	// of the way entirely. Otherwise the backlog keeps its small permanent share.
+	others := sample.MachineCores - sample.SelfCores
+	if others < 0 {
+		others = 0
+	}
+	if others < budget {
+		if floor := g.minPermits(); g.permits < floor {
+			g.permits = floor
+		}
+	}
 	if g.permits < 0 {
 		g.permits = 0
 	}

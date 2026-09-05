@@ -138,6 +138,17 @@ func (a *Auditor) RunHistory(ctx context.Context, r Resolver, budget int64) (*Hi
 	// it has not settled: a hole would make "audited across published history"
 	// false while looking complete. Everything beyond the first gap is simply
 	// left for the next pass, which is what parking did when this was serial.
+	// Record every epoch that verified, then advance the cursor only over the
+	// contiguous run.
+	//
+	// These are two different questions and conflating them threw work away. An
+	// audit of epoch N is true whether or not N-1 could be checked, so it is
+	// recorded; the CURSOR is what must not step past a hole, because that is
+	// the thing claiming "everything below here is settled". Breaking out of the
+	// loop on the first gap discarded verifications that had already been paid
+	// for, and the next pass redid them — which is why coverage sat still while
+	// the sweep was plainly busy.
+	blocked := false
 	for i := int64(0); i < budget; i++ {
 		epoch := cursor - 1 - i
 		if epoch < earliest {
@@ -145,7 +156,8 @@ func (a *Auditor) RunHistory(ctx context.Context, r Resolver, budget int64) (*Hi
 		}
 		br := results[epoch]
 		if br == nil {
-			break
+			blocked = true
+			continue
 		}
 		if br.fatal != nil {
 			res.Failed++
@@ -155,18 +167,27 @@ func (a *Auditor) RunHistory(ctx context.Context, r Resolver, budget int64) (*Hi
 			return res, br.fatal
 		}
 		if br.blocked {
-			a.Log.Warn("history sweep parked: epoch could not be checked",
-				"origin", origin, "epoch", epoch)
-			break
+			if !blocked {
+				a.Log.Warn("history sweep parked: epoch could not be checked",
+					"origin", origin, "epoch", epoch)
+			}
+			blocked = true
+			continue
 		}
+
+		// Verified. Worth recording wherever it sits.
 		if err := a.Store.RecordAudit(br.audit); err != nil {
 			return res, err
 		}
-		if err := a.Store.SetBackAuditProgress(origin, epoch); err != nil {
-			return res, err
-		}
 		res.Verified++
-		res.From = epoch
+
+		// The cursor only moves while nothing below it is outstanding.
+		if !blocked {
+			if err := a.Store.SetBackAuditProgress(origin, epoch); err != nil {
+				return res, err
+			}
+			res.From = epoch
+		}
 	}
 
 	res.Remaining = res.From - earliest
