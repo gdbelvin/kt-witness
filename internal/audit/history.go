@@ -2,6 +2,8 @@ package audit
 
 import (
 	"context"
+	"github.com/gdbsecurity/kt-witness/internal/store"
+	"time"
 )
 
 // Auditing backwards through published history.
@@ -105,6 +107,13 @@ func (a *Auditor) RunHistory(ctx context.Context, r Resolver, budget int64) (*Hi
 	res.To = cursor - 1
 
 	// Skip anything already settled, without spending a verification on it.
+	//
+	// "Settled" includes an epoch we have failed to fetch enough times to stop
+	// asking. Without that, one dead blob halts the sweep permanently: every
+	// pass walks down to it, fails, re-verifies the epochs below — which
+	// RecordAudit overwrites rather than adds — and coverage never moves while
+	// the machine looks busy. That is exactly what happened, stuck between
+	// epochs 625,350 and 625,501 for hours.
 	// The forward sweep meets this one coming the other way, so the overlap is
 	// normal rather than exceptional.
 	for cursor-1 >= earliest {
@@ -112,7 +121,10 @@ func (a *Auditor) RunHistory(ctx context.Context, r Resolver, budget int64) (*Hi
 		if err != nil {
 			return res, err
 		}
-		if prior == nil || !prior.Verified {
+		if prior == nil {
+			break
+		}
+		if !prior.Verified && prior.Attempts < maxFetchAttempts {
 			break
 		}
 		if err := a.Store.SetBackAuditProgress(origin, cursor-1); err != nil {
@@ -167,9 +179,23 @@ func (a *Auditor) RunHistory(ctx context.Context, r Resolver, budget int64) (*Hi
 			return res, br.fatal
 		}
 		if br.blocked {
+			// Count the attempt. Absence is still not evidence — the record is
+			// marked unverified, never as a finding — but an epoch that can
+			// never be fetched has to stop consuming every pass.
+			attempts := 1
+			if prior, err := a.Store.GetAudit(origin, epoch); err == nil && prior != nil {
+				attempts = prior.Attempts + 1
+			}
+			ar := &store.Audit{
+				Origin: origin, Epoch: epoch, Sampled: true, Rate: 1,
+				Strategy: string(StrategyHistory), Verified: false,
+				Attempts: attempts, DecidedAt: time.Now().UTC(),
+			}
+			_ = a.Store.RecordAudit(ar)
 			if !blocked {
-				a.Log.Warn("history sweep parked: epoch could not be checked",
-					"origin", origin, "epoch", epoch)
+				a.Log.Warn("history sweep: epoch could not be checked",
+					"origin", origin, "epoch", epoch, "attempt", attempts,
+					"gives_up_after", maxFetchAttempts)
 			}
 			blocked = true
 			continue
@@ -239,3 +265,15 @@ func (a *Auditor) prefetchAhead(ctx context.Context, r Resolver, epoch int64) {
 		}(next)
 	}
 }
+
+// maxFetchAttempts is how often an unfetchable epoch is retried before the
+// sweep stops waiting for it.
+//
+// Retrying forever is not patience, it is a stall: the sweep re-walks the same
+// epochs every pass and coverage stands still while the machine looks fully
+// occupied. Three attempts spread across passes is enough to ride out a
+// transient refusal or a stale cache entry.
+//
+// The epoch is recorded unverified, never as a finding. Absence remains
+// evidence of nothing — what changes is only that we stop asking.
+const maxFetchAttempts = 3
