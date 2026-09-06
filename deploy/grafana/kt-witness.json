@@ -1550,7 +1550,8 @@
           },
           "unit": "percentunit",
           "max": 1.2,
-          "min": 0
+          "min": 0,
+          "displayName": "allowance taken"
         },
         "overrides": []
       },
@@ -1576,7 +1577,7 @@
             "type": "influxdb",
             "uid": "efq9ck8t93vnke"
           },
-          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and (r._field == \"kt_witness_audit_in_flight\" or r._field == \"kt_witness_audit_permits\"))\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({_time: r._time, _value: if r.kt_witness_audit_permits > 0.0 then r.kt_witness_audit_in_flight / r.kt_witness_audit_permits else 0.0, _field: \"allowance taken\"}))",
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and (r._field == \"kt_witness_audit_in_flight\" or r._field == \"kt_witness_audit_permits\"))\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({_time: r._time, _value: if r.kt_witness_audit_permits > 0.0 then r.kt_witness_audit_in_flight / r.kt_witness_audit_permits else 0.0}))\n  |> keep(columns: [\"_time\", \"_value\"])",
           "rawQuery": true,
           "resultFormat": "time_series"
         }
