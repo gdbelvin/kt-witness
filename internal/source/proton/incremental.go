@@ -64,6 +64,12 @@ type IncrementalAuditor struct {
 	// ShardDepth splits the top N levels of the rebuild across cores.
 	ShardDepth int
 
+	// Replay names which replay this is — "tip" or "history" — so their
+	// progress is reported separately. They are separate trees making separate
+	// progress, and reporting them as one would hide exactly the case that
+	// occurred: the tip advancing while history sat wedged.
+	Replay string
+
 	// MinFreeBytes is the floor below which an audit refuses to start. Filling
 	// the volume would take the witness down with it, and a witness that is not
 	// running is not witnessing — a far worse outcome than an unaudited epoch.
@@ -185,8 +191,10 @@ func (a *IncrementalAuditor) Step(ctx context.Context, from, to int64, meta *Epo
 			"number of %d-byte leaves", from, fi.Size(), protonRecordLength)
 	}
 
+	SetPhase(a.Replay, PhaseFetch, to)
 	diff, err := a.fetch(ctx, fmt.Sprintf("%s/epoch.1.%d.diff", a.DumpBase, to))
 	if err != nil {
+		SetPhase(a.Replay, PhaseIdle, to)
 		return nil, err
 	}
 
@@ -196,6 +204,7 @@ func (a *IncrementalAuditor) Step(ctx context.Context, from, to int64, meta *Epo
 	}
 	defer closeBase()
 
+	SetPhase(a.Replay, PhaseApply, to)
 	start := time.Now()
 	// Written to a temporary name and renamed only on success: an interrupted
 	// merge must never leave a file that Base() would pick up as a tree, since
@@ -233,6 +242,7 @@ func (a *IncrementalAuditor) Step(ctx context.Context, from, to int64, meta *Epo
 		os.Remove(tmp)
 		return nil, err
 	}
+	SetPhase(a.Replay, PhaseHash, to)
 	root, err := TreeRootParallel(SliceLeaves(merged), a.ShardDepth)
 	closeMerged()
 	if err != nil {
@@ -267,6 +277,7 @@ func (a *IncrementalAuditor) Step(ctx context.Context, from, to int64, meta *Epo
 	// The old base is only removed once its successor is safely in place, so an
 	// interruption always leaves at least one usable tree.
 	os.Remove(base)
+	SetPhase(a.Replay, PhaseIdle, to)
 	return res, nil
 }
 
@@ -301,6 +312,9 @@ func (a *IncrementalAuditor) fetch(ctx context.Context, url string) ([]byte, err
 // retained. It is ~13.6 GB and about eight minutes, which is why the whole
 // design works to avoid needing it more than once.
 func (a *IncrementalAuditor) Bootstrap(ctx context.Context, epoch int64) error {
+	SetPhase(a.Replay, PhaseBootstrp, epoch)
+	defer SetPhase(a.Replay, PhaseIdle, epoch)
+
 	if err := os.MkdirAll(a.Dir, 0o755); err != nil {
 		return err
 	}

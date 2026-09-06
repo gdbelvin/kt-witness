@@ -43,6 +43,10 @@ type Server struct {
 	// Storage locates the database and mirror so their size can be reported.
 	Storage StoragePaths
 
+	// Events keeps recent WARN-and-above records so a diagnosis does not need a
+	// shell on the host. Nil disables /events.
+	Events *EventLog
+
 	// CoverageTTL bounds how stale a coverage figure may be. Zero uses the
 	// default of one minute; negative disables caching entirely and pays the
 	// full audit scan on every read.
@@ -100,6 +104,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/applications", s.applications)
 	mux.HandleFunc("/log", s.logPage)
 	mux.HandleFunc("/gossip", s.gossip)
+	mux.HandleFunc("/events", s.events)
 	return mux
 }
 

@@ -89,6 +89,14 @@ func (a *Auditor) RunRepair(ctx context.Context, r Resolver, budget int) (*Repai
 		return nil, err
 	}
 	if len(holes) == 0 {
+		// Silence here would be ambiguous: "no holes at all" and "holes exist
+		// but none are due yet" are different states and only one of them is
+		// fine. Report the difference, so a repair pass that has quietly
+		// stopped finding work cannot look like a log with no holes in it.
+		if _, _, _, open, err := a.Store.VerifiedRegion(origin, cursor, latest); err == nil && open > 0 {
+			res.Remaining = open
+			a.Log.Info("holes waiting on backoff", "origin", origin, "open", open)
+		}
 		return res, nil
 	}
 	res.Attempted = len(holes)

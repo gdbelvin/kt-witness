@@ -260,6 +260,27 @@ func (a *Auditor) recordBlocked(origin string, epoch int64) {
 		Attempts: attempts, DecidedAt: now,
 		RetryAfter: retryAfter(now, attempts),
 	})
+
+	// Say so. Extracting this helper during the pipeline refactor dropped the
+	// log line that used to accompany it, and the result was epochs becoming
+	// permanent gaps in the coverage claim with no trace anywhere: thirteen
+	// holes appeared against zero log lines, and the only reason anyone noticed
+	// was a metric added for a different purpose.
+	//
+	// That is the exact failure this project keeps rediscovering — a thing going
+	// wrong in a way indistinguishable from it going right — and it was
+	// reintroduced while refactoring the code that had fixed it. The lesson that
+	// keeps not sticking is that deleting a log line is a behaviour change.
+	if attempts >= maxFetchAttempts {
+		a.Log.Warn("history sweep: epoch could not be checked; it is now a hole "+
+			"in the swept range and will be retried on a backoff",
+			"origin", origin, "epoch", epoch, "attempts", attempts,
+			"retry_after", retryAfter(now, attempts).Format(time.RFC3339))
+		return
+	}
+	a.Log.Info("history sweep: epoch unavailable, will retry",
+		"origin", origin, "epoch", epoch, "attempts", attempts,
+		"gives_up_after", maxFetchAttempts)
 }
 
 // windowSize is how many epochs may be in flight across the pipeline, used to

@@ -339,7 +339,13 @@ func main() {
 		return
 	}
 
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	// Notable records are kept in memory as well as written to stderr, so a
+	// question about what went wrong can be answered over HTTP instead of
+	// needing SSH to the host — which has interrupted four diagnoses in a day.
+	events := server.NewEventLog()
+	log := slog.New(server.NewEventHandler(
+		slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}),
+		events))
 
 	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
@@ -366,7 +372,7 @@ func main() {
 		return
 	}
 
-	if err := run(cfg, log, *once, *backfill, *retract, *reason); err != nil {
+	if err := run(cfg, log, events, *once, *backfill, *retract, *reason); err != nil {
 		log.Error("fatal", "err", err)
 		os.Exit(1)
 	}
@@ -448,7 +454,7 @@ func loadSigner(cfg *config) (*torchwood.CosignatureSigner, error) {
 	return torchwood.NewCosignatureSigner(cfg.Name, ed25519.NewKeyFromSeed(seed))
 }
 
-func run(cfg *config, log *slog.Logger, once, backfill bool, retractOrigin, retractReason string) error {
+func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill bool, retractOrigin, retractReason string) error {
 	signer, err := loadSigner(cfg)
 	if err != nil {
 		return err
@@ -628,6 +634,7 @@ func run(cfg *config, log *slog.Logger, once, backfill bool, retractOrigin, retr
 	srv := &http.Server{
 		Addr: cfg.Listen,
 		Handler: (&server.Server{Store: db, VKey: vkey, Version: version, Tiers: tiers, Kinds: kinds,
+			Events:  events,
 			Storage: server.StoragePaths{DBPath: cfg.DB, ExportDir: cfg.ExportDir}}).Handler(),
 	}
 	startPprof(ctx, cfg.PprofListen, log)
@@ -716,6 +723,22 @@ func run(cfg *config, log *slog.Logger, once, backfill bool, retractOrigin, retr
 	if once {
 		return nil
 	}
+
+	// Resource facts on their own cadence: cgroup pressure, container and
+	// machine memory, goroutines. All of it was read by hand over SSH this week.
+	go func() {
+		t := time.NewTicker(15 * time.Second)
+		defer t.Stop()
+		for {
+			server.RefreshRuntimeMetrics()
+			proton.ReportProgress()
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
 
 	if auditor != nil && auditor.Prefetch != nil {
 		// The cache occupancy is what distinguishes a CPU-bound pipeline from a
@@ -1240,7 +1263,7 @@ func startProtonAudit(ctx context.Context, cfg *config, sources []source.Source,
 	}
 
 	a := &proton.IncrementalAuditor{
-		Dir: cfg.ProtonAudit.Dir, APIBase: api, DumpBase: dumps,
+		Dir: cfg.ProtonAudit.Dir, APIBase: api, DumpBase: dumps, Replay: "tip",
 		ShardDepth: cfg.ProtonAudit.ShardDepth, MinFreeBytes: cfg.ProtonAudit.MinFreeBytes,
 	}
 
@@ -1263,6 +1286,7 @@ func startProtonAudit(ctx context.Context, cfg *config, sources []source.Source,
 	if cfg.ProtonAudit.History {
 		h := &proton.IncrementalAuditor{
 			Dir: cfg.ProtonAudit.Dir + "-history", APIBase: api, DumpBase: dumps,
+			Replay:     "history",
 			ShardDepth: cfg.ProtonAudit.ShardDepth, MinFreeBytes: cfg.ProtonAudit.MinFreeBytes,
 		}
 		go runProtonLoop(ctx, h, db, origin, true, "history", log)

@@ -45,6 +45,19 @@ const (
 	MScrapeSeconds = "kt_witness_metrics_scrape_duration_seconds"
 	MCoverageAge   = "kt_witness_coverage_cache_age_seconds"
 
+	// Resource facts that previously required a shell on the host. Every one of
+	// these was read by hand during a diagnosis this week.
+	MProcCores       = "kt_witness_process_cores_visible"
+	MProcGoroutines  = "kt_witness_process_goroutines"
+	MProcHeapBytes   = "kt_witness_process_heap_bytes"
+	MProcSysBytes    = "kt_witness_process_sys_bytes"
+	MCgroupMemBytes  = "kt_witness_cgroup_memory_bytes"
+	MCgroupMemLimit  = "kt_witness_cgroup_memory_limit_bytes"
+	MCgroupMemEvents = "kt_witness_cgroup_memory_events"
+	MCgroupCPUMax    = "kt_witness_cgroup_cpu_max"
+	MMachineMemBytes = "kt_witness_machine_memory_bytes"
+	MMachineMemAvail = "kt_witness_machine_memory_available_bytes"
+
 	// The proof cache sits between the link and the CPU, and its occupancy is
 	// the only thing that distinguishes a bandwidth-bound pipeline from a
 	// CPU-bound one.
@@ -121,6 +134,16 @@ func Init(version string) {
 	d(MPrefetchFiles, metrics.Gauge, "Proofs held in the disk cache awaiting verification.")
 	d(MPrefetchMax, metrics.Gauge, "Configured cap on the proof cache, so occupancy can be read as a fraction without hardcoding the limit in a dashboard.")
 	d(MPrefetchDiskFree, metrics.Gauge, "Free space on the volume holding the proof cache. The cache stops filling before this reaches the floor, because filling the volume would stop the witness recording what it has attested.")
+	d(MProcCores, metrics.Gauge, "Cores visible to this process. Not namespaced, so inside a container this is the machine's count.")
+	d(MProcGoroutines, metrics.Gauge, "Live goroutines. Monotonic growth means a leak; the staged history pipeline is the thing most likely to produce one.")
+	d(MProcHeapBytes, metrics.Gauge, "Go heap in use. Excludes memory-mapped files, which is most of what Proton's replay touches.")
+	d(MProcSysBytes, metrics.Gauge, "Memory obtained from the OS by the Go runtime.")
+	d(MCgroupMemBytes, metrics.Gauge, "Container memory in use, including page cache.")
+	d(MCgroupMemLimit, metrics.Gauge, "Container memory limit. The sidecar pool is derived from this, so it decides throughput as much as core count does.")
+	d(MCgroupMemEvents, metrics.Counter, "cgroup memory.events by kind. ALERT ON `max`: it counts how often the container hit its ceiling and had to reclaim, which is not an error and never appears in a log, but sustained growth means time spent evicting and re-faulting pages instead of working. It reached 30,596 during a six-hour stall that nothing else surfaced. `oom_kill` is the same signal after it stops being survivable.")
+	d(MCgroupCPUMax, metrics.Gauge, "Container CPU quota, or absent when unlimited.")
+	d(MMachineMemBytes, metrics.Gauge, "Total machine memory. Published so a limit larger than the machine is visible rather than discovered by an OOM.")
+	d(MMachineMemAvail, metrics.Gauge, "Machine memory available.")
 	d(MCoverageAge, metrics.Gauge, "Age of the oldest cached coverage figure. Coverage is scanned from the audit record on a background cadence; if this grows without bound the cache has stopped refreshing and every coverage gauge is frozen — which looks identical to coverage that has stopped moving.")
 	d(MDBBytes, metrics.Gauge, "Size of the bbolt database on disk. Note bbolt never returns freed pages to the filesystem, so this only grows; a large drop means the file was replaced.")
 	d(MExportBytes, metrics.Gauge, "Size of the published file mirror.")
