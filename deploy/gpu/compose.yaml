@@ -1,0 +1,36 @@
+# Its own compose project on docker-gpu. One container, one read-only mount,
+# one port.
+services:
+  kt-gpu-rootd:
+    build:
+      context: ../..
+      dockerfile: deploy/gpu/Dockerfile
+    image: kt-gpu-rootd:latest
+    restart: unless-stopped
+
+    # The witness's data, over NFS, READ-ONLY. The service must not be able to
+    # write into the directory it audits — a rebuild that could alter the tree
+    # it is checking would prove nothing.
+    volumes:
+      - /mnt/kt-witness:/srv/kt-witness:ro
+
+    command:
+      - -listen=0.0.0.0:8099
+      - -root=/srv/kt-witness
+      - -bin=/usr/local/bin/kt-proton-gpu
+
+    # Published on the LAN address only, not on every interface.
+    ports:
+      - "192.168.0.11:8099:8099"
+
+    # Host memory: the label array for a 201M-leaf tree is 6.4 GB, plus an
+    # 8M-leaf staging chunk. Nothing like the witness's 44 GB.
+    mem_limit: 12g
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

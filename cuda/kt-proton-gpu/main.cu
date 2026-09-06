@@ -56,6 +56,9 @@ static const int LABEL = 32, VALUE = 36, ENTRY = 68, DEPTH = 256;
 #define CK(x) do { cudaError_t e = (x); if (e != cudaSuccess) { \
     fprintf(stderr, "cuda: %s at %d\n", cudaGetErrorString(e), __LINE__); exit(1); } } while (0)
 
+// Host-side rotate, used only to precompute the constant padding schedule.
+#define HROR(x,n) ((x >> n) | (x << (32-n)))
+
 static double now_s();
 
 __constant__ uint32_t K[64] = {
@@ -362,70 +365,6 @@ __global__ void finishRoot(const uint8_t *__restrict__ labels, uint8_t *__restri
 // each level's output is merged into the next bucket rather than re-sorted:
 // both sequences are already in label order, so the whole assembly is linear
 // in the number of nodes.
-
-static void sha256_host(const uint8_t *in, size_t len, uint8_t *out);
-
-static inline int hostBit(const uint8_t *label, int level) {
-    return (label[(level-1) >> 3] >> (7 - ((level-1) & 7))) & 1;
-}
-
-static inline int hostLcp(const uint8_t *a, const uint8_t *b) {
-    for (int i = 0; i < LABEL; i++) {
-        if (a[i] != b[i]) {
-            uint8_t x = a[i] ^ b[i];
-            int k = 0;
-            while (!(x & 0x80)) { x <<= 1; k++; }
-            return i*8 + k;
-        }
-    }
-    return DEPTH;
-}
-
-// A small, plain host SHA-256. Kept separate from the device code on purpose:
-// the two implementations agreeing is weak evidence if they share source.
-static const uint32_t HK[64] = {
-0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
-0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
-0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
-0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
-0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
-0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
-0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
-0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
-#define HROR(x,n) ((x >> n) | (x << (32-n)))
-static void sha256_host(const uint8_t *in, size_t len, uint8_t *out) {
-    uint32_t st[8] = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
-                      0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
-    uint8_t blk[128]; size_t nb;
-    memcpy(blk, in, len); blk[len] = 0x80;
-    size_t total = (len + 9 + 63) / 64 * 64;
-    memset(blk + len + 1, 0, total - len - 1);
-    uint64_t bits = (uint64_t)len * 8;
-    for (int i = 0; i < 8; i++) blk[total-1-i] = (uint8_t)(bits >> (8*i));
-    nb = total / 64;
-    for (size_t b = 0; b < nb; b++) {
-        uint32_t w[64];
-        for (int i = 0; i < 16; i++) {
-            const uint8_t *p = blk + b*64 + i*4;
-            w[i] = ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3];
-        }
-        for (int i = 16; i < 64; i++) {
-            uint32_t x = w[i-15], y = w[i-2];
-            w[i] = w[i-16] + (HROR(x,7)^HROR(x,18)^(x>>3)) + w[i-7] + (HROR(y,17)^HROR(y,19)^(y>>10));
-        }
-        uint32_t a=st[0],b2=st[1],c=st[2],d=st[3],e=st[4],f=st[5],g=st[6],h=st[7];
-        for (int i = 0; i < 64; i++) {
-            uint32_t t1 = h + (HROR(e,6)^HROR(e,11)^HROR(e,25)) + ((e&f)^((~e)&g)) + HK[i] + w[i];
-            uint32_t t2 = (HROR(a,2)^HROR(a,13)^HROR(a,22)) + ((a&b2)^(a&c)^(b2&c));
-            h=g; g=f; f=e; e=d+t1; d=c; c=b2; b2=a; a=t1+t2;
-        }
-        st[0]+=a; st[1]+=b2; st[2]+=c; st[3]+=d; st[4]+=e; st[5]+=f; st[6]+=g; st[7]+=h;
-    }
-    for (int i = 0; i < 8; i++) {
-        out[i*4+0]=(uint8_t)(st[i]>>24); out[i*4+1]=(uint8_t)(st[i]>>16);
-        out[i*4+2]=(uint8_t)(st[i]>>8);  out[i*4+3]=(uint8_t)st[i];
-    }
-}
 
 static double now_s_impl() { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec/1e9; }
 static double now_s() { return now_s_impl(); }
