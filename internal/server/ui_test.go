@@ -136,7 +136,7 @@ func TestStatusPageEscapesOrigins(t *testing.T) {
 // must stay parseable when an origin contains exposition-reserved characters.
 func TestMetricsEndpoint(t *testing.T) {
 	s := testServer(t)
-	Init("test")
+	Init("test", "testcommit", "testdate")
 	w := httptest.NewRecorder()
 	s.metricsHandler(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 
@@ -147,7 +147,7 @@ func TestMetricsEndpoint(t *testing.T) {
 	for _, want := range []string{
 		"# TYPE kt_witness_log_size gauge",
 		"# TYPE kt_witness_withheld_total counter",
-		`kt_witness_build_info{version="test"} 1`,
+		`kt_witness_build_info{built="testdate",commit="testcommit",version="test"} 1`,
 		`origin="example.org/log"`,
 		`tier="A+ (root-chain continuity)"`,
 		"kt_witness_logs_total 1",

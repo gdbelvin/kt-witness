@@ -29,6 +29,14 @@ type Server struct {
 	VKey    string // our published cosignature verifier key
 	Version string
 
+	// Commit and Built identify the running binary. Published because the
+	// version constant does not move between releases, so it cannot answer the
+	// question a reader of a live service actually has: is this the build I
+	// think it is? Both read "unknown" when the image was built outside the
+	// documented path, which is deliberately visible rather than blank.
+	Commit string
+	Built  string
+
 	// Tiers maps an origin to the assurance tier it is witnessed at. Published
 	// because it is the single thing a reader must not misjudge: a tier-A
 	// cosignature says the log is append-only and nothing whatever about
@@ -167,7 +175,8 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "kt-witness %s\n\nwitness key:\n  %s\n\nwitnessed logs (%d):\n", s.Version, s.VKey, len(recs))
+	fmt.Fprintf(w, "kt-witness %s (commit %s, built %s)\n\nwitness key:\n  %s\n\nwitnessed logs (%d):\n",
+		s.Version, orUnknown(s.Commit), orUnknown(s.Built), s.VKey, len(recs))
 	for _, rec := range recs {
 		fmt.Fprintf(w, "\n  origin: %s\n  size:   %d\n  path:   /%s/checkpoint\n  seen:   %s\n",
 			rec.Origin, rec.Size, originHashes(rec.Origin)[0], rec.WitnessedAt.Format("2006-01-02T15:04:05Z"))
@@ -341,4 +350,13 @@ func (s *Server) applications(w http.ResponseWriter, r *http.Request) {
 			"cosigned. Contradictions are recorded for a human to judge.",
 		"applications": heads,
 	})
+}
+
+// orUnknown keeps an unstamped build legible rather than rendering an empty
+// gap that reads as a formatting bug.
+func orUnknown(s string) string {
+	if s == "" {
+		return "unknown"
+	}
+	return s
 }

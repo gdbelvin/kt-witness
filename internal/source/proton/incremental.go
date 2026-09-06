@@ -16,6 +16,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/gdbsecurity/kt-witness/internal/metrics"
 )
 
 // Running Proton's construction audit inside the witness process.
@@ -161,8 +163,28 @@ func (a *IncrementalAuditor) freeBytes() (uint64, error) {
 // machine this consumes and can stop between steps.
 func (a *IncrementalAuditor) Step(ctx context.Context, from, to int64, meta *EpochMeta) (*AuditResult, error) {
 	// One rebuild at a time, process-wide. See stepMu.
+	//
+	// Waiting is reported before the lock is taken, not after. A replay blocked
+	// here emits no log line and, until this call, set no phase — so the whole
+	// history replay could sit behind the tip for hours and look, from every
+	// exported signal, exactly like a replay that was never configured. That is
+	// precisely how it looked while this was being diagnosed.
+	SetPhase(a.Replay, PhaseWaiting, to)
 	stepMu.Lock()
 	defer stepMu.Unlock()
+
+	// Cores this rebuild is about to occupy, declared for as long as it holds
+	// the lock so the audit governor can subtract them from its own budget
+	// instead of scheduling against them.
+	claimCores(treeWorkers())
+	defer releaseCores()
+
+	stepStart := time.Now()
+	defer func() {
+		l := map[string]string{"replay": a.Replay}
+		metrics.Add("kt_witness_proton_step_seconds_sum", l, time.Since(stepStart).Seconds())
+		metrics.Add("kt_witness_proton_step_total", l, 1)
+	}()
 
 	if a.ShardDepth == 0 {
 		a.ShardDepth = defaultShardDepth

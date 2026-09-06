@@ -38,6 +38,7 @@ const (
 	PhaseApply    = 2 // merging it into a new tree: I/O bound
 	PhaseHash     = 3 // recomputing the root: CPU bound
 	PhaseBootstrp = 4 // one-off full tree download
+	PhaseWaiting  = 5 // blocked on stepMu, waiting for the other replay
 )
 
 var (
@@ -76,4 +77,36 @@ func ReportProgress() {
 			metrics.Set("kt_witness_proton_phase_seconds", l, now.Sub(t).Seconds())
 		}
 	}
+}
+
+// Cores claimed by a rebuild in flight.
+//
+// Exported as a number rather than a boolean because the consumer — the audit
+// governor — needs to subtract a quantity from a core budget, and a boolean
+// would force it to duplicate the worker-count decision made in tree.go.
+var (
+	coreMu    sync.Mutex
+	coresHeld float64
+)
+
+// ClaimedCores reports the cores currently claimed by a rebuild, for a
+// scheduler that has to plan around them. Zero when no rebuild is running.
+func ClaimedCores() float64 {
+	coreMu.Lock()
+	defer coreMu.Unlock()
+	return coresHeld
+}
+
+func claimCores(n int) {
+	coreMu.Lock()
+	coresHeld = float64(n)
+	coreMu.Unlock()
+	metrics.Set("kt_witness_proton_claimed_cores", nil, float64(n))
+}
+
+func releaseCores() {
+	coreMu.Lock()
+	coresHeld = 0
+	coreMu.Unlock()
+	metrics.Set("kt_witness_proton_claimed_cores", nil, 0)
 }

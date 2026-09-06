@@ -77,6 +77,24 @@ type Governor struct {
 
 	Log *slog.Logger
 
+	// Reserved reports cores that are spoken for by work this governor does
+	// not schedule, and must therefore be subtracted from the budget rather
+	// than competed with.
+	//
+	// Proton's tree rebuild is the case this exists for. It runs inside this
+	// same process, so the sampler counts it as OUR usage — and the controller,
+	// seeing the budget already met, holds permits steady and calls it
+	// equilibrium. It is not equilibrium: the sidecar workers and the rebuild
+	// are both runnable on the same cores, and the sidecars win on numbers.
+	// Measured on the deployed box, five in-flight verifications parallelising
+	// ~6x each took ~30 of 32 cores while the rebuild's six workers got 2.5,
+	// turning a nineteen-minute step into eight hours and starving the history
+	// replay behind it indefinitely.
+	//
+	// Subtracting the reservation makes the sweep yield those cores instead of
+	// fighting for them. Nil means nothing is reserved.
+	Reserved func() float64
+
 	mu       sync.Mutex
 	permits  float64
 	inFlight int
@@ -129,6 +147,9 @@ func (g *Governor) budget(totalCores float64) float64 {
 		return g.TargetCores
 	}
 	b := totalCores - g.reserve()
+	if g.Reserved != nil {
+		b -= g.Reserved()
+	}
 	if b < 1 {
 		b = 1 // a one-core box still gets to make progress
 	}

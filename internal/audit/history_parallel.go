@@ -174,6 +174,16 @@ func (a *Auditor) verifyResolved(ctx context.Context, origin string, epoch int64
 
 		lbl := map[string]string{"origin": origin}
 		metrics.Inc("kt_witness_audit_verified_total", lbl)
+		// The same verification, counted again on its own. The shared counter
+		// is incremented by both the live path and this one, so its rate
+		// answers "is auditing happening" but not "is the BACKLOG moving" —
+		// and those diverge exactly when it matters, because a sweep that has
+		// stalled while the tip keeps up looks identical in the total. A
+		// separate series rather than a label on the existing one: the rate
+		// panels group by origin and take a max, so splitting that counter in
+		// two would make them silently report the larger half instead of the
+		// sum.
+		metrics.Inc("kt_witness_history_verified_total", lbl)
 		metrics.Add("kt_witness_audit_bytes_total", lbl, float64(res.Bytes))
 		// The sidecar fetches over its own stack, so without this the largest
 		// consumer of bandwidth would not appear in the bandwidth metric. A

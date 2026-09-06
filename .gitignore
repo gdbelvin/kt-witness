@@ -26,3 +26,4 @@ rust/**/target/
 # tailnet, so it is credential material even though nothing about the path says
 # so. deploy/tailscale/serve.json is config and stays tracked; this is not.
 /data/
+.build-info

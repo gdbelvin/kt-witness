@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -147,10 +148,10 @@ func (h *eventHandler) Handle(ctx context.Context, r slog.Record) error {
 		ev := event{Time: r.Time, Level: r.Level.String(), Message: r.Message,
 			Attrs: map[string]any{}}
 		for _, a := range h.attrs {
-			ev.Attrs[a.Key] = a.Value.Any()
+			ev.Attrs[a.Key] = renderable(a.Value.Any())
 		}
 		r.Attrs(func(a slog.Attr) bool {
-			ev.Attrs[a.Key] = a.Value.Any()
+			ev.Attrs[a.Key] = renderable(a.Value.Any())
 			return true
 		})
 		h.log.add(ev)
@@ -196,4 +197,21 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(body)
+}
+
+// renderable converts a value into something that survives JSON encoding.
+//
+// An error is the case that matters. Most error types are structs with no
+// exported fields, so encoding/json renders them as `{}` — which is how
+// /events came to report every withheld cosignature with an empty `err`,
+// dropping the single field that says WHY it was withheld. The message is the
+// whole content of an error; keep it as a string.
+func renderable(v any) any {
+	if err, ok := v.(error); ok {
+		return err.Error()
+	}
+	if s, ok := v.(fmt.Stringer); ok {
+		return s.String()
+	}
+	return v
 }

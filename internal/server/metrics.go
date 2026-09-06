@@ -16,6 +16,7 @@ import (
 // written against it does not break silently when a call site moves.
 const (
 	MBuildInfo    = "kt_witness_build_info"
+	MStartTime    = "kt_witness_process_start_time_seconds"
 	MLogSize      = "kt_witness_log_size"
 	MLogWitnessed = "kt_witness_log_last_witnessed_timestamp_seconds"
 	MLogAge       = "kt_witness_log_staleness_seconds"
@@ -99,6 +100,7 @@ const (
 	MFetchSeconds        = "kt_witness_fetch_duration_seconds_sum"
 	MFetchCount          = "kt_witness_fetch_duration_seconds_count"
 	MAuditVerified       = "kt_witness_audit_verified_total"
+	MHistoryVerified     = "kt_witness_history_verified_total"
 	MAuditBytes          = "kt_witness_audit_bytes_total"
 	MAuditSeconds        = "kt_witness_audit_duration_seconds_sum"
 )
@@ -109,9 +111,10 @@ const (
 // that only appears after the first failure is a counter you cannot write
 // `rate(...) > 0` against, because before the first failure the series does not
 // exist and the expression is simply absent rather than false.
-func Init(version string) {
+func Init(version, commit, built string) {
 	d := metrics.Describe
-	d(MBuildInfo, metrics.Gauge, "Build information; always 1, labelled with the version.")
+	d(MBuildInfo, metrics.Gauge, "Build information; always 1, labelled with the version, the git commit and the build date. The version constant only changes at a release, so the commit is what actually identifies a running binary — and answers whether a deploy took effect.")
+	d(MStartTime, metrics.Gauge, "Unix timestamp of process start. Subtract from now for uptime: a phase duration that equals uptime means the work began at startup, which is the difference between slow and wedged-since-restart.")
 	d(MLogsTotal, metrics.Gauge, "Number of logs currently witnessed.")
 	d(MEntries, metrics.Gauge, "Sum of every witnessed log's size: records whose append-only shape is currently attested.")
 	d(MLogSize, metrics.Gauge, "Current witnessed size of a log.")
@@ -172,11 +175,14 @@ func Init(version string) {
 	d(MForkDetected, metrics.Counter, "Forks detected, by origin.")
 	d(MFetchSeconds, metrics.Counter, "Cumulative seconds spent fetching heads, by origin.")
 	d(MFetchCount, metrics.Counter, "Number of head fetches, by origin. Divide the sum by this for a mean.")
-	d(MAuditVerified, metrics.Counter, "Construction proofs replayed and verified, by origin.")
+	d(MAuditVerified, metrics.Counter, "Construction proofs replayed and verified, by origin. Incremented by both the live path and the history sweep, so its rate does not distinguish keeping up from catching up.")
+	d(MHistoryVerified, metrics.Counter, "Construction proofs verified by the HISTORY sweep alone, by origin. This is the one to rate for backlog progress: a flat line here with audit_verified_total still climbing means the sweep has stopped and only the tip is being audited.")
 	d(MAuditBytes, metrics.Counter, "Bytes of construction proof downloaded and verified, by origin.")
 	d(MAuditSeconds, metrics.Counter, "Cumulative seconds spent verifying construction proofs, by origin.")
 
-	metrics.Set(MBuildInfo, map[string]string{"version": version}, 1)
+	metrics.Set(MBuildInfo, map[string]string{
+		"version": version, "commit": commit, "built": built}, 1)
+	metrics.Set(MStartTime, nil, float64(time.Now().Unix()))
 }
 
 // metricsHandler serves the exposition.

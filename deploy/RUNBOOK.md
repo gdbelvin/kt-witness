@@ -193,11 +193,30 @@ is no rsync on it.
 
 ```sh
 # from the laptop
+deploy/ship.sh                    # defaults to docker-services-ts
+```
+
+`ship.sh` does the three steps below, in order, and refuses to report success if
+the config check fails. Prefer it — every one of those steps has gone wrong at
+least once, and the failures were all silent.
+
+```sh
+# what it does, if you need to do it by hand
 tar czf - --exclude='.git' --exclude='data' --exclude='*.key' . \
   | ssh <server> 'cd ~/kt-witness && tar xzf -'
 
 # ALWAYS copy the config explicitly afterwards
 scp deploy/witness.json <server>:~/kt-witness/deploy/witness.json
+```
+
+It also writes `.build-info` (commit and date) before the tar, which the
+Dockerfile bakes into the binary. Without it a build reports its commit as
+`unknown` — the server is not a git checkout, so it cannot work the commit out
+for itself. Check what is actually running with:
+
+```sh
+curl -s https://witness.kt.gdbsecurity.com/ | head -1
+# kt-witness 0.1.0 (commit 4b2c22d, built 2026-09-06T18:55:02Z)
 ```
 
 **Why the config gets its own line.** An earlier version of this used

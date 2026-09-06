@@ -186,3 +186,40 @@ func TestSelfAndMachineConstraintsCannotContradict(t *testing.T) {
 		t.Fatalf("permits %.2f while others hold 15.5 cores of a 15-core budget", p)
 	}
 }
+
+// TestReservedCoresLeaveTheBudget: the sweep must plan around work it does not
+// schedule, not against it.
+//
+// The regression this pins: Proton's tree rebuild runs in the same process, so
+// the sampler counts it as our own usage. With the budget unaware of it, the
+// controller saw a saturated box, called it equilibrium, and held permits at a
+// level that let five sidecar verifications take ~30 of 32 cores while the
+// rebuild's six workers got 2.5 — an eight-hour step where nineteen minutes was
+// the design, and a history replay starved behind it indefinitely.
+func TestReservedCoresLeaveTheBudget(t *testing.T) {
+	held := 0.0
+	g := &Governor{Reserved: func() float64 { return held }}
+
+	if got := g.BudgetFor(32); got != 31 {
+		t.Fatalf("no rebuild running: budget %.1f, want 31", got)
+	}
+
+	held = 6 // a rebuild claims its workers
+	if got := g.BudgetFor(32); got != 25 {
+		t.Errorf("rebuild holding 6: budget %.1f, want 25", got)
+	}
+
+	// A reservation larger than the machine must not drive the budget to zero
+	// and stop the sweep forever; the floor still applies.
+	held = 100
+	if got := g.BudgetFor(32); got != 1 {
+		t.Errorf("oversized reservation: budget %.1f, want the 1-core floor", got)
+	}
+
+	// Releasing restores the full budget: the reservation is a lease, not a
+	// permanent shrink.
+	held = 0
+	if got := g.BudgetFor(32); got != 31 {
+		t.Errorf("after release: budget %.1f, want 31", got)
+	}
+}

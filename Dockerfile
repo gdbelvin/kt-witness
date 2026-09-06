@@ -33,8 +33,23 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/kt-witness ./cmd/kt-witness
+# What software is actually running.
+#
+# The server is not a git checkout — source arrives there as a tarball — so the
+# commit cannot be read at build time on the box where the build happens. It is
+# baked in instead, from a .build-info file written by whoever ships the source
+# (see deploy/RUNBOOK.md), with build args as an override for a direct build.
+# Absent both, this reads "unknown", which is the honest answer and visibly not
+# a version.
+ARG GIT_COMMIT=""
+ARG BUILD_DATE=""
+RUN COMMIT="${GIT_COMMIT:-$(sed -n 's/^commit=//p' .build-info 2>/dev/null)}"; \
+    BUILT="${BUILD_DATE:-$(sed -n 's/^date=//p' .build-info 2>/dev/null)}"; \
+    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w \
+      -X main.gitCommit=${COMMIT:-unknown} \
+      -X main.buildDate=${BUILT:-unknown}" \
+    -o /out/kt-witness ./cmd/kt-witness
 # kt-unblock probes the external preconditions the blocked TODO items wait on.
 # Shipped in the image rather than left as a thing to run by hand, because a
 # conclusion nobody revisits is exactly what it was written to prevent — and it

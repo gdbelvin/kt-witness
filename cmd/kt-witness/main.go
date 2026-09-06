@@ -41,6 +41,17 @@ import (
 
 const version = "0.1.0"
 
+// Stamped by the linker at image build time; see the Dockerfile.
+//
+// A version constant alone cannot answer "is the fix I deployed actually
+// running?" — it only changes when someone remembers to change it, and every
+// build between two releases carries the same string. The commit and the build
+// date are what distinguish one running binary from another.
+var (
+	gitCommit = "unknown"
+	buildDate = "unknown"
+)
+
 type config struct {
 	// Name is our witness identity, and appears in every cosignature line.
 	Name string `json:"name"`
@@ -508,7 +519,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 	// The tier each origin is witnessed at, so the status page can publish it.
 	// Taken from the sources themselves rather than the config, because the
 	// source is what actually decides.
-	server.Init(version)
+	server.Init(version, gitCommit, buildDate)
 	tiers := make(map[string]string, len(sources))
 	for _, src := range sources {
 		tiers[src.Origin()] = src.Tier().String()
@@ -566,6 +577,12 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 				TargetCores:   cfg.Audit.TargetCores,
 				MaxConcurrent: workers,
 				Log:           log,
+				// Proton's rebuild runs in this process, so the sampler already
+				// counts it as our usage and the controller would treat a
+				// saturated box as equilibrium while the rebuild starved. Hand
+				// the governor the number so it plans around the rebuild
+				// instead of against it.
+				Reserved: proton.ClaimedCores,
 			}
 		}
 		// Fetch proofs ahead of verifying them so the link and the CPU are busy
@@ -633,7 +650,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 
 	srv := &http.Server{
 		Addr: cfg.Listen,
-		Handler: (&server.Server{Store: db, VKey: vkey, Version: version, Tiers: tiers, Kinds: kinds,
+		Handler: (&server.Server{Store: db, VKey: vkey, Version: version, Commit: gitCommit, Built: buildDate, Tiers: tiers, Kinds: kinds,
 			Events:  events,
 			Storage: server.StoragePaths{DBPath: cfg.DB, ExportDir: cfg.ExportDir}}).Handler(),
 	}
