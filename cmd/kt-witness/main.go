@@ -748,6 +748,16 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 			t := time.NewTicker(15 * time.Second)
 			defer t.Stop()
 			for {
+				// Prune before reporting, so the number published is the one
+				// after enforcement rather than before it.
+				//
+				// Prune existed, was documented for exactly this case, and was
+				// called from nowhere — so the cap was advisory: Fetch declined
+				// to ADD past it, but nothing ever removed the excess. Proofs
+				// for epochs the sweep had moved past were never released and
+				// never evicted, and the cache sat 5.9 GB over its limit on a
+				// volume shared with the database and Proton's retained trees.
+				auditor.Prefetch.Prune()
 				auditor.Prefetch.ReportMetrics()
 				select {
 				case <-ctx.Done():

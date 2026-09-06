@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func testPrefetcher(t *testing.T, maxBytes int64) *Prefetcher {
@@ -101,5 +102,55 @@ func TestPrefetchLeavesNoPartialFiles(t *testing.T) {
 	}
 	if files, bytes := p.Stats(); files != 0 || bytes != 0 {
 		t.Fatalf("failed fetch counted as cached: %d files %d bytes", files, bytes)
+	}
+}
+
+// The cap has to be enforced, not merely consulted.
+//
+// Prune existed and was called from nowhere, so the limit was advisory: Fetch
+// declined to add past it, but nothing removed what was already over. Proofs for
+// epochs the sweep had moved past were never released and never evicted, and the
+// cache ran 5.9 GB above its limit on a volume it shares with the witness
+// database and two 13 GB Proton trees.
+func TestPruneEnforcesTheCap(t *testing.T) {
+	dir := t.TempDir()
+	p := &Prefetcher{Dir: dir, MaxBytes: 3000}
+
+	// Ten files of 1000 bytes, written oldest-first so eviction order is
+	// well-defined.
+	for i := 0; i < 10; i++ {
+		name := cacheKey("meta.test/v1", int64(i))
+		if err := os.WriteFile(filepath.Join(dir, name), make([]byte, 1000), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// Distinct mtimes: Prune drops oldest first and same-second timestamps
+		// would make the assertion depend on map order.
+		mt := time.Now().Add(time.Duration(i-20) * time.Minute)
+		if err := os.Chtimes(filepath.Join(dir, name), mt, mt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Adopt what is on disk, as a restart would.
+	if _, held := p.Stats(); held != 10000 {
+		t.Fatalf("adopted %d bytes, want 10000 — a restart must see the files "+
+			"already there or it re-downloads them", held)
+	}
+
+	p.Prune()
+
+	files, held := p.Stats()
+	if held > p.maxBytes() {
+		t.Errorf("held %d bytes after Prune, above the %d cap", held, p.maxBytes())
+	}
+	if files > 3 {
+		t.Errorf("kept %d files for a cap of 3x1000 bytes", files)
+	}
+	// The newest survive: the sweep is walking downward and will want those next.
+	if p.Path("meta.test/v1", 9) == "" {
+		t.Error("evicted the newest proof; oldest-first is the whole point")
+	}
+	if p.Path("meta.test/v1", 0) != "" {
+		t.Error("kept the oldest proof while over cap")
 	}
 }
