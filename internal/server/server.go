@@ -112,6 +112,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/applications", s.applications)
 	mux.HandleFunc("/log", s.logPage)
 	mux.HandleFunc("/gossip", s.gossip)
+	mux.HandleFunc("/graph", s.graphPage)
 	mux.HandleFunc("/events", s.events)
 	return mux
 }

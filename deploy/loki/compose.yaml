@@ -1,0 +1,109 @@
+# Centralised logging for docker-services: Loki + Alloy.
+#
+# Deliberately its OWN compose project, unlike deploy/cloudflared, which is a
+# snippet appended to the witness's stack. cloudflared belongs to the witness —
+# a tunnel that outlives its origin serves 502s. Logging is the opposite: it has
+# to outlive the witness container, because the reason it exists is that
+# recreating that container destroyed its logs. Keeping it separate also means
+# no compose command aimed at logging can ever touch, recreate, or orphan the
+# witness.
+#
+# Deploy (from the directory this file is in, on the host):
+#   docker compose -f compose.yaml up -d
+# Never `docker compose up -d` from ~/kt-witness — that is a different project
+# and would recreate the witness.
+name: kt-witness-logs
+
+services:
+  loki:
+    image: grafana/loki:3.5.1        # pinned; :latest across a schema change is how index formats get corrupted
+    container_name: loki
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki.yaml"]
+
+    # 127.0.0.1 only. Loki runs with auth_enabled:false — there is no tenant
+    # check whatsoever — so publishing it on 0.0.0.0 would put unauthenticated
+    # read AND write of the log store on the LAN. Grafana reaches it over the
+    # docker network below; a human reaches it by ssh port-forward or by curl on
+    # the host.
+    ports:
+      - "127.0.0.1:3100:3100"
+
+    volumes:
+      - ./loki.yaml:/etc/loki/loki.yaml:ro
+      # A named volume, not a bind mount: the image runs as uid 10001 and a
+      # fresh bind-mounted ./data would be root-owned and unwritable.
+      - loki-data:/loki
+
+    # The box's memory is a budget the witness already spends 44g of, with the
+    # rest deliberately left to page cache (see ../../compose.yaml). Logging
+    # takes a declared, small share rather than an unbounded one.
+    mem_limit: 2g
+
+    networks:
+      - default
+      - grafana
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:3100/ready | grep -q ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+    # The log collector's own logs must not be collected into itself
+    # indefinitely; keep them small and local.
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  alloy:
+    image: grafana/alloy:v1.10.2
+    container_name: alloy
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+      # No phone-home. Alloy posts usage statistics to stats.grafana.org by
+      # default; Loki's equivalent is off in loki.yaml. Same reasoning: this
+      # box's operational data stays on this box.
+      - --disable-reporting
+
+    # Alloy's UI shows pipeline health and per-target read positions. Loopback
+    # only, for the same reason as Loki: it is unauthenticated.
+    ports:
+      - "127.0.0.1:12345:12345"
+
+    volumes:
+      - ./config.alloy:/etc/alloy/config.alloy:ro
+      # Read-only socket. Alloy needs to list containers and read their logs;
+      # it never needs to start, stop, or exec into anything.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Read positions. Without this volume every restart re-ships each
+      # container's whole retained history and duplicates it in Loki.
+      - alloy-data:/var/lib/alloy/data
+
+    mem_limit: 512m
+
+    depends_on:
+      loki:
+        condition: service_started
+
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  loki-data:
+  alloy-data:
+
+networks:
+  default:
+  # Grafana lives in its own compose project (~/grafana) and is not going to be
+  # restarted for this. Joining ITS network from here means Grafana can resolve
+  # http://loki:3100 with no change on its side and no port exposed to the LAN.
+  grafana:
+    external: true
+    name: grafana_default

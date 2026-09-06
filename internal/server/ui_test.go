@@ -80,6 +80,7 @@ func TestIndexServesHTMLToBrowsers(t *testing.T) {
 		"4,321",                             // size, humanised
 		"A+ (root-chain continuity)",        // the tier — the thing not to misread
 		"What the tiers mean",               // and its explanation
+		"/graph",                            // the map of the whole fleet, linked where it is looked for
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("status page is missing %q", want)

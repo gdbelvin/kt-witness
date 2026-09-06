@@ -1,0 +1,118 @@
+# Loki, single binary, filesystem storage, on docker-services.
+#
+# Why this exists: every container recreate threw away that container's json-file
+# logs, so the record of what the witness did during an incident died with the
+# fix for it. Loki keeps the lines outside the container lifetime, which is the
+# whole point; it is not here to be a "log platform".
+#
+# Sizing. Every container on the box together writes ~11 MB of log a day
+# (measured: `docker logs --since 24h` over all running containers; kt-witness
+# itself ~1.2 MB/day, grafana and telegraf are the loud ones). At 30 days that
+# is ~330 MB raw, and Loki's chunks compress it several-fold, so the steady
+# state is well under 1 GB against 570 GB free. The retention period below is
+# therefore chosen for how far back an investigation needs to see, not for disk.
+# If something starts logging in a loop the ingestion limits further down cap
+# the damage at ~16 MB/s per tenant rather than letting it fill the disk.
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: info
+  # A single Alloy pushing one box's logs; the defaults here are sized for
+  # clusters and only cost memory.
+  grpc_server_max_concurrent_streams: 100
+
+common:
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    # v13 + tsdb from day one. Older schemas (v11/v12, boltdb-shipper) still
+    # work but cannot carry structured metadata, which is exactly how the
+    # witness's high-cardinality fields (epoch) are stored — see config.alloy.
+    # The `from` date is in the past because a schema period may not start in
+    # the future; this install has no data before it either way.
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+ingester:
+  # Loki rejects an entry that is more than this far behind the newest entry in
+  # its own stream ("entry too far behind"). The default 2h is fine in steady
+  # state — a live tail is never behind — but on first start Alloy replays every
+  # container's retained json-file history, and containers that have been up for
+  # months hand Loki interleaved lines from weeks ago. 24h accepts a restart's
+  # worth of replay without holding chunks open for a week. Genuinely ancient
+  # out-of-order backfill (a container running since July) is still dropped, and
+  # that is the right trade: it is stale history from unrelated services, not
+  # witness history.
+  max_chunk_age: 24h
+
+  wal:
+    # Coupled to `mem_limit: 2g` in compose.yaml — keep the two in step. On
+    # restart Loki replays the WAL into memory up to this ceiling before it
+    # starts flushing; the default is 4GB, which is above the container's limit,
+    # so a large enough WAL would be OOM-killed mid-replay and come back as a
+    # crash loop. Under the limit it flushes early instead and merely starts
+    # slower.
+    replay_memory_ceiling: 1GB
+    # Flush open chunks on a clean stop, so a restart has little WAL to replay
+    # in the first place.
+    flush_on_shutdown: true
+
+storage_config:
+  tsdb_shipper:
+    active_index_directory: /loki/tsdb-index
+    cache_location: /loki/tsdb-cache
+
+limits_config:
+  # 30 days. Long enough to cover a slow-moving fault — a backfill that has been
+  # wrong since last month, a log that quietly stopped being reachable — which
+  # is the class of problem the container logs kept losing.
+  retention_period: 720h
+  # Required for the origin/epoch/strategy fields Alloy attaches per line.
+  allow_structured_metadata: true
+
+  # Defaults are 4 MB/s with a 6 MB burst. On first start Alloy replays each
+  # container's *retained* json-file history (kt-witness keeps 5x50 MB), and the
+  # defaults turn that into a long stretch of 429s. These are still a cap.
+  ingestion_rate_mb: 16
+  ingestion_burst_size_mb: 32
+
+  # That same first-start replay is by definition old. Rejecting old samples
+  # would drop precisely the history this deployment exists to stop losing.
+  reject_old_samples: false
+
+  max_query_series: 5000
+  max_query_lookback: 744h
+
+compactor:
+  working_directory: /loki/compactor
+  # retention_period above does nothing without these two. Loki 3.x refuses to
+  # start with retention enabled and no delete_request_store, which is the most
+  # common way this config is gotten wrong.
+  retention_enabled: true
+  delete_request_store: filesystem
+  compaction_interval: 10m
+  retention_delete_delay: 2h
+  retention_delete_worker_count: 150
+
+# No phone-home. This is an independently operated transparency witness; its
+# operational data stays on the operator's box, including the telemetry about
+# the telemetry.
+analytics:
+  reporting_enabled: false

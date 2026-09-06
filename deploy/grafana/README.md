@@ -47,3 +47,29 @@ turns that step into a spike that never happened.
 15s. Below that the delta is taken across whatever gap happens to fall out, and
 the graph reports sampling rather than behaviour. If the scrape interval in
 `telegraf.conf` changes, change the floor with it.
+
+## The Loki datasource
+
+`loki-datasource.json` adds the log store from `deploy/loki` to this Grafana.
+Grafana on docker-services has no provisioning directory mounted — its compose
+file mounts only `./data` — so a file under `provisioning/datasources` would
+require restarting Grafana with a new mount. The HTTP API does the same job
+without a restart, in the same style as the dashboard import above:
+
+```sh
+curl -sS -u "$GRAFANA_USER:$GRAFANA_PASS" \
+  -X POST http://127.0.0.1:3001/api/datasources \
+  -H 'Content-Type: application/json' \
+  --data-binary @deploy/grafana/loki-datasource.json
+
+# to update an existing one, PUT to /api/datasources/uid/loki instead
+```
+
+The uid is pinned to `loki` rather than left for Grafana to generate, so a panel
+committed here referencing it works on import — the Influx datasource's
+generated uid is exactly the trap described above.
+
+The url is `http://loki:3100`, resolved over the `grafana_default` docker
+network that the Loki stack joins from its own side. Loki itself is published
+only on 127.0.0.1: it runs with `auth_enabled: false`, so anything that can
+reach the port can read and delete logs.

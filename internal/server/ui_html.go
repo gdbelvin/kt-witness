@@ -52,6 +52,9 @@ const uiHTML = `<!doctype html>
   Grouped by what each log makes transparent. A tier-A cosignature over a certificate log and a
   tier-A cosignature over a key directory are the same strength of claim about very different
   objects, and the tiers available differ by ecosystem — see below.
+  All {{commai .TotalLogs}} of them are on one picture at <a href="/graph">/graph</a>, arranged by
+  how long ago each was last cosigned — which is the one thing these tables cannot show, because a
+  log going stale looks identical to every other row until you read its timestamp.
 </p>
 
 {{range .Groups}}
@@ -146,6 +149,7 @@ const uiHTML = `<!doctype html>
   <tr><td><code>/audits</code></td><td>every sampling decision, with the beacon evidence to recompute it</td></tr>
   <tr><td><code>/applications</code></td><td>observed per-application heads (never cosigned)</td></tr>
   <tr><td><code>/gossip</code></td><td>what other witnesses say, and what comparison can and cannot prove</td></tr>
+  <tr><td><code>/graph</code></td><td>every witnessed log on one map, by ecosystem and by staleness</td></tr>
   <tr><td><code>/log?origin=…</code></td><td>per-log detail: coverage, traffic, audits, peer views</td></tr>
   <tr><td><code>/forks</code></td><td>misbehaviour evidence, verbatim</td></tr>
   </tbody>

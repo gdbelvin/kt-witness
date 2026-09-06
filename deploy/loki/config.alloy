@@ -1,0 +1,141 @@
+// Grafana Alloy: read every container's logs off the Docker socket and push
+// them to Loki. Alloy replaces Promtail, which is deprecated and EOL.
+//
+// Nothing here requires a change to the witness: it keeps writing to stdout
+// under the json-file driver exactly as before, and Alloy tails what Docker
+// already wrote. That matters more than convenience — swapping the container's
+// logging driver to a Loki driver would make the witness unable to start when
+// Loki is down, which is the wrong dependency direction for the thing whose
+// availability we actually care about.
+
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+// Every container on the box, refreshed so containers that come and go are
+// picked up without restarting Alloy.
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "15s"
+}
+
+// Turn Docker's __meta_* discovery labels into the small set of stream labels
+// we are willing to pay cardinality for. Stream count is roughly the product of
+// these, so: one per container, and nothing per-message.
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  // Docker reports names with a leading slash: "/kt-witness-kt-witness-1".
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/?(.*)"
+    target_label  = "container"
+  }
+
+  // Compose project/service are the stable names. The container name carries a
+  // "-1" replica suffix that is a compose artifact, so queries and alerts
+  // should match on these instead: {compose_project="kt-witness"}.
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "compose_service"
+  }
+
+  // The image, without its tag: enough to tell "grafana/loki" from "telegraf"
+  // without a new stream on every image bump.
+  rule {
+    source_labels = ["__meta_docker_container_label_org_opencontainers_image_title"]
+    target_label  = "image_title"
+  }
+}
+
+loki.source.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  targets          = discovery.docker.containers.targets
+  relabel_rules    = discovery.relabel.containers.rules
+  forward_to       = [loki.process.witness.receiver]
+  refresh_interval = "15s"
+}
+
+loki.process "witness" {
+  forward_to = [loki.write.local.receiver]
+
+  // Only the witness's own lines get parsed. Everything else on the box is
+  // stored verbatim — a parse stage that does not apply is wasted work, and a
+  // parse stage that half-applies invents labels.
+  stage.match {
+    selector = "{compose_project=\"kt-witness\", compose_service=\"kt-witness\"}"
+
+    // NOTE: the witness logs LOGFMT, not JSON. Go's slog default TextHandler:
+    //   time=2026-09-06T18:38:06.003Z level=INFO msg=cosigned \
+    //     origin=log.twig.ct.letsencrypt.org/2026h2 size=1838960555 \
+    //     tier="A (checkpoint witness)" refresh=false
+    // stage.json here would silently extract nothing and every field below
+    // would be quietly absent, which looks identical to "the witness never
+    // logged it".
+    stage.logfmt {
+      mapping = {
+        ts            = "time",
+        level         = "",
+        msg           = "",
+        origin        = "",
+        epoch         = "",
+        strategy      = "",
+        proton_replay = "",
+        tier          = "",
+        err           = "error",
+      }
+    }
+
+    // Use the witness's own timestamp, not the time Alloy read the line, so a
+    // backlog replay lands where it belongs on the time axis.
+    stage.timestamp {
+      source = "ts"
+      format = "RFC3339Nano"
+    }
+
+    // The one field promoted to a stream label. level has four values, is on
+    // every line, and is what you filter by first when something is wrong.
+    stage.labels {
+      values = { level = "" }
+    }
+
+    // Everything else goes to structured metadata (Loki 3.x, schema v13).
+    // Structured metadata is per-line and indexed for filtering without
+    // creating a stream, so these stay queryable —
+    //   {compose_project="kt-witness"} | origin="log.twig.ct.letsencrypt.org/2026h2"
+    //   sum by (origin) (count_over_time({compose_project="kt-witness"} | origin=~".+" [1h]))
+    // — at zero cardinality cost.
+    //
+    // This is why epoch is here and not in stage.labels: epoch increments
+    // forever, and one stream per epoch per origin would be an unbounded index
+    // and eventually an unusable Loki. origin (80+ values) would have been
+    // affordable as a label, but it appears on only some lines, and a label
+    // that is present on some lines of a stream and absent on others splits the
+    // stream in two — structured metadata gets the same queries without that.
+    stage.structured_metadata {
+      values = {
+        origin        = "",
+        epoch         = "",
+        strategy      = "",
+        proton_replay = "",
+        tier          = "",
+        msg           = "",
+        err           = "",
+      }
+    }
+  }
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+  // One box today. Named anyway so a second host's logs stay distinguishable
+  // if this ever grows, rather than silently merging into the same streams.
+  external_labels = { host = "docker-services" }
+}
