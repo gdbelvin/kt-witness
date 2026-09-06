@@ -19,6 +19,16 @@ services:
       # from the outside, which is what made it dangerous.
       - ./deploy/witness.json:/config/witness.json:ro
 
+    environment:
+      # Proton's tree rebuild is CPU-bound and does NOT go through the audit
+      # governor, so its share is set here rather than discovered.
+      #
+      # Six of thirty-two: eight sidecar workers take about twenty-four cores,
+      # leaving roughly seven. The built-in default is four, which was right
+      # beside four workers on a sixteen-core box and became "leave three cores
+      # idle while the replay crawls" once the box grew.
+      PROTON_TREE_WORKERS: "6"
+
     # Read the mounted config, not the copy under /data.
     # -backfill walks each log's published history and records the verified
     # range. It runs in the background, so it never delays witnessing, and it

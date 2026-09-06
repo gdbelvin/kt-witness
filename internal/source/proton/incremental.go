@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -153,6 +154,10 @@ func (a *IncrementalAuditor) freeBytes() (uint64, error) {
 // call rather than in a loop, so the caller keeps control of how much of the
 // machine this consumes and can stop between steps.
 func (a *IncrementalAuditor) Step(ctx context.Context, from, to int64, meta *EpochMeta) (*AuditResult, error) {
+	// One rebuild at a time, process-wide. See stepMu.
+	stepMu.Lock()
+	defer stepMu.Unlock()
+
 	if a.ShardDepth == 0 {
 		a.ShardDepth = defaultShardDepth
 	}
@@ -423,3 +428,24 @@ type NotYetPublishedError struct {
 func (e *NotYetPublishedError) Error() string {
 	return fmt.Sprintf("proton: %s is not published yet (HTTP %d)", e.URL, e.Status)
 }
+
+// stepMu serialises tree rebuilds across every IncrementalAuditor in the
+// process.
+//
+// The tip replay and the history replay operate on separate trees and look
+// independent, so they were left to run concurrently. They are not independent
+// in the two resources that matter.
+//
+// Memory: each rebuild memory-maps its whole tree, so two at once held 26.7 GB
+// of a 44 GB container limit. The cgroup hit its ceiling 30,596 times, and
+// every one of those reclaims evicted mapped pages that the hash then had to
+// fault back in.
+//
+// CPU: both draw from the same treeWorkers() budget, so running two did not
+// double throughput — it halved each one's share. Two replays at ~1.6 cores
+// each turned a nineteen-minute step into six hours with nothing to show.
+//
+// Serialised, one step gets the whole budget and maps one tree. The replays
+// still interleave between steps, so neither starves; they simply stop
+// competing for the same cores and the same page cache at the same instant.
+var stepMu sync.Mutex

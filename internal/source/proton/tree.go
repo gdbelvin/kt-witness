@@ -465,22 +465,26 @@ func (d *DiffStats) Suspicious() bool {
 // as thoroughly from the other direction. Capping the parallelism instead lets
 // both run, with the rebuild taking a predictable slice.
 //
-// PROTON_TREE_WORKERS overrides it for an operator who wants the replay to
-// finish sooner and is willing to give it the machine.
+// PROTON_TREE_WORKERS sets it. The default is deliberately small, because the
+// cost of guessing high is taking the machine from the sweep — but the cost of
+// guessing low is real too, and was paid: a fixed four on a box that had grown
+// to 32 cores left each of two concurrent replays with about 1.6 cores, and a
+// nineteen-minute step took over six hours.
 func treeWorkers() int {
 	if v := os.Getenv("PROTON_TREE_WORKERS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
 	}
-	// A fixed four cores, not a fraction of the machine.
+	// A fixed share, not a fraction of the machine: the AKD sweep is what
+	// benefits from a bigger box, so scaling Proton with core count hands the
+	// extra hardware to the consumer that cannot use it to reduce the backlog.
 	//
-	// A fraction looks more adaptive and scales the wrong way: the AKD sweep is
-	// what benefits from a bigger box, while Proton's replay is a fixed amount
-	// of work that finishes when it finishes. At 16 cores a quarter is 4; at 32
-	// it would quietly become 8, handing the extra hardware to the one consumer
-	// that cannot use it to reduce the backlog — and taking it from the one that
-	// can. Four cores keeps a ~19-minute step at ~19 minutes on any host.
+	// But a constant chosen for one box is a hardware fact written down, and
+	// this one went stale within a day. Four was right beside four sidecar
+	// workers on sixteen cores. On thirty-two, eight sidecars leave roughly
+	// seven cores spare and four is simply leaving three idle while the replay
+	// crawls. Set PROTON_TREE_WORKERS to what the box actually has spare.
 	const share = 4
 	if n := runtime.NumCPU(); n < share {
 		return maxInt(1, n)
