@@ -631,6 +631,7 @@ func run(cfg *config, log *slog.Logger, once, backfill bool, retractOrigin, retr
 			Storage: server.StoragePaths{DBPath: cfg.DB, ExportDir: cfg.ExportDir}}).Handler(),
 	}
 	startPprof(ctx, cfg.PprofListen, log)
+	startUnblockProbe(ctx, log)
 
 	// Bind before starting to witness. A witness whose monitoring endpoint is
 	// unreachable is cosigning into the void, so a listener failure is fatal

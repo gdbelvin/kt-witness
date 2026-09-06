@@ -35,6 +35,12 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/kt-witness ./cmd/kt-witness
+# kt-unblock probes the external preconditions the blocked TODO items wait on.
+# Shipped in the image rather than left as a thing to run by hand, because a
+# conclusion nobody revisits is exactly what it was written to prevent — and it
+# had itself gone unscheduled since it was written.
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags="-s -w" -o /out/kt-unblock ./cmd/kt-unblock
 
 
 # Distroless "cc", not "base": the Rust sidecar is dynamically linked and needs
@@ -48,6 +54,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
 FROM gcr.io/distroless/cc-debian12:nonroot
 
 COPY --from=go-builder   /out/kt-witness                    /usr/local/bin/kt-witness
+COPY --from=go-builder   /out/kt-unblock                    /usr/local/bin/kt-unblock
 COPY --from=rust-builder /src/target/release/kt-akd-verify  /usr/local/bin/kt-akd-verify
 
 # State lives here and must be a volume. The signing key IS our published
