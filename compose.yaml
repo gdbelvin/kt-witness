@@ -23,11 +23,29 @@ services:
       # Proton's tree rebuild is CPU-bound and does NOT go through the audit
       # governor, so its share is set here rather than discovered.
       #
-      # Six of thirty-two: eight sidecar workers take about twenty-four cores,
-      # leaving roughly seven. The built-in default is four, which was right
+      # Sixteen of thirty-two, raised from six once the governor learned to
+      # subtract a running rebuild from its own budget instead of scheduling
+      # against it.
+      #
+      # Six was chosen on the theory that the rebuild should take what the AKD
+      # sweep leaves spare. That was the wrong shape, because this CPU has no
+      # SHA extensions: measured with openssl, it does 1.34M hashes/sec/core,
+      # so a 41.8-billion-hash rebuild needs 87 minutes at six workers and took
+      # four and a half hours when the sweep was competing. Sixteen brings a
+      # step to roughly thirty minutes.
+      #
+      # It is a genuine trade, not a free win. While a rebuild holds these
+      # cores the governor reserves them, so the sweep runs on the remainder.
+      # That is the right way round: the sweep is a backlog with months of work
+      # in it and no deadline, while a Proton epoch that misses its cadence
+      # leaves the tip unaudited.
+      #
+      # The old note, kept because the reasoning still applies: eight sidecar
+      # workers take about twenty-four cores, leaving roughly seven. The
+      # built-in default is four, which was right
       # beside four workers on a sixteen-core box and became "leave three cores
       # idle while the replay crawls" once the box grew.
-      PROTON_TREE_WORKERS: "6"
+      PROTON_TREE_WORKERS: "16"
 
     # Read the mounted config, not the copy under /data.
     # -backfill walks each log's published history and records the verified
