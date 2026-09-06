@@ -47,6 +47,9 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <cuda_runtime.h>
+#include <thrust/scan.h>
+#include <thrust/execution_policy.h>
+#include <algorithm>
 
 static const int LABEL = 32, VALUE = 36, ENTRY = 68, DEPTH = 256;
 
@@ -140,23 +143,25 @@ __device__ __forceinline__ int lcp(const uint8_t *a, const uint8_t *b) {
 // 36-byte value, then fold from level 256 down to the level below the depth at
 // which this leaf is alone, placing the running hash left or right by the
 // label's bit for that level and leaving the sibling zero.
-__global__ void foldLeaves(const uint8_t *__restrict__ leaves, uint64_t n,
+__global__ void foldLeaves(const uint8_t *__restrict__ labels,
+                           const uint8_t *__restrict__ values,
+                           uint64_t lo, uint64_t hi, uint64_t n,
                            uint8_t *__restrict__ out, uint16_t *__restrict__ depth) {
-    uint64_t i = blockIdx.x * (uint64_t)blockDim.x + threadIdx.x;
-    if (i >= n) return;
-    const uint8_t *label = leaves + i*ENTRY;
+    uint64_t i = lo + blockIdx.x * (uint64_t)blockDim.x + threadIdx.x;
+    if (i >= hi) return;
+    const uint8_t *label = labels + i*LABEL;
 
     int d = 0;
     if (n > 1) {
-        int l = (i > 0)     ? lcp(label - ENTRY, label) : -1;
-        int r = (i + 1 < n) ? lcp(label, label + ENTRY) : -1;
+        int l = (i > 0)     ? lcp(label - LABEL, label) : -1;
+        int r = (i + 1 < n) ? lcp(label, label + LABEL) : -1;
         d = (l > r ? l : r) + 1;
     }
 
     // leafHash: SHA-256 of the 36-byte value. 36+1+8 <= 64, so one block.
     uint32_t st[8], w[16];
     init(st);
-    const uint8_t *v = label + LABEL;
+    const uint8_t *v = values + (i - lo)*VALUE;
 #pragma unroll
     for (int j = 0; j < 9; j++)
         w[j] = ((uint32_t)v[j*4]<<24)|((uint32_t)v[j*4+1]<<16)|((uint32_t)v[j*4+2]<<8)|v[j*4+3];
@@ -192,6 +197,153 @@ __global__ void foldLeaves(const uint8_t *__restrict__ leaves, uint64_t n,
     depth[i] = (uint16_t)d;
 }
 
+
+// ---- GPU assembly ------------------------------------------------------
+//
+// The lifts are the same operation as the leaf fold — a chain of hashes against
+// a zero sibling — and on the real tree there are 1.8 billion of them against
+// 201 million joins. Doing them on the host cost more than the fold kernel they
+// were feeding. So the node state stays in VRAM and the rounds run here.
+//
+// Pairing is decided without a sequential scan. For node i let pL be its common
+// prefix with the node on its left and pR with the node on its right; its
+// sibling lies on whichever side is longer. So i and i+1 are siblings exactly
+// when pref[i] is strictly greater than both of its neighbours in the pref
+// array. Ties cannot occur: an equal maximum on both sides would mean three
+// nodes sharing one parent, which a binary trie does not have.
+
+__device__ __forceinline__ void hashPair(const uint8_t *l, const uint8_t *r, uint8_t *out) {
+    uint32_t st[8], w[16];
+    init(st);
+#pragma unroll
+    for (int j = 0; j < 8; j++)
+        w[j] = ((uint32_t)l[j*4]<<24)|((uint32_t)l[j*4+1]<<16)|((uint32_t)l[j*4+2]<<8)|l[j*4+3];
+#pragma unroll
+    for (int j = 0; j < 8; j++)
+        w[8+j] = ((uint32_t)r[j*4]<<24)|((uint32_t)r[j*4+1]<<16)|((uint32_t)r[j*4+2]<<8)|r[j*4+3];
+    compress(st, w);
+    compress_pad(st);
+#pragma unroll
+    for (int j = 0; j < 8; j++) {
+        out[j*4+0]=(uint8_t)(st[j]>>24); out[j*4+1]=(uint8_t)(st[j]>>16);
+        out[j*4+2]=(uint8_t)(st[j]>>8);  out[j*4+3]=(uint8_t)st[j];
+    }
+}
+
+// liftTo folds h upward against zero siblings, from depth `from` down to
+// `target`, choosing the side by the label's bit at each level. This is
+// proton.join(x, emptyNode) repeated, which is proton.combine.
+__device__ __forceinline__ void liftTo(uint8_t *h, const uint8_t *label, int from, int target) {
+    for (int level = from; level > target; level--) {
+        int bit = (label[(level-1) >> 3] >> (7 - ((level-1) & 7))) & 1;
+        uint32_t st[8], w[16];
+        init(st);
+#pragma unroll
+        for (int j = 0; j < 16; j++) w[j] = 0;
+        int off = bit ? 8 : 0;
+#pragma unroll
+        for (int j = 0; j < 8; j++)
+            w[off+j] = ((uint32_t)h[j*4]<<24)|((uint32_t)h[j*4+1]<<16)|((uint32_t)h[j*4+2]<<8)|h[j*4+3];
+        compress(st, w);
+        compress_pad(st);
+#pragma unroll
+        for (int j = 0; j < 8; j++) {
+            h[j*4+0]=(uint8_t)(st[j]>>24); h[j*4+1]=(uint8_t)(st[j]>>16);
+            h[j*4+2]=(uint8_t)(st[j]>>8);  h[j*4+3]=(uint8_t)st[j];
+        }
+    }
+}
+
+__global__ void computePref(const uint8_t *__restrict__ labels,
+                            const uint32_t *__restrict__ rep, uint64_t m,
+                            int32_t *__restrict__ pref) {
+    uint64_t i = blockIdx.x * (uint64_t)blockDim.x + threadIdx.x;
+    if (i >= m) return;
+    pref[i] = (i + 1 < m) ? lcp(labels + (uint64_t)rep[i]*LABEL,
+                                labels + (uint64_t)rep[i+1]*LABEL)
+                          : -1;
+}
+
+// A node starts an output group unless the node to its left claimed it.
+__global__ void markStarts(const int32_t *__restrict__ pref, uint64_t m,
+                           uint8_t *__restrict__ isPair, uint32_t *__restrict__ starts) {
+    uint64_t i = blockIdx.x * (uint64_t)blockDim.x + threadIdx.x;
+    if (i >= m) return;
+    int32_t p  = pref[i];
+    int32_t pl = (i > 0)     ? pref[i-1] : -1;
+    int32_t pr = (i + 1 < m) ? pref[i+1] : -1;
+    bool pair = (i + 1 < m) && p > pl && p > pr;
+    isPair[i] = pair ? 1 : 0;
+    bool claimed = false;
+    if (i > 0) {
+        int32_t q  = pref[i-1];
+        int32_t ql = (i > 1) ? pref[i-2] : -1;
+        int32_t qr = pref[i];
+        claimed = q > ql && q > qr;
+    }
+    starts[i] = claimed ? 0u : 1u;
+}
+
+__global__ void roundKernel(const uint8_t *__restrict__ labels,
+                            const uint8_t *__restrict__ hIn, const uint16_t *__restrict__ dIn,
+                            const uint32_t *__restrict__ repIn, const int32_t *__restrict__ pref,
+                            const uint8_t *__restrict__ isPair, const uint32_t *__restrict__ scan,
+                            uint64_t m,
+                            uint8_t *__restrict__ hOut, uint16_t *__restrict__ dOut,
+                            uint32_t *__restrict__ repOut) {
+    uint64_t i = blockIdx.x * (uint64_t)blockDim.x + threadIdx.x;
+    if (i >= m) return;
+    // Only group leaders do work; the second element of a pair is consumed.
+    bool claimed = false;
+    if (i > 0) {
+        int32_t q  = pref[i-1];
+        int32_t ql = (i > 1) ? pref[i-2] : -1;
+        int32_t qr = pref[i];
+        claimed = q > ql && q > qr;
+    }
+    if (claimed) return;
+
+    uint32_t k = scan[i];
+    int32_t pl = (i > 0) ? pref[i-1] : -1;
+    int32_t pr = pref[i];
+    int32_t p  = pl > pr ? pl : pr;
+    int target = p + 1;
+
+    uint8_t h[32];
+#pragma unroll
+    for (int j = 0; j < 32; j++) h[j] = hIn[i*32 + j];
+    const uint8_t *la = labels + (uint64_t)repIn[i]*LABEL;
+    liftTo(h, la, dIn[i], target);
+
+    if (isPair[i]) {
+        uint8_t h2[32];
+#pragma unroll
+        for (int j = 0; j < 32; j++) h2[j] = hIn[(i+1)*32 + j];
+        const uint8_t *lb = labels + (uint64_t)repIn[i+1]*LABEL;
+        liftTo(h2, lb, dIn[i+1], target);
+        hashPair(h, h2, hOut + (uint64_t)k*32);
+        dOut[k] = (uint16_t)p;
+    } else {
+#pragma unroll
+        for (int j = 0; j < 32; j++) hOut[(uint64_t)k*32 + j] = h[j];
+        dOut[k] = (uint16_t)target;
+    }
+    repOut[k] = repIn[i];
+}
+
+// The last node standing may still sit below the root; fold it the rest of the
+// way. One thread: there is exactly one node.
+__global__ void finishRoot(const uint8_t *__restrict__ labels, uint8_t *__restrict__ h,
+                           const uint16_t *__restrict__ d, const uint32_t *__restrict__ rep) {
+    if (threadIdx.x || blockIdx.x) return;
+    uint8_t v[32];
+#pragma unroll
+    for (int j = 0; j < 32; j++) v[j] = h[j];
+    liftTo(v, labels + (uint64_t)rep[0]*LABEL, d[0], 0);
+#pragma unroll
+    for (int j = 0; j < 32; j++) h[j] = v[j];
+}
+
 // ---- host-side assembly -------------------------------------------------
 //
 // The folded leaves are the leaves of a compressed binary trie: leaf i sits at
@@ -211,8 +363,6 @@ __global__ void foldLeaves(const uint8_t *__restrict__ leaves, uint64_t n,
 // both sequences are already in label order, so the whole assembly is linear
 // in the number of nodes.
 
-struct Node { uint8_t h[32]; uint16_t d; uint64_t rep; };
-
 static void sha256_host(const uint8_t *in, size_t len, uint8_t *out);
 
 static inline int hostBit(const uint8_t *label, int level) {
@@ -229,128 +379,6 @@ static inline int hostLcp(const uint8_t *a, const uint8_t *b) {
         }
     }
     return DEPTH;
-}
-
-static uint64_t gJoins = 0, gLifts = 0;
-static double gWalk = 0, gHash = 0, gMerge = 0;
-
-// assemble folds the GPU's per-leaf results into the root.
-//
-// The first version of this swept one level at a time, visiting every live node
-// at every one of the 256 levels. On the real 201M-leaf tree that is ~2 billion
-// node visits and it cost 600 of the run's 658 seconds — an order of magnitude
-// more than the GPU kernel it was supposed to be a footnote to.
-//
-// The fix comes from noticing that the rule which places a LEAF also places an
-// interior node. A node acquires a sibling at depth p+1, where p is the longer
-// of the common prefixes it shares with its two neighbours in label order.
-// Everything between its current depth and there is a run of hashes against an
-// empty sibling, and that run can be walked in one tight loop instead of one
-// level per outer iteration.
-//
-// So each round: every node lifts straight to its pairing depth, then siblings
-// join. The node count halves every round, so there are ~28 rounds rather than
-// 256 sweeps, and the visits drop from ~2 billion to ~400 million. The hashes
-// themselves are unchanged — this buys back the bookkeeping, not the crypto.
-static void assemble(std::vector<Node> &nodes, const uint8_t *leaves, uint8_t *root) {
-    while (nodes.size() > 1) {
-        size_t m = nodes.size();
-        double w0 = now_s();
-
-        // Common prefix with the neighbour on each side. Parallel: it only
-        // reads.
-        std::vector<int32_t> pref(m);
-#pragma omp parallel for schedule(static)
-        for (long long i = 0; i < (long long)m - 1; i++)
-            pref[i] = hostLcp(leaves + nodes[i].rep * ENTRY,
-                              leaves + nodes[i+1].rep * ENTRY);
-        pref[m-1] = -1;
-
-        std::vector<uint8_t> pairs(m, 0);
-        for (size_t i = 0; i + 1 < m; ) {
-            int32_t l = (i > 0) ? pref[i-1] : -1;
-            if (pref[i] >= l) {           // its longer prefix is to the right
-                int32_t rr = (i + 2 < m) ? pref[i+1] : -1;
-                if (pref[i] >= rr) { pairs[i] = 1; i += 2; continue; }
-            }
-            i++;
-        }
-        gWalk += now_s() - w0;
-
-        double h0 = now_s();
-        std::vector<uint64_t> outIdx;
-        outIdx.reserve(m);
-        for (size_t i = 0; i < m; ) {
-            outIdx.push_back(i);
-            i += pairs[i] ? 2 : 1;
-        }
-        std::vector<Node> up(outIdx.size());
-#pragma omp parallel for schedule(dynamic, 256)
-        for (long long k = 0; k < (long long)outIdx.size(); k++) {
-            uint64_t i = outIdx[k];
-            int32_t l = (i > 0) ? pref[i-1] : -1;
-            int32_t r = pref[i];
-            int32_t p = l > r ? l : r;
-            int target = p + 1;            // depth at which a sibling exists
-
-            uint8_t h[32];
-            memcpy(h, nodes[i].h, 32);
-            const uint8_t *la = leaves + nodes[i].rep * ENTRY;
-            uint8_t buf[64];
-            uint64_t lifts = 0;
-            // The run against empty siblings, in one loop.
-            for (int level = nodes[i].d; level > target; level--) {
-                lifts++;
-                memset(buf, 0, 64);
-                memcpy(buf + (hostBit(la, level) ? 32 : 0), h, 32);
-                sha256_host(buf, 64, h);
-            }
-            if (pairs[i]) {
-                uint8_t h2[32];
-                memcpy(h2, nodes[i+1].h, 32);
-                const uint8_t *lb = leaves + nodes[i+1].rep * ENTRY;
-                for (int level = nodes[i+1].d; level > target; level--) {
-                    lifts++;
-                    memset(buf, 0, 64);
-                    memcpy(buf + (hostBit(lb, level) ? 32 : 0), h2, 32);
-                    sha256_host(buf, 64, h2);
-                }
-                memcpy(buf, h, 32);
-                memcpy(buf + 32, h2, 32);
-                sha256_host(buf, 64, up[k].h);
-                up[k].d = (uint16_t)p;
-            } else {
-                memcpy(up[k].h, h, 32);
-                up[k].d = (uint16_t)target;
-            }
-            up[k].rep = nodes[i].rep;
-#pragma omp atomic
-            gLifts += lifts;
-            if (pairs[i]) {
-#pragma omp atomic
-                gJoins++;
-            }
-        }
-        gHash += now_s() - h0;
-
-        if (up.size() == nodes.size() && nodes.size() > 1) {
-            // No pair formed anywhere: only legitimate when one node is left.
-            fprintf(stderr, "assemble: no progress with %zu nodes\n", nodes.size());
-            exit(1);
-        }
-        nodes.swap(up);
-    }
-    // A lone root still sitting below depth 0 folds the rest of the way.
-    uint8_t h[32];
-    memcpy(h, nodes[0].h, 32);
-    const uint8_t *la = leaves + nodes[0].rep * ENTRY;
-    uint8_t buf[64];
-    for (int level = nodes[0].d; level > 0; level--) {
-        memset(buf, 0, 64);
-        memcpy(buf + (hostBit(la, level) ? 32 : 0), h, 32);
-        sha256_host(buf, 64, h);
-    }
-    memcpy(root, h, 32);
 }
 
 // A small, plain host SHA-256. Kept separate from the device code on purpose:
@@ -414,7 +442,6 @@ int main(int argc, char **argv) {
     const uint8_t *leaves = (const uint8_t *)mmap(nullptr, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
     if (leaves == MAP_FAILED) { perror("mmap"); return 1; }
 
-    // Precompute the constant padding schedule for a 64-byte message.
     uint32_t padw[64] = {0x80000000u,0,0,0,0,0,0,0,0,0,0,0,0,0,0,512};
     for (int i = 16; i < 64; i++) {
         uint32_t x = padw[i-15], y = padw[i-2];
@@ -423,44 +450,116 @@ int main(int argc, char **argv) {
     CK(cudaMemcpyToSymbol(PADW, padw, sizeof(padw)));
 
     double t0 = now_s();
-    uint8_t *dLeaves; uint8_t *dOut; uint16_t *dDepth;
-    CK(cudaMalloc(&dLeaves, sb.st_size));
-    CK(cudaMalloc(&dOut, n*32));
-    CK(cudaMalloc(&dDepth, n*sizeof(uint16_t)));
-    CK(cudaMemcpy(dLeaves, leaves, sb.st_size, cudaMemcpyHostToDevice));
+
+    // Labels and values are uploaded as separate arrays rather than as the
+    // interleaved dump. The values are dead the moment the leaf hashes exist,
+    // and freeing 7.2 GB of them is what leaves room for the node state to stay
+    // resident on the card for the whole assembly.
+    std::vector<uint8_t> hLabels((size_t)n * LABEL);
+#pragma omp parallel for schedule(static)
+    for (long long i = 0; i < (long long)n; i++)
+        memcpy(hLabels.data() + (size_t)i*LABEL, leaves + (size_t)i*ENTRY, LABEL);
+
+    uint8_t *dLabels, *dValues, *dHash, *dHash2;
+    uint16_t *dDepth, *dDepth2;
+    uint32_t *dRep, *dRep2, *dScan;
+    int32_t *dPref;
+    uint8_t *dIsPair;
+    CK(cudaMalloc(&dLabels, (size_t)n*LABEL));
+    CK(cudaMemcpy(dLabels, hLabels.data(), (size_t)n*LABEL, cudaMemcpyHostToDevice));
+    CK(cudaMalloc(&dHash, (size_t)n*32));
+    CK(cudaMalloc(&dDepth, (size_t)n*sizeof(uint16_t)));
     double tUp = now_s();
 
-    foldLeaves<<<(n + block - 1)/block, block>>>(dLeaves, n, dOut, dDepth);
-    CK(cudaGetLastError());
+    // Values are streamed rather than held. All 7.2 GB of them are dead the
+    // moment each leaf hash exists, and holding them alongside the node state
+    // is the difference between fitting on a 24 GB card and not: the first
+    // attempt at this ran out of memory by about a gigabyte.
+    const uint64_t CHUNK = 8u << 20;      // 8M leaves ~ 288 MB of values
+    CK(cudaMalloc(&dValues, (size_t)CHUNK*VALUE));
+    std::vector<uint8_t> stage((size_t)CHUNK*VALUE);
+    for (uint64_t lo = 0; lo < n; lo += CHUNK) {
+        uint64_t hi = lo + CHUNK < n ? lo + CHUNK : n;
+        uint64_t cnt = hi - lo;
+#pragma omp parallel for schedule(static)
+        for (long long j = 0; j < (long long)cnt; j++)
+            memcpy(stage.data() + (size_t)j*VALUE,
+                   leaves + (size_t)(lo + j)*ENTRY + LABEL, VALUE);
+        CK(cudaMemcpy(dValues, stage.data(), (size_t)cnt*VALUE, cudaMemcpyHostToDevice));
+        foldLeaves<<<(cnt + block - 1)/block, block>>>(dLabels, dValues, lo, hi, n, dHash, dDepth);
+        CK(cudaGetLastError());
+    }
     CK(cudaDeviceSynchronize());
     double tK = now_s();
+    CK(cudaFree(dValues));
+    stage.clear(); stage.shrink_to_fit();
 
-    std::vector<uint8_t> hOut(n*32);
-    std::vector<uint16_t> hDepth(n);
-    CK(cudaMemcpy(hOut.data(), dOut, n*32, cudaMemcpyDeviceToHost));
-    CK(cudaMemcpy(hDepth.data(), dDepth, n*sizeof(uint16_t), cudaMemcpyDeviceToHost));
-    double tDown = now_s();
-
-    std::vector<Node> nodes(n);
-    uint64_t folds = 0;
-    for (uint64_t i = 0; i < n; i++) {
-        memcpy(nodes[i].h, hOut.data() + i*32, 32);
-        nodes[i].d = hDepth[i];
-        nodes[i].rep = i;
-        folds += DEPTH - hDepth[i];
+    // Node state for the rounds. rep is the index of a leaf inside the node's
+    // subtree, which is all that is needed to read a path bit.
+    CK(cudaMalloc(&dRep, (size_t)n*sizeof(uint32_t)));
+    {
+        std::vector<uint32_t> ids(n);
+#pragma omp parallel for schedule(static)
+        for (long long i = 0; i < (long long)n; i++) ids[i] = (uint32_t)i;
+        CK(cudaMemcpy(dRep, ids.data(), (size_t)n*sizeof(uint32_t), cudaMemcpyHostToDevice));
     }
-    uint8_t root[32];
-    assemble(nodes, leaves, root);
+    // Scratch that every round reuses. Sized once for the whole leaf set.
+    CK(cudaMalloc(&dPref,   (size_t)n*sizeof(int32_t)));
+    CK(cudaMalloc(&dIsPair, (size_t)n));
+    CK(cudaMalloc(&dScan,   (size_t)n*sizeof(uint32_t)));
+
+    uint64_t m = n;
+    int rounds = 0;
+    while (m > 1) {
+        int g = (int)((m + block - 1)/block);
+        computePref<<<g, block>>>(dLabels, dRep, m, dPref);
+        markStarts<<<g, block>>>(dPref, m, dIsPair, dScan);
+        CK(cudaGetLastError());
+        thrust::exclusive_scan(thrust::device, dScan, dScan + m, dScan);
+
+        // The output size is known before the round runs, so the destination
+        // buffers are allocated at exactly that size rather than at worst case.
+        // On a 24 GB card holding a 201M-leaf tree this is not a nicety: two
+        // full-width node arrays plus the labels do not fit, and sizing the
+        // destination to the ~55% of nodes that actually survive a round is
+        // what makes the whole assembly resident.
+        uint32_t lastStart = 0;
+        CK(cudaMemcpy(&lastStart, dScan + (m-1), sizeof(uint32_t), cudaMemcpyDeviceToHost));
+        uint8_t lastPairPrev = 0;
+        if (m >= 2) CK(cudaMemcpy(&lastPairPrev, dIsPair + (m-2), 1, cudaMemcpyDeviceToHost));
+        uint64_t outCount = lastStart + (lastPairPrev ? 0u : 1u);
+        if (outCount == 0 || outCount >= m) {
+            fprintf(stderr, "assemble: no progress at %llu nodes\n", (unsigned long long)m);
+            return 1;
+        }
+
+        CK(cudaMalloc(&dHash2,  (size_t)outCount*32));
+        CK(cudaMalloc(&dDepth2, (size_t)outCount*sizeof(uint16_t)));
+        CK(cudaMalloc(&dRep2,   (size_t)outCount*sizeof(uint32_t)));
+
+        roundKernel<<<g, block>>>(dLabels, dHash, dDepth, dRep, dPref, dIsPair, dScan, m,
+                                  dHash2, dDepth2, dRep2);
+        CK(cudaGetLastError());
+        CK(cudaDeviceSynchronize());
+
+        CK(cudaFree(dHash)); CK(cudaFree(dDepth)); CK(cudaFree(dRep));
+        dHash = dHash2; dDepth = dDepth2; dRep = dRep2;
+        m = outCount;
+        rounds++;
+        if (rounds > 512) { fprintf(stderr, "assemble: too many rounds\n"); return 1; }
+    }
+    finishRoot<<<1, 32>>>(dLabels, dHash, dDepth, dRep);
+    CK(cudaDeviceSynchronize());
     double tEnd = now_s();
+
+    uint8_t root[32];
+    CK(cudaMemcpy(root, dHash, 32, cudaMemcpyDeviceToHost));
 
     char hex[65];
     for (int i = 0; i < 32; i++) sprintf(hex + i*2, "%02x", root[i]);
-    printf("{\"root\":\"%s\",\"leaves\":%llu,\"fold_hashes\":%llu,"
-           "\"upload_s\":%.2f,\"kernel_s\":%.2f,\"download_s\":%.2f,\"assemble_s\":%.2f,\"total_s\":%.2f,\"host_joins\":%llu,\"host_lifts\":%llu,\"walk_s\":%.2f,\"hash_s\":%.2f,\"merge_s\":%.2f,"
-           "\"kernel_ghs\":%.2f}\n",
-           hex, (unsigned long long)n, (unsigned long long)folds,
-           tUp-t0, tK-tUp, tDown-tK, tEnd-tDown, tEnd-t0,
-           (unsigned long long)gJoins, (unsigned long long)gLifts, gWalk, gHash, gMerge,
-           (double)folds/(tK-tUp)/1e9);
+    printf("{\"root\":\"%s\",\"leaves\":%llu,\"rounds\":%d,"
+           "\"upload_s\":%.2f,\"kernel_s\":%.2f,\"assemble_s\":%.2f,\"total_s\":%.2f}\n",
+           hex, (unsigned long long)n, rounds,
+           tUp-t0, tK-tUp, tEnd-tK, tEnd-t0);
     return 0;
 }

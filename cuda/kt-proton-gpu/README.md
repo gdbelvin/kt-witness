@@ -48,38 +48,34 @@ epoch**, `b17a131948e58dd5139a036937311bc0d6d488829e5e3bc03fe4aa635ab4dfb6`.
 
 | phase | time |
 |---|---|
-| upload 13.7 GB to VRAM | 5.8 s |
-| **fold kernel** (41.8e9 hashes, 0.97 GH/s) | **43.2 s** |
-| download 6.4 GB of node hashes | 9.2 s |
-| assembly | 218.0 s |
-| **total** | **279.0 s** |
+| read + upload labels | 12.5 s |
+| fold kernel (41.8e9 hashes) | 45.7 s |
+| assembly, 38 rounds | 47.1 s |
+| **total** | **105.3 s** |
 
-The kernel did its job; the assembly did not. The first version performed **1.8
-billion lifts against 201 million joins** — the empty-sibling case is not a rare
-correction, it is 90% of the interior work — and a level-at-a-time sweep visited
-every live node at all 256 levels to find them. It cost 600 s of a 658 s run.
+Getting there took three versions, and the interesting part is that the naive
+cost model was wrong twice.
 
-Lifting each node straight to its pairing depth (~28 rounds instead of 256
-sweeps) took assembly to 218 s and the whole run from 658 s to 279 s. The
-bookkeeping went from 208 s to 10.6 s, which is where the structural win was;
-what is left, 181 s, is the ~2 billion SHA-256 the assembly genuinely has to
-perform, on a host with no SHA extensions.
+**658 s.** Fold on the GPU, assembly on the host, one level at a time. The
+assembly was 600 s of it. The cause was not hashing: the empty-sibling lift is
+not a rare correction but **1.8 billion operations against 201 million joins**,
+and sweeping all 256 levels re-visited every live node to find them.
 
-**Assembly is still 78% of the runtime, and the next move is known.** Those 1.8
-billion lifts are the same operation as the leaf fold — a chain of hashes
-against a zero sibling — so they belong on the GPU, gathered per round and
-handed to the same kernel. That should take the run to roughly a minute, at
-which point the upload of the dump is the dominant cost.
+**279 s.** Lift each node straight to its pairing depth — a node acquires a
+sibling at `max(lcp_left, lcp_right) + 1`, the same rule that places a leaf — so
+~28 rounds replace 256 sweeps. Bookkeeping fell from 208 s to 10.6 s. What
+remained was 181 s of genuine hashing on a host with no SHA extensions.
 
-Optimisations tried that did **not** help, so nobody pays for them twice:
-two leaves per thread to hide round latency (1.05 → 1.06 GH/s — the kernel is
-throughput-bound, not latency-bound); a rolling 16-word message schedule
-instead of the full 64-word one (identical; nvcc had already made that choice);
-block sizes from 128 to 512 (no difference). What did help: precomputing the
-padding block's message schedule, which is identical for all 45.9 billion
-hashes, and compiling the host assembly with `-Xcompiler -O3 -fopenmp` — `nvcc
--O3` alone optimises only device code, which is easy to miss and cost 3.4× on
-the assembly pass.
+**105 s.** Move the lifts to the GPU, where they belong: they are the same
+operation as the leaf fold. The node state stays in VRAM for the whole assembly
+and only the 32-byte root comes back.
+
+Fitting that on a 24 GB card against a 13.7 GB tree needed two things. Leaf
+values are streamed in 8M-leaf chunks rather than held, since all 7.2 GB of them
+are dead once the leaf hashes exist. And each round's output buffers are
+allocated at exactly the size the prefix scan says will survive — about 55% of
+the input — instead of at worst case. Without either, it runs out of memory by
+roughly a gigabyte.
 
 ## Correctness
 
