@@ -297,8 +297,10 @@ static void assemble(std::vector<Node> &nodes, const uint8_t *leaves, uint8_t *r
             memcpy(h, nodes[i].h, 32);
             const uint8_t *la = leaves + nodes[i].rep * ENTRY;
             uint8_t buf[64];
+            uint64_t lifts = 0;
             // The run against empty siblings, in one loop.
             for (int level = nodes[i].d; level > target; level--) {
+                lifts++;
                 memset(buf, 0, 64);
                 memcpy(buf + (hostBit(la, level) ? 32 : 0), h, 32);
                 sha256_host(buf, 64, h);
@@ -308,6 +310,7 @@ static void assemble(std::vector<Node> &nodes, const uint8_t *leaves, uint8_t *r
                 memcpy(h2, nodes[i+1].h, 32);
                 const uint8_t *lb = leaves + nodes[i+1].rep * ENTRY;
                 for (int level = nodes[i+1].d; level > target; level--) {
+                    lifts++;
                     memset(buf, 0, 64);
                     memcpy(buf + (hostBit(lb, level) ? 32 : 0), h2, 32);
                     sha256_host(buf, 64, h2);
@@ -321,6 +324,12 @@ static void assemble(std::vector<Node> &nodes, const uint8_t *leaves, uint8_t *r
                 up[k].d = (uint16_t)target;
             }
             up[k].rep = nodes[i].rep;
+#pragma omp atomic
+            gLifts += lifts;
+            if (pairs[i]) {
+#pragma omp atomic
+                gJoins++;
+            }
         }
         gHash += now_s() - h0;
 

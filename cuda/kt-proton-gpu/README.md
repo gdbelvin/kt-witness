@@ -51,15 +51,25 @@ epoch**, `b17a131948e58dd5139a036937311bc0d6d488829e5e3bc03fe4aa635ab4dfb6`.
 | upload 13.7 GB to VRAM | 5.8 s |
 | **fold kernel** (41.8e9 hashes, 0.97 GH/s) | **43.2 s** |
 | download 6.4 GB of node hashes | 9.2 s |
-| assembly (first version) | 600.2 s |
-| total | 658.3 s |
+| assembly | 218.0 s |
+| **total** | **279.0 s** |
 
-The kernel did its job; the assembly did not. It performed **1.8 billion lifts
-against 201 million joins** — the empty-sibling case is not a rare correction,
-it is 90% of the interior work — and a level-at-a-time sweep visited every live
-node at all 256 levels to find them. That is the rewrite described above the
-`assemble` function: lift each node straight to its pairing depth, ~28 rounds
-instead of 256 sweeps.
+The kernel did its job; the assembly did not. The first version performed **1.8
+billion lifts against 201 million joins** — the empty-sibling case is not a rare
+correction, it is 90% of the interior work — and a level-at-a-time sweep visited
+every live node at all 256 levels to find them. It cost 600 s of a 658 s run.
+
+Lifting each node straight to its pairing depth (~28 rounds instead of 256
+sweeps) took assembly to 218 s and the whole run from 658 s to 279 s. The
+bookkeeping went from 208 s to 10.6 s, which is where the structural win was;
+what is left, 181 s, is the ~2 billion SHA-256 the assembly genuinely has to
+perform, on a host with no SHA extensions.
+
+**Assembly is still 78% of the runtime, and the next move is known.** Those 1.8
+billion lifts are the same operation as the leaf fold — a chain of hashes
+against a zero sibling — so they belong on the GPU, gathered per round and
+handed to the same kernel. That should take the run to roughly a minute, at
+which point the upload of the dump is the dominant cost.
 
 Optimisations tried that did **not** help, so nobody pays for them twice:
 two leaves per thread to hide round latency (1.05 → 1.06 GH/s — the kernel is
