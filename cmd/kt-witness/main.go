@@ -45,9 +45,18 @@ type config struct {
 	// Name is our witness identity, and appears in every cosignature line.
 	Name string `json:"name"`
 
-	Listen  string `json:"listen"`
-	DB      string `json:"db"`
-	KeyFile string `json:"key_file"`
+	Listen string `json:"listen"`
+
+	// PprofListen serves net/http/pprof on its own socket. Empty disables it.
+	//
+	// Separate from Listen because the monitoring endpoint is reachable over the
+	// tailnet and pprof is not something to publish there: it exposes full
+	// goroutine dumps and lets a caller start a thirty-second CPU profile on a
+	// process whose CPU is the scarce resource. Leave the port unpublished in
+	// compose so it stays reachable from the host and nowhere else.
+	PprofListen string `json:"pprof_listen"`
+	DB          string `json:"db"`
+	KeyFile     string `json:"key_file"`
 
 	// PeerStatusURLs maps a witness name to its status page, polled to compare
 	// its view against ours. Detection only: those pages are unsigned, so a
@@ -621,6 +630,8 @@ func run(cfg *config, log *slog.Logger, once, backfill bool, retractOrigin, retr
 		Handler: (&server.Server{Store: db, VKey: vkey, Version: version, Tiers: tiers, Kinds: kinds,
 			Storage: server.StoragePaths{DBPath: cfg.DB, ExportDir: cfg.ExportDir}}).Handler(),
 	}
+	startPprof(ctx, cfg.PprofListen, log)
+
 	// Bind before starting to witness. A witness whose monitoring endpoint is
 	// unreachable is cosigning into the void, so a listener failure is fatal
 	// rather than logged and ignored.
