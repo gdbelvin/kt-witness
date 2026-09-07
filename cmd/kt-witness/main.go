@@ -122,6 +122,13 @@ type config struct {
 		// audits the witness already holds records for.
 		History bool `json:"history"`
 
+		// Dir holds the retained tree for a LOCAL replay. Empty means this
+		// witness performs no Proton construction audit itself — the rebuild
+		// costs 42 billion hashes and takes about two hours here against sixty
+		// seconds on a GPU, so it runs beside the card and the conclusions
+		// arrive through ImportResults. Emptying it is what releases the
+		// sixteen cores PROTON_TREE_WORKERS reserved.
+		//
 		// ImportResults names a JSONL file of construction audits performed
 		// elsewhere — see internal/audit/import.go. A file rather than an
 		// endpoint on purpose: coverage is what this witness publishes, so
@@ -648,8 +655,20 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
+	// Local replay and importing results are independent now. Proton's audit
+	// runs beside the GPU, so this witness keeps no retained tree of its own and
+	// Dir is empty — but it still takes in the conclusions, which is where its
+	// tier claim comes from.
 	if cfg.ProtonAudit.Dir != "" {
 		startProtonAudit(ctx, cfg, sources, db, log)
+	}
+	if p := cfg.ProtonAudit.ImportResults; p != "" {
+		for _, src := range sources {
+			if src.Origin() == source.OriginProton {
+				go runImportLoop(ctx, db, src.Origin(), p, log)
+				break
+			}
+		}
 	}
 	if len(cfg.PeerStatusURLs) > 0 {
 		startPeerPolling(ctx, cfg.PeerStatusURLs, db, log)
@@ -1327,13 +1346,6 @@ func startProtonAudit(ctx context.Context, cfg *config, sources []source.Source,
 		go runProtonLoop(ctx, h, db, origin, true, "history", log)
 	}
 
-	// Construction audits performed on other hardware, taken in from a file the
-	// operator placed. On a timer rather than once at startup, because the
-	// offline run appends for hours and coverage should follow it rather than
-	// wait for a restart.
-	if p := cfg.ProtonAudit.ImportResults; p != "" {
-		go runImportLoop(ctx, db, origin, p, log)
-	}
 }
 
 // runImportLoop ingests an offline backfill's results as they appear.

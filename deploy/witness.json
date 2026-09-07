@@ -13,8 +13,6 @@
   },
   "export_dir": "/data/public",
   "proton_audit": {
-    "dir": "/data/proton-tree",
-    "history": false,
     "import_results": "/import/proton-backfill.jsonl"
   },
   "poll_interval": "60s",
