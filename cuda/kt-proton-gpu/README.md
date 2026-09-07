@@ -48,34 +48,50 @@ epoch**, `b17a131948e58dd5139a036937311bc0d6d488829e5e3bc03fe4aa635ab4dfb6`.
 
 | phase | time |
 |---|---|
-| read + upload labels | 12.5 s |
-| fold kernel (41.8e9 hashes) | 45.7 s |
-| assembly, 38 rounds | 47.1 s |
-| **total** | **105.3 s** |
+| read + upload labels | 9.2 s |
+| fold kernel (41.8e9 hashes) | 45.3 s |
+| assembly, 38 rounds | 5.6 s |
+| **total** | **60.1 s** |
 
-Getting there took three versions, and the interesting part is that the naive
-cost model was wrong twice.
+Four versions to get there, and the cost model was wrong at every step except the
+last. Recorded because the wrong guesses were each plausible.
 
-**658 s.** Fold on the GPU, assembly on the host, one level at a time. The
-assembly was 600 s of it. The cause was not hashing: the empty-sibling lift is
-not a rare correction but **1.8 billion operations against 201 million joins**,
-and sweeping all 256 levels re-visited every live node to find them.
+**658 s.** Fold on the GPU, assembly on the host, one level at a time. Assembly
+was 600 s of it — the empty-sibling lift turned out to be **1.8 billion
+operations against 201 million joins**, and sweeping 256 levels re-visited every
+live node to find them.
 
 **279 s.** Lift each node straight to its pairing depth — a node acquires a
 sibling at `max(lcp_left, lcp_right) + 1`, the same rule that places a leaf — so
-~28 rounds replace 256 sweeps. Bookkeeping fell from 208 s to 10.6 s. What
-remained was 181 s of genuine hashing on a host with no SHA extensions.
+~28 rounds replace 256 sweeps.
 
-**105 s.** Move the lifts to the GPU, where they belong: they are the same
-operation as the leaf fold. The node state stays in VRAM for the whole assembly
-and only the 32-byte root comes back.
+**105 s.** Move the lifts to the GPU. They are the same operation as the leaf
+fold, so they belong on the same kernel.
 
-Fitting that on a 24 GB card against a 13.7 GB tree needed two things. Leaf
-values are streamed in 8M-leaf chunks rather than held, since all 7.2 GB of them
-are dead once the leaf hashes exist. And each round's output buffers are
-allocated at exactly the size the prefix scan says will survive — about 55% of
-the input — instead of at worst case. Without either, it runs out of memory by
-roughly a gigabyte.
+**60 s.** Two changes, and only one of them was the one expected.
+
+Nsight said the fold kernel was at **97.9% of SM throughput**, issuing 2.19
+instructions per cycle against the GA10x integer pipe's limit of 2 — it cannot
+be improved without changing the algorithm or the silicon. The compiler had
+already fused `Ch` and `Maj` into single `LOP3.LUT` instructions, which is the
+optimisation a hand-tuned kernel would reach for first.
+
+The assembly kernel, though, was at 42% occupancy with 77 registers a thread and
+21% DRAM throughput on a kernel that should touch no memory: its `uint8_t[32]`
+node hashes were indexed dynamically and had spilled to local memory. Carrying
+them as eight 32-bit words took registers to 40 and occupancy to 85% — and
+bought only 7%, because occupancy was never the constraint.
+
+**Divergence was.** A lift is a serial chain whose length varies from zero to
+dozens, so a warp ran at its longest lane. The assembly performs about 2 billion
+hashes, which at the fold kernel's demonstrated 1.0 GH/s is two seconds of work,
+and it was taking forty. Sorting each round's groups by chain length before
+running them — a one-byte radix key, costing 0.07 s — made the warps uniform and
+took the assembly from **42.6 s to 5.6 s**.
+
+The fold kernel is now 75% of the run and is immovable. What remains is the 9 s
+of reading 12.5 GB off disk and gathering the labels, which is I/O rather than
+compute.
 
 ## Correctness
 

@@ -48,6 +48,8 @@
 #include <sys/stat.h>
 #include <cuda_runtime.h>
 #include <thrust/scan.h>
+#include <thrust/sort.h>
+#include <thrust/sequence.h>
 #include <thrust/execution_policy.h>
 #include <algorithm>
 
@@ -215,45 +217,63 @@ __global__ void foldLeaves(const uint8_t *__restrict__ labels,
 // array. Ties cannot occur: an equal maximum on both sides would mean three
 // nodes sharing one parent, which a binary trie does not have.
 
-__device__ __forceinline__ void hashPair(const uint8_t *l, const uint8_t *r, uint8_t *out) {
+// Node hashes are carried as eight 32-bit words, never as a byte array.
+//
+// The first version of these used uint8_t[32] and converted bytes to words and
+// back on every level. Nsight said what that cost: 77 registers a thread, 42%
+// occupancy, and 21% DRAM throughput on a kernel that should touch no memory at
+// all — the byte arrays were indexed dynamically, so they spilled to local
+// memory, and 1.8 billion lifts each paid for two conversions and a round trip
+// through it. The fold kernel, which had always kept its state in registers,
+// was meanwhile sitting at 98% of the SM's throughput.
+typedef struct { uint32_t w[8]; } H;
+
+__device__ __forceinline__ H loadH(const uint8_t *p) {
+    H h;
+#pragma unroll
+    for (int j = 0; j < 8; j++)
+        h.w[j] = ((uint32_t)p[j*4]<<24)|((uint32_t)p[j*4+1]<<16)|((uint32_t)p[j*4+2]<<8)|p[j*4+3];
+    return h;
+}
+
+__device__ __forceinline__ void storeH(const H &h, uint8_t *p) {
+#pragma unroll
+    for (int j = 0; j < 8; j++) {
+        p[j*4+0]=(uint8_t)(h.w[j]>>24); p[j*4+1]=(uint8_t)(h.w[j]>>16);
+        p[j*4+2]=(uint8_t)(h.w[j]>>8);  p[j*4+3]=(uint8_t)h.w[j];
+    }
+}
+
+__device__ __forceinline__ H hashPair(const H &l, const H &r) {
     uint32_t st[8], w[16];
     init(st);
 #pragma unroll
-    for (int j = 0; j < 8; j++)
-        w[j] = ((uint32_t)l[j*4]<<24)|((uint32_t)l[j*4+1]<<16)|((uint32_t)l[j*4+2]<<8)|l[j*4+3];
-#pragma unroll
-    for (int j = 0; j < 8; j++)
-        w[8+j] = ((uint32_t)r[j*4]<<24)|((uint32_t)r[j*4+1]<<16)|((uint32_t)r[j*4+2]<<8)|r[j*4+3];
+    for (int j = 0; j < 8; j++) { w[j] = l.w[j]; w[8+j] = r.w[j]; }
     compress(st, w);
     compress_pad(st);
+    H o;
 #pragma unroll
-    for (int j = 0; j < 8; j++) {
-        out[j*4+0]=(uint8_t)(st[j]>>24); out[j*4+1]=(uint8_t)(st[j]>>16);
-        out[j*4+2]=(uint8_t)(st[j]>>8);  out[j*4+3]=(uint8_t)st[j];
-    }
+    for (int j = 0; j < 8; j++) o.w[j] = st[j];
+    return o;
 }
 
 // liftTo folds h upward against zero siblings, from depth `from` down to
 // `target`, choosing the side by the label's bit at each level. This is
 // proton.join(x, emptyNode) repeated, which is proton.combine.
-__device__ __forceinline__ void liftTo(uint8_t *h, const uint8_t *label, int from, int target) {
+__device__ __forceinline__ void liftTo(H &h, const uint8_t *label, int from, int target) {
     for (int level = from; level > target; level--) {
         int bit = (label[(level-1) >> 3] >> (7 - ((level-1) & 7))) & 1;
         uint32_t st[8], w[16];
         init(st);
-#pragma unroll
-        for (int j = 0; j < 16; j++) w[j] = 0;
         int off = bit ? 8 : 0;
 #pragma unroll
-        for (int j = 0; j < 8; j++)
-            w[off+j] = ((uint32_t)h[j*4]<<24)|((uint32_t)h[j*4+1]<<16)|((uint32_t)h[j*4+2]<<8)|h[j*4+3];
+        for (int j = 0; j < 16; j++) w[j] = 0;
+#pragma unroll
+        for (int j = 0; j < 8; j++) w[off+j] = h.w[j];
         compress(st, w);
         compress_pad(st);
 #pragma unroll
-        for (int j = 0; j < 8; j++) {
-            h[j*4+0]=(uint8_t)(st[j]>>24); h[j*4+1]=(uint8_t)(st[j]>>16);
-            h[j*4+2]=(uint8_t)(st[j]>>8);  h[j*4+3]=(uint8_t)st[j];
-        }
+        for (int j = 0; j < 8; j++) h.w[j] = st[j];
     }
 }
 
@@ -287,16 +307,24 @@ __global__ void markStarts(const int32_t *__restrict__ pref, uint64_t m,
     starts[i] = claimed ? 0u : 1u;
 }
 
-__global__ void roundKernel(const uint8_t *__restrict__ labels,
-                            const uint8_t *__restrict__ hIn, const uint16_t *__restrict__ dIn,
-                            const uint32_t *__restrict__ repIn, const int32_t *__restrict__ pref,
-                            const uint8_t *__restrict__ isPair, const uint32_t *__restrict__ scan,
-                            uint64_t m,
-                            uint8_t *__restrict__ hOut, uint16_t *__restrict__ dOut,
-                            uint32_t *__restrict__ repOut) {
+
+// planRound resolves each output group once, so the round kernel does no
+// deciding and — crucially — so the work can be reordered before it runs.
+//
+// Reordering is the point. A lift is a serial chain of hashes and its length
+// varies from zero to dozens, so a warp whose 32 lanes drew different lengths
+// runs at its longest one and wastes the rest. Measured: the assembly performs
+// about 2 billion hashes, which at the fold kernel's demonstrated 1.0 GH/s is
+// two seconds of work, and it was taking forty-one. Sorting the groups by chain
+// length makes each warp uniform.
+__global__ void planRound(const int32_t *__restrict__ pref,
+                          const uint16_t *__restrict__ dIn,
+                          const uint8_t *__restrict__ isPair,
+                          const uint32_t *__restrict__ scan, uint64_t m,
+                          uint32_t *__restrict__ order, uint16_t *__restrict__ target,
+                          uint8_t *__restrict__ paired, uint8_t *__restrict__ liftKey) {
     uint64_t i = blockIdx.x * (uint64_t)blockDim.x + threadIdx.x;
     if (i >= m) return;
-    // Only group leaders do work; the second element of a pair is consumed.
     bool claimed = false;
     if (i > 0) {
         int32_t q  = pref[i-1];
@@ -310,26 +338,51 @@ __global__ void roundKernel(const uint8_t *__restrict__ labels,
     int32_t pl = (i > 0) ? pref[i-1] : -1;
     int32_t pr = pref[i];
     int32_t p  = pl > pr ? pl : pr;
-    int target = p + 1;
+    int t = p + 1;
 
-    uint8_t h[32];
-#pragma unroll
-    for (int j = 0; j < 32; j++) h[j] = hIn[i*32 + j];
+    order[k]  = (uint32_t)i;
+    target[k] = (uint16_t)t;
+    uint8_t pr2 = isPair[i];
+    paired[k] = pr2;
+
+    int work = (int)dIn[i] - t;
+    if (pr2) work += (int)dIn[i+1] - t;
+    // One byte is enough to sort on: everything past 255 is equally "long", and
+    // grouping those together is all the ordering has to achieve.
+    liftKey[k] = (uint8_t)(work > 255 ? 255 : (work < 0 ? 0 : work));
+}
+
+__global__ __launch_bounds__(256, 6) void roundKernel(
+        const uint8_t *__restrict__ labels,
+        const uint8_t *__restrict__ hIn, const uint16_t *__restrict__ dIn,
+        const uint32_t *__restrict__ repIn,
+        const uint32_t *__restrict__ sortedK, const uint32_t *__restrict__ order,
+        const uint16_t *__restrict__ target, const uint8_t *__restrict__ paired,
+        uint64_t outCount,
+        uint8_t *__restrict__ hOut, uint16_t *__restrict__ dOut,
+        uint32_t *__restrict__ repOut) {
+    uint64_t t = blockIdx.x * (uint64_t)blockDim.x + threadIdx.x;
+    if (t >= outCount) return;
+    // Threads are assigned groups in order of chain length, so the lanes of a
+    // warp do nearly equal work. The output slot travels with the group; it is
+    // the group's original index, not this thread's.
+    uint32_t k = sortedK[t];
+    uint64_t i = order[k];
+    int tgt = target[k];
+
+    H h = loadH(hIn + i*32);
     const uint8_t *la = labels + (uint64_t)repIn[i]*LABEL;
-    liftTo(h, la, dIn[i], target);
+    liftTo(h, la, dIn[i], tgt);
 
-    if (isPair[i]) {
-        uint8_t h2[32];
-#pragma unroll
-        for (int j = 0; j < 32; j++) h2[j] = hIn[(i+1)*32 + j];
+    if (paired[k]) {
+        H h2 = loadH(hIn + (i+1)*32);
         const uint8_t *lb = labels + (uint64_t)repIn[i+1]*LABEL;
-        liftTo(h2, lb, dIn[i+1], target);
-        hashPair(h, h2, hOut + (uint64_t)k*32);
-        dOut[k] = (uint16_t)p;
+        liftTo(h2, lb, dIn[i+1], tgt);
+        storeH(hashPair(h, h2), hOut + (uint64_t)k*32);
+        dOut[k] = (uint16_t)(tgt - 1);
     } else {
-#pragma unroll
-        for (int j = 0; j < 32; j++) hOut[(uint64_t)k*32 + j] = h[j];
-        dOut[k] = (uint16_t)target;
+        storeH(h, hOut + (uint64_t)k*32);
+        dOut[k] = (uint16_t)tgt;
     }
     repOut[k] = repIn[i];
 }
@@ -339,12 +392,9 @@ __global__ void roundKernel(const uint8_t *__restrict__ labels,
 __global__ void finishRoot(const uint8_t *__restrict__ labels, uint8_t *__restrict__ h,
                            const uint16_t *__restrict__ d, const uint32_t *__restrict__ rep) {
     if (threadIdx.x || blockIdx.x) return;
-    uint8_t v[32];
-#pragma unroll
-    for (int j = 0; j < 32; j++) v[j] = h[j];
+    H v = loadH(h);
     liftTo(v, labels + (uint64_t)rep[0]*LABEL, d[0], 0);
-#pragma unroll
-    for (int j = 0; j < 32; j++) h[j] = v[j];
+    storeH(v, h);
 }
 
 // ---- host-side assembly -------------------------------------------------
@@ -399,9 +449,12 @@ int main(int argc, char **argv) {
     for (long long i = 0; i < (long long)n; i++)
         memcpy(hLabels.data() + (size_t)i*LABEL, leaves + (size_t)i*ENTRY, LABEL);
 
-    uint8_t *dLabels, *dValues, *dHash, *dHash2;
-    uint16_t *dDepth, *dDepth2;
-    uint32_t *dRep, *dRep2, *dScan;
+    uint8_t *dLabels, *dValues, *dHash, *dHash2 = nullptr;
+    uint16_t *dDepth, *dDepth2 = nullptr;
+    uint32_t *dRep, *dRep2 = nullptr, *dScan;
+    uint32_t *dOrder = nullptr, *dSortedK = nullptr;
+    uint16_t *dTarget = nullptr;
+    uint8_t *dPaired = nullptr, *dLiftKey = nullptr;
     int32_t *dPref;
     uint8_t *dIsPair;
     CK(cudaMalloc(&dLabels, (size_t)n*LABEL));
@@ -447,14 +500,20 @@ int main(int argc, char **argv) {
     CK(cudaMalloc(&dIsPair, (size_t)n));
     CK(cudaMalloc(&dScan,   (size_t)n*sizeof(uint32_t)));
 
+    double tPref = 0, tScan = 0, tRound = 0, tCopy = 0, tSort = 0;
     uint64_t m = n;
     int rounds = 0;
     while (m > 1) {
         int g = (int)((m + block - 1)/block);
+        double p0 = now_s();
         computePref<<<g, block>>>(dLabels, dRep, m, dPref);
         markStarts<<<g, block>>>(dPref, m, dIsPair, dScan);
         CK(cudaGetLastError());
+        CK(cudaDeviceSynchronize());
+        double p1 = now_s(); tPref += p1 - p0;
         thrust::exclusive_scan(thrust::device, dScan, dScan + m, dScan);
+        CK(cudaDeviceSynchronize());
+        double p2 = now_s(); tScan += p2 - p1;
 
         // The output size is known before the round runs, so the destination
         // buffers are allocated at exactly that size rather than at worst case.
@@ -462,27 +521,59 @@ int main(int argc, char **argv) {
         // full-width node arrays plus the labels do not fit, and sizing the
         // destination to the ~55% of nodes that actually survive a round is
         // what makes the whole assembly resident.
+        double c0 = now_s();
         uint32_t lastStart = 0;
         CK(cudaMemcpy(&lastStart, dScan + (m-1), sizeof(uint32_t), cudaMemcpyDeviceToHost));
         uint8_t lastPairPrev = 0;
         if (m >= 2) CK(cudaMemcpy(&lastPairPrev, dIsPair + (m-2), 1, cudaMemcpyDeviceToHost));
         uint64_t outCount = lastStart + (lastPairPrev ? 0u : 1u);
+        tCopy += now_s() - c0;
         if (outCount == 0 || outCount >= m) {
             fprintf(stderr, "assemble: no progress at %llu nodes\n", (unsigned long long)m);
             return 1;
         }
 
-        CK(cudaMalloc(&dHash2,  (size_t)outCount*32));
-        CK(cudaMalloc(&dDepth2, (size_t)outCount*sizeof(uint16_t)));
-        CK(cudaMalloc(&dRep2,   (size_t)outCount*sizeof(uint32_t)));
+        // Allocated once, at the first round's output size, and reused. Every
+        // later round is smaller, so one allocation covers all of them — and
+        // thirty-eight allocate/free cycles around a kernel that runs for
+        // milliseconds is most of what the host was doing.
+        if (dHash2 == nullptr) {
+            CK(cudaMalloc(&dHash2,  (size_t)outCount*32));
+            CK(cudaMalloc(&dDepth2, (size_t)outCount*sizeof(uint16_t)));
+            CK(cudaMalloc(&dRep2,   (size_t)outCount*sizeof(uint32_t)));
+            // The per-group plan, sized once by the first round — every later
+            // round produces fewer groups than the one before it.
+            CK(cudaMalloc(&dOrder,   (size_t)outCount*sizeof(uint32_t)));
+            CK(cudaMalloc(&dSortedK, (size_t)outCount*sizeof(uint32_t)));
+            CK(cudaMalloc(&dTarget,  (size_t)outCount*sizeof(uint16_t)));
+            CK(cudaMalloc(&dPaired,  (size_t)outCount));
+            CK(cudaMalloc(&dLiftKey, (size_t)outCount));
+        }
 
-        roundKernel<<<g, block>>>(dLabels, dHash, dDepth, dRep, dPref, dIsPair, dScan, m,
-                                  dHash2, dDepth2, dRep2);
+        double s0 = now_s();
+        planRound<<<g, block>>>(dPref, dDepth, dIsPair, dScan, m,
+                                dOrder, dTarget, dPaired, dLiftKey);
+        CK(cudaGetLastError());
+        // Sorting by chain length is what makes the warps uniform. One byte of
+        // key and a radix sort: tens of milliseconds against the tens of
+        // seconds that divergence was costing.
+        thrust::sequence(thrust::device, dSortedK, dSortedK + outCount);
+        thrust::sort_by_key(thrust::device, dLiftKey, dLiftKey + outCount, dSortedK);
+        CK(cudaDeviceSynchronize());
+        tSort += now_s() - s0;
+
+        double r0 = now_s();
+        int go = (int)((outCount + block - 1)/block);
+        roundKernel<<<go, block>>>(dLabels, dHash, dDepth, dRep,
+                                   dSortedK, dOrder, dTarget, dPaired, outCount,
+                                   dHash2, dDepth2, dRep2);
         CK(cudaGetLastError());
         CK(cudaDeviceSynchronize());
+        tRound += now_s() - r0;
 
-        CK(cudaFree(dHash)); CK(cudaFree(dDepth)); CK(cudaFree(dRep));
-        dHash = dHash2; dDepth = dDepth2; dRep = dRep2;
+        // The input buffers of round 1 are the largest; after the swap they
+        // serve as the output buffers of round 2, and so on.
+        std::swap(dHash, dHash2); std::swap(dDepth, dDepth2); std::swap(dRep, dRep2);
         m = outCount;
         rounds++;
         if (rounds > 512) { fprintf(stderr, "assemble: too many rounds\n"); return 1; }
@@ -497,8 +588,9 @@ int main(int argc, char **argv) {
     char hex[65];
     for (int i = 0; i < 32; i++) sprintf(hex + i*2, "%02x", root[i]);
     printf("{\"root\":\"%s\",\"leaves\":%llu,\"rounds\":%d,"
-           "\"upload_s\":%.2f,\"kernel_s\":%.2f,\"assemble_s\":%.2f,\"total_s\":%.2f}\n",
+           "\"upload_s\":%.2f,\"kernel_s\":%.2f,\"assemble_s\":%.2f,\"total_s\":%.2f,"
+           "\"pref_s\":%.2f,\"scan_s\":%.2f,\"sort_s\":%.2f,\"round_s\":%.2f,\"copy_s\":%.2f}\n",
            hex, (unsigned long long)n, rounds,
-           tUp-t0, tK-tUp, tEnd-tK, tEnd-t0);
+           tUp-t0, tK-tUp, tEnd-tK, tEnd-t0, tPref, tScan, tSort, tRound, tCopy);
     return 0;
 }
