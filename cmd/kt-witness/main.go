@@ -114,6 +114,12 @@ type config struct {
 		// construction-audited, because there is a single retained tree and it
 		// is down in the history. Equivocation detection is unaffected — that
 		// is tier A+ witnessing, which runs independently.
+		// History ran a second retained tree backwards through the published
+		// window. Turned off once the offline GPU backfill finished that work:
+		// 498 epochs verified against Proton's signed roots in 12.3 hours,
+		// against the ~40 days the same replay would have taken here at two
+		// hours an epoch. Leaving it on would have spent sixteen cores redoing
+		// audits the witness already holds records for.
 		History bool `json:"history"`
 
 		// ImportResults names a JSONL file of construction audits performed
