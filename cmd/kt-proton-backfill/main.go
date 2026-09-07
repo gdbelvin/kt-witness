@@ -261,25 +261,33 @@ func main() {
 		os.Exit(1)
 	}
 
-	// The base is checked before anything is built on it. Starting a five
-	// hundred epoch replay from a tree nobody has verified would make every
-	// result after it conditional on an assumption.
-	if base == floor {
-		log.Info("verifying the base tree before replaying from it", "epoch", base)
-		root, err := gpuRoot(*bin, treePath(base))
-		if err != nil {
-			log.Error("base rebuild", "err", err)
-			os.Exit(1)
-		}
-		if root != meta[base].TreeHash {
-			log.Error("BASE TREE DOES NOT MATCH ITS SIGNED ROOT — refusing to replay from it",
-				"epoch", base, "computed", root, "signed", meta[base].TreeHash)
-			os.Exit(1)
-		}
-		log.Info("base verified", "epoch", base, "root", root[:16])
-	} else {
-		log.Info("resuming", "from_tree", base)
+	// The base is checked before anything is built on it, ALWAYS — not only
+	// when it is the retention floor.
+	//
+	// The earlier version skipped this when resuming, on the reasoning that a
+	// resumed tree was one this program had already verified. That reasoning
+	// broke the first time it mattered. Proton serves 403 for epoch 6675, both
+	// its diff and its full dump, so the replay could not step past 6674 and
+	// had to re-bootstrap from a freshly downloaded dump at 6676 — a tree that
+	// arrives looking exactly like a resumed one and has been verified by
+	// nobody. Sixty seconds to check is nothing against replaying sixty epochs
+	// onto an assumption.
+	log.Info("verifying the base tree before replaying from it", "epoch", base)
+	if _, ok := meta[base]; !ok {
+		log.Error("no signed root in the manifest for the base tree", "epoch", base)
+		os.Exit(1)
 	}
+	baseRoot, err := gpuRoot(*bin, treePath(base))
+	if err != nil {
+		log.Error("base rebuild", "err", err)
+		os.Exit(1)
+	}
+	if baseRoot != meta[base].TreeHash {
+		log.Error("BASE TREE DOES NOT MATCH ITS SIGNED ROOT — refusing to replay from it",
+			"epoch", base, "computed", baseRoot, "signed", meta[base].TreeHash)
+		os.Exit(1)
+	}
+	log.Info("base verified", "epoch", base, "root", baseRoot[:16])
 
 	verified, gpuBugs := 0, 0
 	for e := base + 1; e <= *to; e++ {
@@ -294,8 +302,19 @@ func main() {
 		diffPath := filepath.Join(*dir, "diffs", fmt.Sprintf("epoch.1.%d.diff", e))
 		diff, err := os.ReadFile(diffPath)
 		if err != nil {
-			log.Error("diff", "epoch", e, "err", err)
-			os.Exit(1)
+			log.Error("this epoch cannot be reconstructed: its diff is not present. "+
+				"Fetch a full dump for a LATER epoch, place it as the base, and re-run; "+
+				"the epochs in between stay unaudited and that is the honest outcome",
+				"epoch", e, "err", err)
+			os.Exit(4)
+		}
+		// A diff is a whole number of 69-byte records or it is not a diff. An
+		// HTTP error page saved as one is the specific way this went wrong.
+		if len(diff)%69 != 0 {
+			log.Error("this epoch's diff is not a whole number of 69-byte records — refusing it. "+
+				"An HTTP error body saved as a diff looks exactly like this",
+				"epoch", e, "bytes", len(diff))
+			os.Exit(4)
 		}
 
 		prev, closePrev, err := mapFile(treePath(e - 1))
