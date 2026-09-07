@@ -45,28 +45,51 @@ type logView struct {
 	VerifiedRun              int64
 	Holes                    int64
 	HistoryTotal             int64
-	Origin                   string
-	Size                     int64
-	Root                     string
-	RootShort                string
-	Path                     string
-	WitnessedAt              time.Time
-	Age                      string
-	Stale                    bool
-	Forked                   bool
-	Audited                  int
-	Sampled                  int
-	Declined                 int
-	Unavailable              int
-	LastEpoch                int64
-	History                  *historyView
-	CheckpointID             string
+
+	// Expired counts epochs that have aged out of the operator's published
+	// window since this witness first looked, and Unreachable counts epochs
+	// inside the current window that no longer serve. Both describe data that
+	// is GONE rather than wrong, which is a different and largely unreported
+	// failure: nothing contradicts, nothing is corrupt, and nobody can ever
+	// check it again.
+	Expired      int64
+	Unreachable  int64
+	FirstSeen    time.Time
+	Origin       string
+	Size         int64
+	Root         string
+	RootShort    string
+	Path         string
+	WitnessedAt  time.Time
+	Age          string
+	Stale        bool
+	Forked       bool
+	Audited      int
+	Sampled      int
+	Declined     int
+	Unavailable  int
+	LastEpoch    int64
+	History      *historyView
+	CheckpointID string
 }
 
 type historyView struct {
-	From, To int64
-	Epochs   int
-	Gaps     int
+	From, To  int64
+	Epochs    int
+	Gaps      int
+	Expired   int64
+	FirstSeen time.Time
+}
+
+// lostView is one operator's unverifiable range.
+type lostView struct {
+	Origin      string
+	Expired     int64
+	Unreachable int64
+	WindowFrom  int64
+	WindowTo    int64
+	EverFrom    int64
+	Since       string
 }
 
 type statusView struct {
@@ -91,6 +114,17 @@ type statusView struct {
 	// Kept visible so removing a log is an observable act rather than a silent
 	// one, but excluded from liveness reporting.
 	Retired []string
+
+	// Lost, not wrong. The headline this page leads with when it is non-zero.
+	//
+	// Every other number here is about whether an operator behaved. These are
+	// about whether anyone will ever be able to tell — epochs whose evidence
+	// has expired or stopped being served. A witness that reports only
+	// contradictions reports a clean bill of health for a log whose history
+	// quietly became unverifiable.
+	LostEpochs  int64
+	LostOrigins []lostView
+	NoHistory   []string
 
 	// Aggregates — the nerdy part.
 	TotalLogs        int
@@ -159,7 +193,8 @@ func (s *Server) buildStatus() (*statusView, error) {
 	histories, _ := s.Store.Histories()
 	byOrigin := map[string]*historyView{}
 	for _, h := range histories {
-		byOrigin[h.Origin] = &historyView{From: h.From, To: h.To, Epochs: h.Epochs, Gaps: len(h.Gaps)}
+		byOrigin[h.Origin] = &historyView{From: h.From, To: h.To, Epochs: h.Epochs, Gaps: len(h.Gaps),
+			Expired: h.Expired(), FirstSeen: h.FirstSeen}
 		v.TotalBackfilled += h.Epochs
 		v.TotalGaps += len(h.Gaps)
 	}
@@ -232,6 +267,8 @@ func (s *Server) buildStatus() (*statusView, error) {
 		// An earlier version asked the source whether it was tier B, which meant
 		// B+ could never be reached by any of the logs that are actually audited.
 		if h := lv.History; h != nil {
+			lv.Expired = h.Expired
+			lv.FirstSeen = h.FirstSeen
 			cov, err := s.cov().get(s.Store, rec.Origin, h.From, h.To)
 			settled, verified := cov.Settled, cov.Verified
 			if err == nil && verified > 0 {
@@ -302,6 +339,45 @@ func (s *Server) buildStatus() (*statusView, error) {
 		}
 		v.Logs = append(v.Logs, lv)
 	}
+	// What has been lost rather than falsified.
+	//
+	// Assembled last, from what the per-log pass established, because it is the
+	// one figure on this page that is not about an operator's conduct. An epoch
+	// whose evidence has expired or stopped being served is not a contradiction
+	// and never will be: nothing about it is wrong, and nobody can check it.
+	for i := range v.Logs {
+		lg := &v.Logs[i]
+		lg.Unreachable = lg.Holes
+		if lg.Expired == 0 && lg.Unreachable == 0 {
+			continue
+		}
+		lv := lostView{
+			Origin: lg.Origin, Expired: lg.Expired, Unreachable: lg.Unreachable,
+		}
+		if h := lg.History; h != nil {
+			lv.WindowFrom, lv.WindowTo = h.From, h.To
+			lv.EverFrom = h.From - lg.Expired
+			if !h.FirstSeen.IsZero() {
+				lv.Since = h.FirstSeen.Format("2 Jan 2006")
+			}
+		}
+		v.LostEpochs += lg.Expired + lg.Unreachable
+		v.LostOrigins = append(v.LostOrigins, lv)
+	}
+	sort.Slice(v.LostOrigins, func(i, j int) bool {
+		return v.LostOrigins[i].Expired+v.LostOrigins[i].Unreachable >
+			v.LostOrigins[j].Expired+v.LostOrigins[j].Unreachable
+	})
+	// Logs that publish no construction evidence at all. Not a fault, and not
+	// the same as losing it — but from a reader's side the consequence matches,
+	// so it is said here rather than left to be inferred from a missing column.
+	for i := range v.Logs {
+		if v.Logs[i].Kind == "kt" && v.Logs[i].History == nil {
+			v.NoHistory = append(v.NoHistory, v.Logs[i].Origin)
+		}
+	}
+	sort.Strings(v.NoHistory)
+
 	sort.Slice(v.Logs, func(i, j int) bool { return v.Logs[i].Size > v.Logs[j].Size })
 	v.TotalLogs = len(v.Logs)
 	v.Groups = groupByKind(v.Logs)

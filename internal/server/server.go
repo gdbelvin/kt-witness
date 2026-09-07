@@ -184,9 +184,24 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	}
 	if hs, err := s.Store.Histories(); err == nil && len(hs) > 0 {
 		fmt.Fprintf(w, "\nbackfilled history:\n")
+		var lost int64
 		for _, h := range hs {
 			fmt.Fprintf(w, "  %s: %d..%d (%d entries, %d gaps)\n",
 				h.Origin, h.From, h.To, h.Epochs, len(h.Gaps))
+			lost += h.Expired()
+		}
+		// Said here too, not only on the rendered page. A monitor reading the
+		// plain-text contract should not have to learn from a browser that an
+		// operator's history has become uncheckable.
+		if lost > 0 {
+			fmt.Fprintf(w, "\nbeyond checking:\n")
+			for _, h := range hs {
+				if n := h.Expired(); n > 0 {
+					fmt.Fprintf(w, "  %s: %d epochs aged out of the published window since %s\n",
+						h.Origin, n, h.FirstSeen.Format("2006-01-02"))
+				}
+			}
+			fmt.Fprintf(w, "  (not misbehaviour, and not recoverable: the evidence is no longer served)\n")
 		}
 	}
 	forks, err := s.Store.Forks()

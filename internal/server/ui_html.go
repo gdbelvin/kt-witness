@@ -33,6 +33,56 @@ const uiHTML = `<!doctype html>
 </div>
 {{end}}
 
+{{if .LostEpochs}}
+<section class="lost">
+  <h2 class="lost-h">Beyond checking</h2>
+  <p class="lost-lede">
+    <strong>{{comma .LostEpochs}} epochs</strong> of published history can no longer be verified by
+    anyone — not by this witness, and not by you. Nothing about them is wrong. The evidence needed to
+    check them has simply stopped being served.
+  </p>
+  <p class="note">
+    This is the failure a transparency system is least equipped to report, because it produces no
+    contradiction to find. A log that quietly stops serving the diffs behind its current window still
+    passes every check a witness can run, while the window in which anyone could have caught it
+    closes. Recording it is the only way it becomes visible at all.
+  </p>
+  <div class="tablewrap">
+  <table>
+    <thead><tr>
+      <th>Log</th><th class="n">Aged out</th><th class="n">Unreachable</th>
+      <th class="n">Published window</th><th>Watched since</th>
+    </tr></thead>
+    <tbody>
+    {{range .LostOrigins}}
+      <tr>
+        <td class="origin">{{.Origin}}</td>
+        <td class="n">{{if .Expired}}<span class="pill warn">{{comma .Expired}}</span>{{else}}—{{end}}</td>
+        <td class="n">{{if .Unreachable}}<span class="pill bad">{{comma .Unreachable}}</span>{{else}}—{{end}}</td>
+        <td class="n">{{comma .WindowFrom}}–{{comma .WindowTo}}</td>
+        <td class="m">{{if .Since}}{{.Since}}{{else}}—{{end}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  <p class="note">
+    <strong>Aged out</strong> means the epoch was inside the operator's published window when this
+    witness first looked and has since fallen out of it. <strong>Unreachable</strong> means it is
+    still inside the window but does not serve — retried on a growing backoff, so a persistent count
+    is a real absence rather than a bad afternoon. Neither is evidence of misbehaviour, and both are
+    permanent.
+  </p>
+  {{if .NoHistory}}
+  <p class="note">
+    Publishing no construction evidence at all:
+    {{range $i, $o := .NoHistory}}{{if $i}}, {{end}}<code>{{$o}}</code>{{end}}. Their append-only
+    shape is attested; how their directories were built is not something a third party can check.
+  </p>
+  {{end}}
+</section>
+{{end}}
+
 <h2>At a glance</h2>
 <div class="grid">
   <div class="cell"><span class="v">{{commai .TotalLogs}}</span><span class="k">logs witnessed</span></div>
@@ -208,6 +258,12 @@ header{border-bottom:1px solid var(--rule);padding-bottom:1.2rem;margin-bottom:.
         border:1px solid var(--rule);background:var(--panel)}
 .banner.bad{border-color:var(--bad);background:color-mix(in srgb,var(--bad) 12%,var(--panel))}
 .banner.ok{border-left:3px solid var(--ok)}
+.lost{border:1px solid var(--warn);border-radius:5px;padding:1.1rem 1.2rem 1.3rem;margin:1.4rem 0 0;
+ background:color-mix(in srgb,var(--warn) 7%,var(--panel))}
+.lost-h{margin:0 0 .5rem;color:var(--warn);font-size:.82rem}
+.lost-lede{margin:0 0 .7rem;font-size:1.02rem;line-height:1.5}
+.lost .note{margin:.7rem 0 0}
+.lost .tablewrap{margin:.9rem 0 0;background:var(--panel)}
 
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
       background:var(--rule);border:1px solid var(--rule);border-radius:5px;overflow:hidden}

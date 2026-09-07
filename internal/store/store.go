@@ -528,15 +528,59 @@ type History struct {
 	Epochs     int       `json:"epochs"`
 	Gaps       []string  `json:"gaps,omitempty"`
 	VerifiedAt time.Time `json:"verified_at"`
+
+	// EverFrom is the lowest From ever recorded for this origin, and FirstSeen
+	// is when we first recorded any history for it.
+	//
+	// They exist because From MOVES. An operator with a retention window drops
+	// its oldest epochs as it publishes new ones, and RecordHistory overwrites,
+	// so without a watermark the witness forgets that the older epochs were
+	// ever offered. That forgetting hides the most consequential thing this
+	// project has found: an epoch whose diff has aged out cannot be
+	// reconstructed by anyone, ever again, and a witness that only reports the
+	// CURRENT window reports a shrinking archive as though it were a stable
+	// one.
+	EverFrom  int64     `json:"ever_from,omitempty"`
+	FirstSeen time.Time `json:"first_seen,omitempty"`
+}
+
+// Expired reports how many epochs have aged out of the published window since
+// this witness first looked. Zero for an operator that retains everything.
+func (h *History) Expired() int64 {
+	if h.EverFrom == 0 || h.From <= h.EverFrom {
+		return 0
+	}
+	return h.From - h.EverFrom
 }
 
 func (s *Store) RecordHistory(h *History) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketHistory)
+		// Carry the watermark forward. The incoming record describes what is
+		// published NOW; only the stored one remembers what once was, and a
+		// backfill that simply overwrote it destroyed the evidence that an
+		// operator's window had moved.
+		h.EverFrom, h.FirstSeen = h.From, h.VerifiedAt
+		if raw := b.Get([]byte(h.Origin)); raw != nil {
+			var prev History
+			if json.Unmarshal(raw, &prev) == nil {
+				low := prev.EverFrom
+				if low == 0 {
+					low = prev.From // recorded before the watermark existed
+				}
+				if low > 0 && low < h.EverFrom {
+					h.EverFrom = low
+				}
+				if !prev.FirstSeen.IsZero() {
+					h.FirstSeen = prev.FirstSeen
+				}
+			}
+		}
 		enc, err := json.Marshal(h)
 		if err != nil {
 			return err
 		}
-		return tx.Bucket(bucketHistory).Put([]byte(h.Origin), enc)
+		return b.Put([]byte(h.Origin), enc)
 	})
 }
 

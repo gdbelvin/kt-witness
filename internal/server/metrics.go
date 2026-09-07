@@ -38,6 +38,7 @@ const (
 	MVerifiedTo        = "kt_witness_verified_region_to"
 	MHoles             = "kt_witness_history_holes"
 	MHistoryTotal      = "kt_witness_history_total_epochs"
+	MHistoryExpired    = "kt_witness_history_expired_epochs"
 	MHistoryFrom       = "kt_witness_history_range_from"
 	MHistoryTo         = "kt_witness_history_range_to"
 	MAuditPopulation   = "kt_witness_audit_records_retained"
@@ -131,6 +132,7 @@ func Init(version, commit, built string) {
 	d(MVerifiedTo, metrics.Gauge, "Last epoch of the largest unbroken verified run.")
 	d(MHoles, metrics.Gauge, "Epochs inside the swept range that are settled but unverified — gaps in coverage. Retried on a growing backoff rather than abandoned, so a persistently non-zero value means genuinely unfetchable proofs, not a transient refusal.")
 	d(MHistoryTotal, metrics.Gauge, "Epochs of published history in total.")
+	d(MHistoryExpired, metrics.Gauge, "Epochs that have aged out of an operator's published window since this witness first looked. Not misbehaviour and not recoverable: the evidence needed to check those epochs is no longer served, so nobody can ever verify them. Alert on it RISING, not on its value — a growing figure means an operator's auditable window is closing faster than anyone is auditing it.")
 	d(MHistoryFrom, metrics.Gauge, "First epoch of the published range coverage is measured against. Published because coverage is counted only INSIDE this range: work outside it is real but uncounted, which looks identical to no work at all.")
 	d(MHistoryTo, metrics.Gauge, "Last epoch of the published range coverage is measured against.")
 	d(MAuditPopulation, metrics.Gauge, "Audit records retained for this origin, across all epochs. Compare with history_audited_epochs: a large gap means most records fall outside the measured range, and a value pinned at the retention cap means the oldest are being evicted as fast as new ones arrive — which for a downward sweep means evicting exactly what it just wrote.")
@@ -282,6 +284,7 @@ func (s *Server) refreshStoreMetrics() error {
 			metrics.Set(MHistoryAudited, origin, float64(lg.HistoryAudited))
 			metrics.Set(MHistoryTotal, origin, float64(lg.HistoryTotal))
 			if lg.History != nil {
+				metrics.Set(MHistoryExpired, origin, float64(lg.History.Expired))
 				metrics.Set(MHistoryFrom, origin, float64(lg.History.From))
 				metrics.Set(MHistoryTo, origin, float64(lg.History.To))
 			}

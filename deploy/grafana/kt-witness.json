@@ -1906,6 +1906,182 @@
           "resultFormat": "time_series"
         }
       ]
+    },
+    {
+      "collapsed": false,
+      "type": "row",
+      "id": 30,
+      "title": "Logs \u2014 what the numbers do not say",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 107
+      },
+      "panels": []
+    },
+    {
+      "id": 31,
+      "type": "logs",
+      "title": "Warnings and errors",
+      "description": "Everything the witness logged above INFO. Normally empty, and that is the point: a withheld cosignature or a failed audit round appears here without anyone grepping a container that may since have been recreated.\n\n`err` is structured metadata, so it is searchable \u2014 it used to render as `{}` in the events feed, which dropped the one field saying WHY a cosignature was withheld.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 108
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "range",
+          "expr": "{compose_project=\"kt-witness\"} | level =~ \"WARN|ERROR\""
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "Construction audits per hour, by log",
+      "description": "Counted from `epoch verified` log lines, grouped by the `origin` structured metadata field. This is the view that makes a starved sweep obvious: when Proton's rebuild was holding sixteen cores, the AKD lines here thinned out while every counter still looked healthy.\n\n`origin` is metadata rather than a label on purpose \u2014 it is absent from most lines, and a label present on only some lines of a stream splits the stream instead of grouping it.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 117
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "range",
+          "legendFormat": "{{origin}}",
+          "expr": "sum by (origin) (count_over_time({compose_project=\"kt-witness\"} |= \"epoch verified\" | logfmt | origin != \"\" [$__auto])) * 3600 / 60"
+        }
+      ]
+    },
+    {
+      "id": 33,
+      "type": "logs",
+      "title": "Proton replay \u2014 tip and history",
+      "description": "Both retained trees report separately, because they make separate progress and reporting them as one hid exactly the case that occurred: the tip advancing while the history replay sat blocked behind it for hours, emitting nothing.\n\nA replay waiting on the rebuild lock now says so before it takes the lock.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 117
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "range",
+          "expr": "{compose_project=\"kt-witness\"} |~ \"proton_replay|proton audit|PROTON\""
+        }
+      ]
+    },
+    {
+      "id": 34,
+      "type": "logs",
+      "title": "Directory mutations worth a human",
+      "description": "Removals, in-place overwrites and removals of labels the tree never held. None of these change the root, so a verifier that only compares tree hashes sees none of them \u2014 they are visible only by replaying the diff and reading what it did.\n\nRemovals alone are ordinary: Proton permits deletion within its retention window, and every removal observed so far has been explained by it. `overwritten` or `phantom` above zero is the reading that deserves attention.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 126
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "range",
+          "expr": "{compose_project=\"kt-witness\"} |= \"append-only map should not\""
+        }
+      ]
     }
   ],
   "refresh": "1m",
