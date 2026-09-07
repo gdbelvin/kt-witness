@@ -173,6 +173,13 @@ func (a *Auditor) verifyResolved(ctx context.Context, origin string, epoch int64
 		br.verified = true
 
 		lbl := map[string]string{"origin": origin}
+		// The sidecar reports its own phases; keep them. Deciding whether this
+		// verification could be moved to other hardware is a question about
+		// which phase dominates, and until now the history path measured the
+		// split and then threw it away.
+		metrics.Add("kt_witness_audit_decode_seconds_sum", lbl, float64(res.DecodeMS)/1000)
+		metrics.Add("kt_witness_audit_verify_seconds_sum", lbl, float64(res.VerifyMS)/1000)
+		metrics.Add("kt_witness_audit_download_seconds_sum", lbl, float64(res.DownloadMS)/1000)
 		metrics.Inc("kt_witness_audit_verified_total", lbl)
 		// The same verification, counted again on its own. The shared counter
 		// is incremented by both the live path and this one, so its rate
@@ -192,7 +199,8 @@ func (a *Auditor) verifyResolved(ctx context.Context, origin string, epoch int64
 			netmeter.Add(origin, res.Bytes)
 		}
 		a.Log.Info("epoch verified", "origin", origin, "epoch", epoch,
-			"ms", res.VerifyMS, "mb", res.Bytes>>20, "strategy", "history")
+			"ms", res.VerifyMS, "decode_ms", res.DecodeMS, "download_ms", res.DownloadMS,
+			"mb", res.Bytes>>20, "strategy", "history")
 	}
 	return br
 }
