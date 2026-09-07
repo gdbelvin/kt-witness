@@ -584,6 +584,50 @@ func (s *Store) RecordHistory(h *History) error {
 	})
 }
 
+// LowerHistoryWatermark records that an origin once published history reaching
+// further back than this witness ever saw.
+//
+// The watermark set by RecordHistory can only remember what we observed, which
+// means a witness that started watching last week reports nothing lost — even
+// when the operator's own published metadata says otherwise. Proton stamps each
+// epoch with the retention floor in force when it was published, so the oldest
+// epoch still served is direct evidence of how much has already aged out.
+//
+// Only ever lowers. Evidence that the window was once wider is additive; a
+// later, higher figure is not evidence it has narrowed back.
+func (s *Store) LowerHistoryWatermark(origin string, everFrom int64) (bool, error) {
+	if everFrom <= 0 {
+		return false, nil
+	}
+	changed := false
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketHistory)
+		raw := b.Get([]byte(origin))
+		if raw == nil {
+			return nil // nothing to attach it to yet
+		}
+		var h History
+		if err := json.Unmarshal(raw, &h); err != nil {
+			return err
+		}
+		cur := h.EverFrom
+		if cur == 0 {
+			cur = h.From
+		}
+		if cur <= everFrom {
+			return nil
+		}
+		h.EverFrom = everFrom
+		enc, err := json.Marshal(&h)
+		if err != nil {
+			return err
+		}
+		changed = true
+		return b.Put([]byte(origin), enc)
+	})
+	return changed, err
+}
+
 func (s *Store) Histories() ([]*History, error) {
 	var out []*History
 	err := s.db.View(func(tx *bolt.Tx) error {

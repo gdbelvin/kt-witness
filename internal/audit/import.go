@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -62,6 +63,51 @@ type backfillResult struct {
 	Note       string `json:"note"`
 }
 
+// seedWatermark reads the epoch manifest beside a results file and tells the
+// store how far back the operator's history once reached.
+//
+// Proton stamps every epoch with StartEpochID — the retention floor in force
+// when that epoch was published. The oldest epoch still served therefore says,
+// in the operator's own published metadata, how much has already aged out. That
+// is a stronger claim than anything this witness could observe on its own: a
+// witness that started watching last week has seen nothing expire and would
+// otherwise report a shrinking archive as a stable one.
+func seedWatermark(db *store.Store, origin, resultsPath string, log *slog.Logger) {
+	mf := filepath.Join(filepath.Dir(resultsPath), "manifest.jsonl")
+	f, err := os.Open(mf)
+	if err != nil {
+		return // no manifest beside the results; nothing to learn
+	}
+	defer f.Close()
+	var lowest int64
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		var m struct {
+			StartEpoch int64 `json:"start_epoch"`
+		}
+		if json.Unmarshal(sc.Bytes(), &m) != nil || m.StartEpoch <= 0 {
+			continue
+		}
+		if lowest == 0 || m.StartEpoch < lowest {
+			lowest = m.StartEpoch
+		}
+	}
+	if lowest == 0 {
+		return
+	}
+	changed, err := db.LowerHistoryWatermark(origin, lowest)
+	if err != nil {
+		log.Warn("recording how far the published window once reached", "err", err)
+		return
+	}
+	if changed {
+		log.Info("the operator's own metadata says its history once reached further back",
+			"origin", origin, "ever_from", lowest,
+			"note", "epochs below the current window can no longer be reconstructed by anyone")
+	}
+}
+
 // ImportStats reports what one pass did.
 type ImportStats struct {
 	Read      int
@@ -84,6 +130,8 @@ func ImportResults(db *store.Store, origin, path string, log *slog.Logger) (Impo
 		return st, err
 	}
 	defer f.Close()
+
+	seedWatermark(db, origin, path, log)
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
