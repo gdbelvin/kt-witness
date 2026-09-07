@@ -77,23 +77,6 @@ type Governor struct {
 
 	Log *slog.Logger
 
-	// Reserved reports cores that are spoken for by work this governor does
-	// not schedule, and must therefore be subtracted from the budget rather
-	// than competed with.
-	//
-	// Proton's tree rebuild is the case this exists for. It runs inside this
-	// same process, so the sampler counts it as OUR usage — and the controller,
-	// seeing the budget already met, holds permits steady and calls it
-	// equilibrium. It is not equilibrium: the sidecar workers and the rebuild
-	// are both runnable on the same cores, and the sidecars win on numbers.
-	// Measured on the deployed box, five in-flight verifications parallelising
-	// ~6x each took ~30 of 32 cores while the rebuild's six workers got 2.5,
-	// turning a nineteen-minute step into eight hours and starving the history
-	// replay behind it indefinitely.
-	//
-	// Subtracting the reservation makes the sweep yield those cores instead of
-	// fighting for them. Nil means nothing is reserved.
-	Reserved func() float64
 
 	mu       sync.Mutex
 	permits  float64
@@ -136,6 +119,30 @@ func (g *Governor) BudgetFor(totalCores float64) float64 { return g.budget(total
 
 // budget returns the usage ceiling for this machine, in cores.
 //
+// It deliberately does NOT subtract Proton's rebuild, and an earlier version of
+// this that did was wrong in a way worth writing down, because the reasoning
+// that produced it is tempting.
+//
+// The observation was real: the rebuild runs in this process, so the sampler
+// counts it as our usage, and with the rebuild taking six cores of a 31-core
+// budget the sweep expanded into the other twenty-five and the rebuild crawled.
+// Reserving its cores looked like the fix. It is not, for two reasons.
+//
+// Arithmetically it cancels. Done properly the reservation comes off both sides
+// — the sweep may use (total - reserve - R) and is using (self - R) — and those
+// R terms subtract out, leaving exactly this expression. Taking it off only the
+// budget, as that version did, counts the same cores twice: the ceiling fell to
+// 15 while Proton alone held 16, so the controller drove the sweep toward zero
+// chasing a total it could never reach. Measured on the deployed box: permits
+// floored at 1, and fifteen of thirty-two cores idle.
+//
+// And it solves the wrong problem. This governor's job is the machine's total
+// load. How that total divides between the rebuild and the sweep is set by
+// PROTON_TREE_WORKERS, which is a static share precisely because the two have
+// incomparable shapes — a permit bounds a ~37-second verification, a rebuild
+// runs for hours. The rebuild was not being starved by the governor. It was
+// configured to take six cores, and six cores is what it got.
+//
 // The same figure bounds both our own usage and the machine's total. They
 // coincide deliberately: machine usage always includes ours, so a single
 // ceiling means the two constraints can never contradict each other. The
@@ -147,9 +154,6 @@ func (g *Governor) budget(totalCores float64) float64 {
 		return g.TargetCores
 	}
 	b := totalCores - g.reserve()
-	if g.Reserved != nil {
-		b -= g.Reserved()
-	}
 	if b < 1 {
 		b = 1 // a one-core box still gets to make progress
 	}

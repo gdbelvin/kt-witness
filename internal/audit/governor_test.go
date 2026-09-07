@@ -187,39 +187,31 @@ func TestSelfAndMachineConstraintsCannotContradict(t *testing.T) {
 	}
 }
 
-// TestReservedCoresLeaveTheBudget: the sweep must plan around work it does not
-// schedule, not against it.
+// TestBudgetIgnoresWhatElseThisProcessIsDoing pins the correction to a fix that
+// was deployed and had to be taken back out.
 //
-// The regression this pins: Proton's tree rebuild runs in the same process, so
-// the sampler counts it as our own usage. With the budget unaware of it, the
-// controller saw a saturated box, called it equilibrium, and held permits at a
-// level that let five sidecar verifications take ~30 of 32 cores while the
-// rebuild's six workers got 2.5 — an eight-hour step where nineteen minutes was
-// the design, and a history replay starved behind it indefinitely.
-func TestReservedCoresLeaveTheBudget(t *testing.T) {
-	held := 0.0
-	g := &Governor{Reserved: func() float64 { return held }}
-
-	if got := g.BudgetFor(32); got != 31 {
-		t.Fatalf("no rebuild running: budget %.1f, want 31", got)
+// Proton's tree rebuild runs in this same process, so the sampler counts it as
+// our usage. Reserving its cores — subtracting them from this budget — looked
+// like the way to stop the sweep competing with it. On the deployed box that
+// floored permits at 1 and left fifteen of thirty-two cores idle, because the
+// same cores were then counted twice: once removed from the ceiling, and again
+// in the SelfCores measured against it.
+//
+// The budget is a statement about the machine, and nothing about what this
+// process happens to be running. How the total divides between the sweep and a
+// rebuild is PROTON_TREE_WORKERS' job.
+func TestBudgetIgnoresWhatElseThisProcessIsDoing(t *testing.T) {
+	g := &Governor{}
+	want := g.BudgetFor(32)
+	if want != 31 {
+		t.Fatalf("budget %.1f, want 31", want)
 	}
-
-	held = 6 // a rebuild claims its workers
-	if got := g.BudgetFor(32); got != 25 {
-		t.Errorf("rebuild holding 6: budget %.1f, want 25", got)
-	}
-
-	// A reservation larger than the machine must not drive the budget to zero
-	// and stop the sweep forever; the floor still applies.
-	held = 100
-	if got := g.BudgetFor(32); got != 1 {
-		t.Errorf("oversized reservation: budget %.1f, want the 1-core floor", got)
-	}
-
-	// Releasing restores the full budget: the reservation is a lease, not a
-	// permanent shrink.
-	held = 0
-	if got := g.BudgetFor(32); got != 31 {
-		t.Errorf("after release: budget %.1f, want 31", got)
+	// Whatever else the process is doing, the ceiling for the machine is the
+	// same number. There is no input here for it to depend on, and that is the
+	// property being pinned.
+	for _, cores := range []float64{16, 32, 64} {
+		if got := g.BudgetFor(cores); got != cores-1 {
+			t.Errorf("%.0f cores: budget %.1f, want %.1f", cores, got, cores-1)
+		}
 	}
 }

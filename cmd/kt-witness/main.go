@@ -577,12 +577,6 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 				TargetCores:   cfg.Audit.TargetCores,
 				MaxConcurrent: workers,
 				Log:           log,
-				// Proton's rebuild runs in this process, so the sampler already
-				// counts it as our usage and the controller would treat a
-				// saturated box as equilibrium while the rebuild starved. Hand
-				// the governor the number so it plans around the rebuild
-				// instead of against it.
-				Reserved: proton.ClaimedCores,
 			}
 		}
 		// Fetch proofs ahead of verifying them so the link and the CPU are busy
