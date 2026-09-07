@@ -34,14 +34,33 @@ type gossipView struct {
 	AnyDivergent bool
 }
 
-func (s *Server) gossip(w http.ResponseWriter, r *http.Request) {
-	v, err := s.buildStatus()
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
+// corroborated reports, per origin, whether any peer witness has attested it at
+// a size we can compare. Used by the map to mark which logs have a second
+// observer at all — which, on this deployment, is ten of eighty.
+func (s *Server) corroborated(v *statusView) map[string][]string {
+	out := map[string][]string{}
+	for _, lv := range v.Logs {
+		peers, err := s.Store.PeerAttestations(lv.Origin)
+		if err != nil || len(peers) == 0 {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, p := range peers {
+			if p.Root == "" || seen[p.Witness] {
+				continue
+			}
+			seen[p.Witness] = true
+			out[lv.Origin] = append(out[lv.Origin], p.Witness)
+		}
+		sort.Strings(out[lv.Origin])
 	}
-	g := &gossipView{WitnessName: v.WitnessName, TotalLogs: len(v.Logs)}
+	return out
+}
 
+// peerSummary aggregates what every peer witness has said. Shared by /gossip
+// and the map so the two cannot disagree about the same fact.
+func (s *Server) peerSummary(v *statusView) *gossipView {
+	g := &gossipView{WitnessName: v.WitnessName, TotalLogs: len(v.Logs)}
 	byWitness := map[string]*gossipPeer{}
 	for _, lv := range v.Logs {
 		rec, err := s.Store.Get(lv.Origin)
@@ -83,6 +102,16 @@ func (s *Server) gossip(w http.ResponseWriter, r *http.Request) {
 		g.Peers = append(g.Peers, *gp)
 	}
 	sort.Slice(g.Peers, func(i, j int) bool { return g.Peers[i].Witness < g.Peers[j].Witness })
+	return g
+}
+
+func (s *Server) gossip(w http.ResponseWriter, r *http.Request) {
+	v, err := s.buildStatus()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	g := s.peerSummary(v)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = gossipTmpl.Execute(w, g)

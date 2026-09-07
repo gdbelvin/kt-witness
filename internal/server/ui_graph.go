@@ -121,6 +121,14 @@ type graphNode struct {
 	Stale  bool
 	Forked bool
 
+	// Corroborated: at least one peer witness has published a root for this
+	// log, so a fork in it could actually be caught. Drawn as an outer halo,
+	// because it is the difference between a log being watched and a log being
+	// CHECKED — one witness's signature over a fetched checkpoint always agrees
+	// with itself.
+	Corroborated bool
+	Peers        []string
+
 	// Labelled nodes get their origin drawn beside them. Only a handful are:
 	// eighty labels is not a map, it is a wall.
 	Labelled             bool
@@ -129,6 +137,27 @@ type graphNode struct {
 	FillOpacity          float64
 	angle, orbit, lo, hi float64 // layout scratch: degrees, px, sector bounds
 	sector               int
+}
+
+// graphPeer is another witness, placed outside the ring of logs.
+//
+// The edge drawn to it is not "these two witnesses talk to each other" — there
+// is no evidence of that and this witness would not know. It is narrower and
+// more useful: on N logs, both of us have published a root at the same size, so
+// a disagreement between us would be detectable. That is the only relationship
+// between witnesses that has teeth.
+type graphPeer struct {
+	Name       string
+	Label      string
+	X, Y, R    float64
+	LabelX     float64
+	LabelY     float64
+	Comparable int
+	Agreed     int
+	Origins    int
+	Divergent  bool
+	Width      float64 // edge stroke width, by comparable logs
+	Title      string
 }
 
 // graphSector is one ecosystem's wedge.
@@ -166,6 +195,15 @@ type graphView struct {
 	Sectors []graphSector
 	Nodes   []graphNode
 	Rings   []graphRing
+
+	// Peers and the corroboration figures. Unobserved is the number this page
+	// exists to make impossible to miss: logs this witness attests that no
+	// other witness is publishing a root for, and which therefore no amount of
+	// diligence here could catch a fork in.
+	Peers        []graphPeer
+	Corroborated int
+	Unobserved   int
+	PeerCount    int
 
 	// Flagged is the subset a reader must not have to hunt for in the picture:
 	// anything stale or forked, listed in text with its real age.
@@ -766,6 +804,50 @@ func clampAngle(v, lo, hi float64) float64 {
 	return v
 }
 
+// attachPeers places the other witnesses and marks which logs they corroborate.
+//
+// They sit on the left, outside the wedges, because they are not part of the
+// fleet being measured — they are the only reason any of it can be checked. A
+// witness's own signature over a checkpoint it fetched itself always agrees
+// with itself; only a second party publishing a root at the same size can
+// contradict a log. So the number this layout is built to make unmissable is
+// not how many peers there are, it is how many logs have none.
+func attachPeers(g *graphView, gs *gossipView, corr map[string][]string) {
+	for i := range g.Nodes {
+		if who, ok := corr[g.Nodes[i].Origin]; ok && len(who) > 0 {
+			g.Nodes[i].Corroborated = true
+			g.Nodes[i].Peers = who
+			g.Corroborated++
+		}
+	}
+	g.Unobserved = len(g.Nodes) - g.Corroborated
+	g.PeerCount = len(gs.Peers)
+
+	// Stacked down the left margin. One peer today; the spacing holds for a
+	// handful without a layout pass, and if this ever needs more than that,
+	// the ecosystem will have changed enough to warrant redrawing it.
+	const px = 96.0
+	top := graphCY - float64(len(gs.Peers)-1)*70.0/2
+	for i, p := range gs.Peers {
+		y := top + float64(i)*70.0
+		width := 1.0 + math.Min(6.0, float64(p.Comparable)/2.0)
+		gp := graphPeer{
+			Name: p.Witness, Label: shortOrigin(p.Witness),
+			X: px, Y: y, R: 13,
+			LabelX: px, LabelY: y + 28,
+			Comparable: p.Comparable, Agreed: p.Agreed, Origins: p.Origins,
+			Divergent: p.Comparable > p.Agreed,
+			Width:     width,
+		}
+		gp.Title = fmt.Sprintf("%s — %d logs comparable, %d agreed",
+			p.Witness, p.Comparable, p.Agreed)
+		if gp.Divergent {
+			gp.Title += " — DISAGREEMENT"
+		}
+		g.Peers = append(g.Peers, gp)
+	}
+}
+
 func (s *Server) graphPage(w http.ResponseWriter, r *http.Request) {
 	v, err := s.buildStatus()
 	if err != nil {
@@ -774,6 +856,7 @@ func (s *Server) graphPage(w http.ResponseWriter, r *http.Request) {
 	}
 	g := layoutGraph(v.Groups, v.Now)
 	g.WitnessName = v.WitnessName
+	attachPeers(g, s.peerSummary(v), s.corroborated(v))
 	// A retired log is one with stored history that is no longer configured. It
 	// is not drawn, because it is not being witnessed and putting it on a
 	// liveness map would make the map claim something false — but it is counted

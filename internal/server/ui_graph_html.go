@@ -24,6 +24,15 @@ const graphPageHTML = `<!doctype html>
 .wedge.alt{opacity:.55}
 .arc{fill:none;stroke:var(--rule2);stroke-width:1.6}
 .ring{fill:none;stroke:var(--rule2);stroke-width:1;opacity:.85}
+/* A second observer. Drawn as a halo rather than a border so it reads as a
+   property of the log's situation, not of the log itself. */
+.corro{fill:none;stroke:var(--ok);stroke-width:2.5;opacity:.5}
+.peer{fill:var(--panel);stroke:var(--ok);stroke-width:2.5}
+.peer.bad{stroke:var(--bad)}
+.peeredge{stroke:var(--ok);opacity:.55;stroke-linecap:round}
+.peeredge.bad{stroke:var(--bad);opacity:.9}
+.peerlab{font-family:var(--sans);font-size:11px;font-weight:600;fill:var(--ink)}
+.peernum{font-family:var(--mono);font-size:9.5px;fill:var(--muted)}
 .ring.dash{stroke:var(--warn);stroke-dasharray:5 5;opacity:.85}
 .ringlab{font-family:var(--mono);font-size:10.5px;fill:var(--faint)}
 .ringlab.warn{fill:var(--warn)}
@@ -119,10 +128,28 @@ const graphPageHTML = `<!doctype html>
     <text class="hubsub" x="{{f .CX}}" y="{{f .CY}}" dy="66" text-anchor="middle">{{commai .TotalLogs}} LOGS · {{comma .TotalEntries}} ENTRIES</text>
   </g>
 
+  {{if .Peers}}
+  <g class="peers">
+    {{range .Peers}}
+    <line class="peeredge{{if .Divergent}} bad{{end}}" x1="{{f $.CX}}" y1="{{f $.CY}}"
+          x2="{{f .X}}" y2="{{f .Y}}" stroke-width="{{f .Width}}"/>
+    {{end}}
+    {{range .Peers}}
+    <a class="nd" href="/gossip" tabindex="0">
+      <title>{{.Title}}</title>
+      <circle class="peer{{if .Divergent}} bad{{end}}" cx="{{f .X}}" cy="{{f .Y}}" r="{{f .R}}"/>
+      <text class="peerlab" x="{{f .LabelX}}" y="{{f .LabelY}}" text-anchor="middle">{{.Label}}</text>
+      <text class="peernum" x="{{f .LabelX}}" y="{{f .LabelY}}" dy="14" text-anchor="middle">{{commai .Comparable}} comparable</text>
+    </a>
+    {{end}}
+  </g>
+  {{end}}
+
   <g>
   {{range .Nodes}}
     <a class="nd" href="{{.Href}}" tabindex="0">
       <title>{{.Title}}</title>
+      {{if .Corroborated}}<circle class="corro" cx="{{f .X}}" cy="{{f .Y}}" r="{{f .R}}"/>{{end}}
       {{if .Square}}<rect class="node{{if .Forked}} fork{{else if .Stale}} stale{{end}}" x="{{f .SX}}" y="{{f .SY}}" width="{{f .SD}}" height="{{f .SD}}" fill-opacity="{{f .FillOpacity}}"/>{{else}}<circle class="node{{if .Forked}} fork{{else if .Stale}} stale{{end}}" cx="{{f .X}}" cy="{{f .Y}}" r="{{f .R}}" fill-opacity="{{f .FillOpacity}}"/>{{end}}
       {{if .Ring}}<circle class="inner" cx="{{f .X}}" cy="{{f .Y}}" r="{{f .InnerR}}"/>{{end}}
       <text class="nlabel{{if .Forked}} fork{{else if .Stale}} stale{{end}}{{if not .Labelled}} hov{{end}}" x="{{f .LabelX}}" y="{{f .LabelY}}" text-anchor="{{.LabelAnchor}}">{{.Label}}{{if .Stale}} — {{.Age}}{{end}}</text>
@@ -147,6 +174,7 @@ const graphPageHTML = `<!doctype html>
   <div class="cell">
     <h4>Shape = tier</h4>
     <ul>
+      <li><svg width="20" height="20" viewBox="0 0 20 20"><circle class="corro" cx="10" cy="10" r="7"/></svg><b>halo</b> a second witness publishes a root</li>
       <li><svg width="20" height="20" viewBox="0 0 20 20"><circle class="node" cx="10" cy="10" r="7" fill-opacity=".32"/></svg><b>A</b> append-only</li>
       <li><svg width="20" height="20" viewBox="0 0 20 20"><circle class="node" cx="10" cy="10" r="7" fill-opacity=".5"/><circle class="inner" cx="10" cy="10" r="3"/></svg><b>A+</b> whole published history</li>
       <li><svg width="20" height="20" viewBox="0 0 20 20"><rect class="node" x="3.5" y="3.5" width="13" height="13" fill-opacity=".72"/></svg><b>B</b> construction audited</li>
@@ -180,6 +208,48 @@ const graphPageHTML = `<!doctype html>
   Distance is a measurement. Overlaps are resolved by sliding a dot sideways within its own wedge and
   never by pulling it in or out, so a dot that has drifted outward has drifted for exactly one reason.
 </p>
+
+<h2>Who else is looking</h2>
+<p class="sub">
+  A witness cannot catch a fork on its own. Its signature covers a checkpoint it fetched itself, so it
+  agrees with itself by construction; a log serving two histories simply attaches a different set of
+  cosignatures to each. Only a second party publishing a <em>root at the same size</em> can contradict it.
+</p>
+<div class="grid">
+  <div class="cell"><span class="v">{{commai .PeerCount}}</span><span class="k">peer witnesses polled</span></div>
+  <div class="cell"><span class="v">{{commai .Corroborated}}</span><span class="k">logs with a second observer</span></div>
+  <div class="cell{{if .Unobserved}} warn{{end}}"><span class="v">{{commai .Unobserved}}</span><span class="k">logs no one else is checking</span></div>
+</div>
+{{if .Unobserved}}
+<p class="note">
+  <strong>{{commai .Unobserved}} of {{commai .TotalLogs}} logs have no second observer.</strong> For those,
+  this witness's attestations are unfalsifiable — not because they are wrong, but because nothing exists
+  that could disagree with them. That is the shape of the ecosystem, not a defect of any operator: there
+  are many logs and very few witnesses, and the gap is what this project exists to narrow.
+</p>
+{{end}}
+{{if .Peers}}
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Peer witness</th><th class="n">Logs in common</th><th class="n">Comparable</th><th class="n">Agreed</th></tr></thead>
+  <tbody>
+  {{range .Peers}}
+    <tr>
+      <td class="origin">{{.Name}}</td>
+      <td class="n">{{commai .Origins}}</td>
+      <td class="n">{{commai .Comparable}}</td>
+      <td class="n">{{if .Divergent}}<span class="pill bad">{{commai .Agreed}}</span>{{else}}<span class="pill ok">{{commai .Agreed}}</span>{{end}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+<p class="note">
+  An edge on the map means those two witnesses could contradict each other on that many logs — not that
+  they exchange anything. Nothing here observes witnesses talking to each other, and claiming otherwise
+  would be inventing a relationship out of a coincidence of coverage.
+</p>
+{{end}}
 
 <h2>Needs attention</h2>
 {{if .Flagged}}
