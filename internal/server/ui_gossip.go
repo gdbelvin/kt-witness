@@ -8,6 +8,7 @@ package server
 // reasonably conclude that split views are covered. They are not.
 
 import (
+	"github.com/gdbsecurity/kt-witness/internal/store"
 	"html/template"
 	"net/http"
 	"sort"
@@ -25,6 +26,12 @@ type gossipPeer struct {
 type gossipView struct {
 	WitnessName string
 	Peers       []gossipPeer
+
+	// Seen are names observed cosigning checkpoints that this witness cannot
+	// verify, because it holds no key for them. Listed as work to do, not as
+	// corroboration: until a key is fetched they prove nothing, and counting
+	// them as observers would flatter the one number that must not be.
+	Seen []store.SeenWitness
 
 	TotalLogs    int
 	SharedLogs   int
@@ -102,6 +109,9 @@ func (s *Server) peerSummary(v *statusView) *gossipView {
 		g.Peers = append(g.Peers, *gp)
 	}
 	sort.Slice(g.Peers, func(i, j int) bool { return g.Peers[i].Witness < g.Peers[j].Witness })
+	if seen, err := s.Store.SeenWitnesses(); err == nil {
+		g.Seen = seen
+	}
 	return g
 }
 

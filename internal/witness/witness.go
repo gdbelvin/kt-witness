@@ -276,6 +276,20 @@ func (w *Witness) observePeers(origin string, head *source.Head) {
 	if w.Peers == nil || len(head.Signed) == 0 {
 		return
 	}
+	// Names we cannot check, recorded before anything else. They are not
+	// evidence and are stored apart from attestations, but they are the only
+	// way a witness learns that somebody is cosigning beside it: the protocol
+	// distributes keys out of band, so a peer is invisible until its key is
+	// fetched by hand. Skipping them silently is what let this witness believe
+	// it had one peer while two others signed the same checkpoints.
+	if w.Store != nil {
+		for _, name := range w.Peers.Unverifiable(origin, head.Signed) {
+			if err := w.Store.RecordSeenWitness(name, origin, time.Now().UTC()); err != nil && w.Log != nil {
+				w.Log.Warn("recording an unverifiable cosignature name", "name", name, "err", err)
+			}
+		}
+	}
+
 	obs, err := w.Peers.Observe(origin, head.Signed)
 	if err != nil || len(obs) == 0 {
 		return

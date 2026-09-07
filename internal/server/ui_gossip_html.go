@@ -104,6 +104,35 @@ Only a view obtained independently can differ.</figcaption>
   status pages that do exist are unsigned. So this page reports leads, never findings.
 </div>
 
+{{if .Seen}}
+<h2>Seen cosigning, key not held</h2>
+<p class="sub">
+  Names on checkpoint signature lines this witness cannot verify. They are <strong>not</strong>
+  corroboration — anyone can append a line claiming any name, and an unverified signature says nothing
+  about who produced it. They are a list of keys worth going to find, because the witness protocol
+  distributes keys out of band and a peer stays invisible until somebody fetches one by hand.
+</p>
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Name</th><th class="n">Logs seen on</th><th>First seen</th></tr></thead>
+  <tbody>
+  {{range .Seen}}
+    <tr>
+      <td class="origin">{{.Name}}</td>
+      <td class="n"><span class="pill warn">{{len .Origins}}</span></td>
+      <td class="m">{{.First.Format "2006-01-02"}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+<p class="note">
+  Until a key is added to <code>peer_witnesses</code>, these witnesses cosign the same checkpoints as
+  this one and neither can contradict the other. That is not a gap in the ecosystem; it is a gap in
+  this configuration, and it is the kind that reads from the inside exactly like an empty ecosystem.
+</p>
+{{end}}
+
 <h2>Peers polled</h2>
 {{if .Peers}}
 <table>

@@ -41,10 +41,13 @@
 package cosig
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"filippo.io/torchwood"
@@ -100,6 +103,65 @@ func (v *Verifier) Names() []string {
 // Signatures from unknown witnesses, and lines that do not verify, are skipped
 // silently: a forged line costs an attacker nothing to add, so its presence is
 // not information. Only a line that verifies under a key we hold is evidence.
+// Unverifiable returns the names on a checkpoint's signature lines that this
+// witness cannot check, because it holds no key for them.
+//
+// These are NOT evidence and must never be treated as such: anyone can append a
+// line claiming any name, and a signature that does not verify says nothing
+// about who produced it. What the names are is a LEAD — the C2SP witness
+// protocol distributes keys out of band, so a witness cosigning beside you is
+// invisible until somebody goes and fetches its key.
+//
+// This exists because that invisibility was expensive. Observe skips unknown
+// signatures silently and correctly, and the effect was a witness reporting one
+// peer and concluding the ecosystem was empty, while two other witnesses were
+// cosigning the very checkpoints it was reading — one of them covering more
+// logs than the peer it did know about. A silent skip is the right handling for
+// evidence and the wrong handling for discovery.
+func (v *Verifier) Unverifiable(origin string, signedNote []byte) []string {
+	names := signatureNames(signedNote)
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		// The log signs its own checkpoint; that is not another witness.
+		if n == origin || n == "grease.invalid" {
+			continue
+		}
+		if _, known := v.byName[n]; known {
+			continue
+		}
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// signatureNames reads the names off a signed note's signature lines without
+// verifying anything.
+//
+// Hand-parsed rather than routed through note.Open because Open needs a
+// verifier that matches something before it will return a note at all, and the
+// whole point here is the signatures nothing matches.
+func signatureNames(signedNote []byte) []string {
+	// A signed note is: text, a blank line, then one "\u2014 name base64" line per
+	// signature. Find the last blank line and read what follows.
+	i := bytes.LastIndex(signedNote, []byte("\n\n"))
+	if i < 0 {
+		return nil
+	}
+	var out []string
+	for _, line := range bytes.Split(signedNote[i+2:], []byte("\n")) {
+		if !bytes.HasPrefix(line, []byte("\u2014 ")) {
+			continue
+		}
+		f := bytes.Fields(line)
+		if len(f) < 3 {
+			continue
+		}
+		out = append(out, string(f[1]))
+	}
+	return out
+}
+
 func (v *Verifier) Observe(origin string, signedNote []byte) ([]Observation, error) {
 	if len(v.byName) == 0 {
 		return nil, nil
@@ -117,7 +179,12 @@ func (v *Verifier) Observe(origin string, signedNote []byte) ([]Observation, err
 	n, err := note.Open(signedNote, verifiers)
 	if err != nil {
 		// No cosignature we can verify. Not a finding: the other witnesses may
-		// simply not watch this log.
+		// simply not watch this log — but see Unverifiable below, because the
+		// silence here is what hid three witnesses from us for months.
+		var ue *note.UnverifiedNoteError
+		if errors.As(err, &ue) && ue.Note != nil {
+			return nil, nil
+		}
 		return nil, nil
 	}
 

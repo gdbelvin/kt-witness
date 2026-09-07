@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"time"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -18,6 +20,19 @@ import (
 // signed, so neither party has to be taken at its word.
 
 var bucketPeers = []byte("peer_attestations")
+
+// bucketSeenWitnesses holds names observed on checkpoint signature lines that
+// this witness cannot verify, because it holds no key for them.
+//
+// Kept in a SEPARATE bucket from peer_attestations, and that separation is the
+// point. An attestation is evidence: a signature that verified under a key we
+// hold, which can contradict a log. A seen name is not evidence at all —
+// anyone can append a line claiming any name — it is a lead, a note that
+// somebody may be witnessing beside us and that their key is worth going to
+// find. Mixing the two would let an unsigned string inflate the count of
+// parties that could catch a fork, which is the one number here that must
+// never be flattered.
+var bucketSeenWitnesses = []byte("seen_witnesses")
 
 // PeerAttestation is what another witness said about a log at a given size.
 type PeerAttestation struct {
@@ -103,4 +118,67 @@ func (s *Store) PeerAttestations(origin string) ([]PeerAttestation, error) {
 		return nil, fmt.Errorf("store: peer attestations for %s: %w", origin, err)
 	}
 	return out, nil
+}
+
+// SeenWitness is a name observed cosigning a checkpoint, whose key we lack.
+type SeenWitness struct {
+	Name    string    `json:"name"`
+	Origins []string  `json:"origins"`
+	First   time.Time `json:"first_seen"`
+	Last    time.Time `json:"last_seen"`
+}
+
+// RecordSeenWitness notes that a name appeared on a checkpoint we could not
+// check it against. Idempotent; accumulates the logs it was seen on.
+func (s *Store) RecordSeenWitness(name, origin string, now time.Time) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists(bucketSeenWitnesses)
+		if err != nil {
+			return err
+		}
+		sw := SeenWitness{Name: name, First: now}
+		if raw := b.Get([]byte(name)); raw != nil {
+			_ = json.Unmarshal(raw, &sw)
+		}
+		sw.Name, sw.Last = name, now
+		if sw.First.IsZero() {
+			sw.First = now
+		}
+		found := false
+		for _, o := range sw.Origins {
+			if o == origin {
+				found = true
+				break
+			}
+		}
+		if !found {
+			sw.Origins = append(sw.Origins, origin)
+			sort.Strings(sw.Origins)
+		}
+		enc, err := json.Marshal(&sw)
+		if err != nil {
+			return err
+		}
+		return b.Put([]byte(name), enc)
+	})
+}
+
+// SeenWitnesses lists the names observed but unverifiable, most logs first.
+func (s *Store) SeenWitnesses() ([]SeenWitness, error) {
+	var out []SeenWitness
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketSeenWitnesses)
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(_, raw []byte) error {
+			var sw SeenWitness
+			if json.Unmarshal(raw, &sw) == nil {
+				out = append(out, sw)
+			}
+			return nil
+		})
+	})
+	sort.Slice(out, func(i, j int) bool { return len(out[i].Origins) > len(out[j].Origins) })
+	return out, err
 }
