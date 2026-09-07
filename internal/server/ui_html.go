@@ -51,7 +51,7 @@ const uiHTML = `<!doctype html>
   <table>
     <thead><tr>
       <th>Log</th><th class="n">Aged out</th><th class="n">Unreachable</th>
-      <th class="n">Published window</th><th>Watched since</th>
+      <th class="n">Window now</th><th class="n">Once reached</th>
     </tr></thead>
     <tbody>
     {{range .LostOrigins}}
@@ -60,18 +60,20 @@ const uiHTML = `<!doctype html>
         <td class="n">{{if .Expired}}<span class="pill warn">{{comma .Expired}}</span>{{else}}—{{end}}</td>
         <td class="n">{{if .Unreachable}}<span class="pill bad">{{comma .Unreachable}}</span>{{else}}—{{end}}</td>
         <td class="n">{{comma .WindowFrom}}–{{comma .WindowTo}}</td>
-        <td class="m">{{if .Since}}{{.Since}}{{else}}—{{end}}</td>
+        <td class="n">{{if .EverFrom}}{{comma .EverFrom}}{{else}}—{{end}}</td>
       </tr>
     {{end}}
     </tbody>
   </table>
   </div>
   <p class="note">
-    <strong>Aged out</strong> means the epoch was inside the operator's published window when this
-    witness first looked and has since fallen out of it. <strong>Unreachable</strong> means it is
-    still inside the window but does not serve — retried on a growing backoff, so a persistent count
-    is a real absence rather than a bad afternoon. Neither is evidence of misbehaviour, and both are
-    permanent.
+    <strong>Aged out</strong> is the distance between where the published window starts today and the
+    furthest back it is known to have reached. That figure does not depend on this witness having been
+    watching: each epoch is stamped with the retention floor in force when it was published, so the
+    oldest epoch still served states, in the operator's own words, how much has already gone.
+    <strong>Unreachable</strong> means an epoch is still inside the window but does not serve — retried
+    on a growing backoff, so a persistent count is a real absence rather than a bad afternoon. Neither
+    is evidence of misbehaviour, and both are permanent.
   </p>
   {{if .NoHistory}}
   <p class="note">

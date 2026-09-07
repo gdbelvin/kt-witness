@@ -197,8 +197,9 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "\nbeyond checking:\n")
 			for _, h := range hs {
 				if n := h.Expired(); n > 0 {
-					fmt.Fprintf(w, "  %s: %d epochs aged out of the published window since %s\n",
-						h.Origin, n, h.FirstSeen.Format("2006-01-02"))
+					fmt.Fprintf(w, "  %s: %d epochs aged out (published window now starts at %d; "+
+						"the operator's own epoch metadata shows it once reached back to %d)\n",
+						h.Origin, n, h.From, h.EverFrom)
 				}
 			}
 			fmt.Fprintf(w, "  (not misbehaviour, and not recoverable: the evidence is no longer served)\n")

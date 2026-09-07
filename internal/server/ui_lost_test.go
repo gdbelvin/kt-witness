@@ -36,13 +36,21 @@ func TestLostSectionAppearsOnlyWhenSomethingIsLost(t *testing.T) {
 		"236",             // the count itself
 		"proton.me/kt/v1", // which operator
 		"6,236",           // the window it now publishes
-		"1 Jun 2026",      // since when we have been able to tell
+		"6,000",           // how far back it is known to have reached
 		"signal.org/kt",   // publishes no construction evidence at all
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("lost section is missing %q", want)
 		}
 	}
+	// The claim must not be dated to when this witness started watching: the
+	// figure comes from the operator's own metadata and would be true whether
+	// or not anyone had been looking. Saying "since <date we arrived>" would
+	// read as 522 epochs having expired on our watch.
+	if strings.Contains(out, "Watched since") {
+		t.Error("expiry was attributed to this witness's observation window")
+	}
+
 	// It must not be phrased as misbehaviour. This is the distinction the whole
 	// section exists to draw, and getting it wrong would turn a retention policy
 	// into an accusation.
