@@ -11,6 +11,11 @@ services:
     # who listed the old key in their trust policy stops seeing us.
     volumes:
       - ./data:/data
+      # Construction audits performed on other hardware, mounted READ-ONLY from
+      # a directory the operator owns rather than into the container's own data
+      # volume. The witness must never be able to write to the file that raises
+      # its coverage — and the operator must be able to, without sudo.
+      - ./import:/import:ro
       # The config is mounted read-only from the repository rather than copied
       # into ./data. An earlier setup step copied it, and the copy silently
       # drifted: the repository grew from 10 logs to 77 while the container went

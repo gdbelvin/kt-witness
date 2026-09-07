@@ -115,6 +115,14 @@ type config struct {
 		// is down in the history. Equivocation detection is unaffected — that
 		// is tier A+ witnessing, which runs independently.
 		History bool `json:"history"`
+
+		// ImportResults names a JSONL file of construction audits performed
+		// elsewhere — see internal/audit/import.go. A file rather than an
+		// endpoint on purpose: coverage is what this witness publishes, so
+		// accepting conclusions over the network would let anything that can
+		// reach the port inflate our own claims. A path in the config carries
+		// exactly the trust of the config.
+		ImportResults string `json:"import_results"`
 	} `json:"proton_audit"`
 
 	Audit struct {
@@ -1311,6 +1319,42 @@ func startProtonAudit(ctx context.Context, cfg *config, sources []source.Source,
 			ShardDepth: cfg.ProtonAudit.ShardDepth, MinFreeBytes: cfg.ProtonAudit.MinFreeBytes,
 		}
 		go runProtonLoop(ctx, h, db, origin, true, "history", log)
+	}
+
+	// Construction audits performed on other hardware, taken in from a file the
+	// operator placed. On a timer rather than once at startup, because the
+	// offline run appends for hours and coverage should follow it rather than
+	// wait for a restart.
+	if p := cfg.ProtonAudit.ImportResults; p != "" {
+		go runImportLoop(ctx, db, origin, p, log)
+	}
+}
+
+// runImportLoop ingests an offline backfill's results as they appear.
+func runImportLoop(ctx context.Context, db *store.Store, origin, path string, log *slog.Logger) {
+	log = log.With("import", path, "origin", origin)
+	t := time.NewTicker(10 * time.Minute)
+	defer t.Stop()
+	for {
+		st, err := audit.ImportResults(db, origin, path, log)
+		switch {
+		case os.IsNotExist(err):
+			// Not an error worth shouting about: the file appears when a run
+			// has produced something.
+			log.Debug("no imported results yet")
+		case err != nil:
+			log.Warn("importing offline audits", "err", err)
+		case st.Imported > 0 || st.Rejected > 0 || st.Failures > 0:
+			log.Info("imported offline construction audits",
+				"read", st.Read, "imported", st.Imported, "skipped", st.Skipped,
+				"rejected", st.Rejected, "failed_audits", st.Failures,
+				"gpu_disagreements", st.Mismatch, "through_epoch", st.LastEpoch)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
 	}
 }
 

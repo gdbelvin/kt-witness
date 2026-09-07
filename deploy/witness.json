@@ -14,7 +14,8 @@
   "export_dir": "/data/public",
   "proton_audit": {
     "dir": "/data/proton-tree",
-    "history": true
+    "history": true,
+    "import_results": "/import/proton-backfill.jsonl"
   },
   "poll_interval": "60s",
   "max_sign_delay": "120s",

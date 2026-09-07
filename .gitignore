@@ -27,3 +27,7 @@ rust/**/target/
 # so. deploy/tailscale/serve.json is config and stays tracked; this is not.
 /data/
 .build-info
+
+# Offline audit results, mirrored in from the GPU host. Data, not source.
+/import/
+.backfill-mirror/
