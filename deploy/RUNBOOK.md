@@ -69,27 +69,48 @@ inbound ports, and keeps the home address out of public DNS.
 ### What only you can do
 
 1. **Delegate only `kt.gdbsecurity.com` to Cloudflare.** The parent zone does
-   not move: the website, email and everything else stay on Squarespace DNS.
+   not move: the website, email and everything else stay where they are.
 
-   Cloudflare subdomain zones work on the Free plan, and Squarespace supports NS
-   records, so the delegated subtree can be exactly the namespace the witness
-   already lives in and nothing else.
+   **The parent zone is on Google Cloud DNS, not Squarespace.** An earlier
+   version of this runbook said Squarespace and would have sent you to the wrong
+   control panel. Verified:
+
+   ```sh
+   dig +short SOA gdbsecurity.com
+   # ns-cloud-a1.googledomains.com. cloud-dns-hostmaster.google.com. ...
+   ```
+
+   `ns-cloud-*` is Google **Cloud DNS**, managed in the GCP console under
+   Network Services → Cloud DNS, not in a domain registrar's panel.
 
    - In Cloudflare, add **`kt.gdbsecurity.com`** as a new zone — not
-     `gdbsecurity.com`. It is issued its own nameservers, which are *not* the
-     parent zone's.
-   - At Squarespace → DNS Settings → Custom Records, add **NS** records for host
-     `kt` pointing at them.
+     `gdbsecurity.com`. Cloudflare supports subdomain zones on the Free plan and
+     issues the new zone its own nameservers, which are *not* the parent's.
+   - In Google Cloud DNS, open the `gdbsecurity.com` zone and add **one NS
+     record set** for the name `kt`, containing **every** nameserver Cloudflare
+     issued. Console: *Add standard* → Resource record type **NS** → DNS name
+     `kt` → one nameserver per line.
 
-   Squarespace issues **four** nameserver values and every one needs its own
-   record. A delegation with one missing looks complete in their interface and
-   does not resolve, which is a tedious thing to debug from the symptom.
+     Or from the CLI, which is less error-prone because it takes all the values
+     in one command:
+
+     ```sh
+     gcloud dns record-sets create kt.gdbsecurity.com. \
+       --zone=<ZONE_NAME> --type=NS --ttl=3600 \
+       --rrdatas="ns1.example.ns.cloudflare.com.,ns2.example.ns.cloudflare.com."
+     ```
+
+     Cloudflare issues **two** nameservers for a zone and both are required. A
+     delegation missing one looks complete in the interface and resolves
+     intermittently, which is a tedious thing to debug from the symptom.
 
    Confirm the delegation before going further, since everything after this
-   depends on it:
+   depends on it. Allow for the parent's TTL — the zone's SOA minimum is 300s,
+   so this should be quick, but a stale resolver cache can outlast it:
 
    ```sh
    dig +short NS kt.gdbsecurity.com          # expect the Cloudflare nameservers
+   dig +short NS kt.gdbsecurity.com @8.8.8.8 # and from a resolver that is not yours
    ```
 
 2. **Authenticate and create the tunnel** — interactive, once:
@@ -142,8 +163,9 @@ curl -sS https://witness.kt.gdbsecurity.com/<origin-hash>/checkpoint
 `deploy/caddy/witness.caddy` serves the same site from the Caddy already running
 on this host, with a Let's Encrypt certificate via HTTP-01 and nobody in the
 delivery path. It needs a stable address and inbound 80/443, so it is the right
-answer only if those change. HTTP-01 rather than DNS-01 because Squarespace has
-no DNS API, and a certificate that renews only when someone remembers is a
+answer only if those change. HTTP-01 rather than DNS-01 mainly for simplicity —
+the parent zone is on Google Cloud DNS, which does have an API, so DNS-01 is
+possible if a wildcard is ever wanted, and a certificate that renews only when someone remembers is a
 certificate that expires.
 
 ### If it goes wrong
