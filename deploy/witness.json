@@ -5,7 +5,9 @@
   "db": "/data/witness.db",
   "key_file": "/data/witness.key",
   "peer_witnesses": [
-    "witness.stagemole.eu+67f7aea0+BEqSG3yu9YrmcM3BHvQYTxwFj3uSWakQepafafpUqklv"
+    "witness.stagemole.eu+67f7aea0+BEqSG3yu9YrmcM3BHvQYTxwFj3uSWakQepafafpUqklv",
+    "witness.glasklar.is+90ad80e6+BLIQbbkGXsl/JeCcGIOSFnUabibY7YtB5IWlY9PRSYU2",
+    "tillitis.se/tillitis-witness-1+9246694a+BAdr6MnufqYJFvDfNgjJRddzAILss3dJ2tLJ7TOf6ncM"
   ],
   "peer_status_urls": {
     "witness.stagemole.eu": "https://witness.stagemole.eu/",
