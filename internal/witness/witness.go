@@ -273,6 +273,18 @@ func (w *Witness) fork(fe *source.ForkError) error {
 // strength of a signature it merely relayed is a step too far without a human
 // reading the two attestations. They are both persisted so that a human can.
 func (w *Witness) observePeers(origin string, head *source.Head) {
+	// Cosigners the source reported directly, in whatever encoding its log
+	// uses. Recorded before the note-format path, and independently of it,
+	// because a log that serves cosignatures outside the note format would
+	// otherwise contribute nothing here no matter how many witnesses it has.
+	if w.Store != nil {
+		for _, name := range head.Cosigners {
+			if err := w.Store.RecordSeenWitness(name, origin, time.Now().UTC()); err != nil && w.Log != nil {
+				w.Log.Warn("recording a reported cosigner", "name", name, "err", err)
+			}
+		}
+	}
+
 	if w.Peers == nil || len(head.Signed) == 0 {
 		return
 	}

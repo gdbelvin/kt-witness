@@ -12,6 +12,7 @@ import (
 	"html/template"
 	"net/http"
 	"sort"
+	"strings"
 )
 
 type gossipPeer struct {
@@ -27,11 +28,19 @@ type gossipView struct {
 	WitnessName string
 	Peers       []gossipPeer
 
-	// Seen are names observed cosigning checkpoints that this witness cannot
-	// verify, because it holds no key for them. Listed as work to do, not as
-	// corroboration: until a key is fetched they prove nothing, and counting
-	// them as observers would flatter the one number that must not be.
-	Seen []store.SeenWitness
+	// Seen are cosigners observed on checkpoints that this witness cannot
+	// verify. Listed as work to do, not as corroboration: until a key is
+	// fetched they prove nothing, and counting them as observers would flatter
+	// the one number that must not be.
+	//
+	// Split in two because they are different problems. A NAMED cosigner is
+	// somebody whose key can be gone and fetched — an errand. An anonymous one,
+	// identified only by key hash because its log publishes no name, cannot be
+	// looked up by anybody: sigsum's production log carries cosignatures whose
+	// operators are not identifiable from any public source. A quorum you
+	// cannot enumerate is not the same as a quorum that is not there.
+	Seen      []store.SeenWitness
+	Anonymous []store.SeenWitness
 
 	TotalLogs    int
 	SharedLogs   int
@@ -110,7 +119,13 @@ func (s *Server) peerSummary(v *statusView) *gossipView {
 	}
 	sort.Slice(g.Peers, func(i, j int) bool { return g.Peers[i].Witness < g.Peers[j].Witness })
 	if seen, err := s.Store.SeenWitnesses(); err == nil {
-		g.Seen = seen
+		for _, sw := range seen {
+			if strings.HasPrefix(sw.Name, "keyhash:") {
+				g.Anonymous = append(g.Anonymous, sw)
+			} else {
+				g.Seen = append(g.Seen, sw)
+			}
+		}
 	}
 	return g
 }

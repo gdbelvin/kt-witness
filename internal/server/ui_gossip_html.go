@@ -133,6 +133,35 @@ Only a view obtained independently can differ.</figcaption>
 </p>
 {{end}}
 
+{{if .Anonymous}}
+<h2>Cosigning, and unidentifiable</h2>
+<p class="sub">
+  Cosignatures whose log publishes only a key hash, not a name. These are not keys we have failed to
+  fetch — there is nowhere to fetch them from. Nobody outside the log operator can say who they are.
+</p>
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Key hash</th><th class="n">Logs seen on</th><th>First seen</th></tr></thead>
+  <tbody>
+  {{range .Anonymous}}
+    <tr>
+      <td class="origin">{{.Name}}</td>
+      <td class="n"><span class="pill warn">{{len .Origins}}</span></td>
+      <td class="m">{{.First.Format "2006-01-02"}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+<p class="note">
+  This is worth separating from the list above, because the two are different problems wearing the
+  same clothes. A named witness we cannot verify is an errand: go and find the key. An anonymous one
+  cannot be resolved by any amount of diligence, and it means a log's witness set is unenumerable
+  from outside — which looks like diversity while offering no way to check whether these signatures
+  come from many independent parties or from one party holding many keys.
+</p>
+{{end}}
+
 <h2>Peers polled</h2>
 {{if .Peers}}
 <table>

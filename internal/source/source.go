@@ -86,6 +86,23 @@ type Head struct {
 	Signed []byte
 	Note   *note.Note
 
+	// Cosigners identifies every other party observed to have countersigned
+	// this head, whether or not this witness can verify them.
+	//
+	// It exists because not every log serves cosignatures in the note format.
+	// Sigsum publishes them in its own tree-head encoding, keyed by key hash
+	// rather than by name, and the adapter that parses them was dropping them
+	// on the floor: it synthesises a note carrying only the log's own
+	// signature, so twelve witnesses cosigning seasalp were invisible to
+	// everything downstream. A witness that cannot see who else is watching
+	// reports an empty ecosystem and believes it.
+	//
+	// Entries are names where a name exists, and "keyhash:<hex>" where the
+	// format only carries a hash. An unidentifiable cosigner is still worth
+	// counting — a quorum you cannot enumerate is a different problem from a
+	// quorum that is not there, and only the first one looks like this.
+	Cosigners []string
+
 	FetchedAt time.Time
 }
 

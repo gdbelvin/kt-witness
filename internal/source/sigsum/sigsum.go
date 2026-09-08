@@ -53,6 +53,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -282,12 +283,23 @@ func (s *Source) Fetch(ctx context.Context, _ *source.Head) (*source.Head, error
 
 	var h tlog.Hash
 	copy(h[:], th.RootHash[:])
+	// The cosignatures the log attached, surfaced by key hash. They cannot be
+	// folded into the synthesised note — that format is keyed by name and
+	// sigsum's is keyed by hash — but dropping them entirely is how twelve
+	// witnesses on one log came to be invisible.
+	cosigners := make([]string, 0, len(th.Cosignatures))
+	for kh := range th.Cosignatures {
+		cosigners = append(cosigners, "keyhash:"+kh)
+	}
+	sort.Strings(cosigners)
+
 	return &source.Head{
 		Origin:    s.origin,
 		Size:      int64(th.Size),
 		Hash:      h,
 		Signed:    []byte(signed),
 		Note:      n,
+		Cosigners: cosigners,
 		FetchedAt: time.Now().UTC(),
 	}, nil
 }
