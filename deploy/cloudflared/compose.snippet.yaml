@@ -15,6 +15,16 @@ services:
     # published on.
     network_mode: host
 
+    # Run as the host user that owns the credentials.
+    #
+    # The image is distroless and runs as its own non-root user, which cannot
+    # read a 0600 file owned by somebody else — cloudflared reports that as
+    # "credentials file doesn't exist", which sends you looking for a missing
+    # file that is right there. The alternative was loosening the secret to
+    # 0644 inside a world-traversable directory, which is the wrong direction
+    # for the one file that authenticates this tunnel.
+    user: "1000:1000"
+
     volumes:
       - ./deploy/cloudflared/config.yml:/etc/cloudflared/config.yml:ro
       # Credentials go in a SUBdirectory. Mounting the secrets directory
