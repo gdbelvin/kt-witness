@@ -68,50 +68,41 @@ inbound ports, and keeps the home address out of public DNS.
 
 ### What only you can do
 
-1. **Delegate only `kt.gdbsecurity.com` to Cloudflare.** The parent zone does
-   not move: the website, email and everything else stay where they are.
+1. **DNS is already at Cloudflare — nothing to delegate.**
 
-   **The parent zone is on Google Cloud DNS, not Squarespace.** An earlier
-   version of this runbook said Squarespace and would have sent you to the wrong
-   control panel. Verified:
+   The whole of `gdbsecurity.com` now uses Cloudflare's nameservers:
 
    ```sh
-   dig +short SOA gdbsecurity.com
-   # ns-cloud-a1.googledomains.com. cloud-dns-hostmaster.google.com. ...
+   dig +short NS gdbsecurity.com
+   # jobs.ns.cloudflare.com.
+   # liv.ns.cloudflare.com.
    ```
 
-   `ns-cloud-*` is Google **Cloud DNS**, managed in the GCP console under
-   Network Services → Cloud DNS, not in a domain registrar's panel.
+   So `witness.kt.gdbsecurity.com` is simply a record in that zone, and
+   `cloudflared tunnel route dns` creates it directly. No NS records, no
+   subdomain zone, no parent to coordinate with.
 
-   - In Cloudflare, add **`kt.gdbsecurity.com`** as a new zone — not
-     `gdbsecurity.com`. Cloudflare supports subdomain zones on the Free plan and
-     issues the new zone its own nameservers, which are *not* the parent's.
-   - In Google Cloud DNS, open the `gdbsecurity.com` zone and add **one NS
-     record set** for the name `kt`, containing **every** nameserver Cloudflare
-     issued. Console: *Add standard* → Resource record type **NS** → DNS name
-     `kt` → one nameserver per line.
+   This section has been wrong twice and the history is worth keeping, because
+   both errors were the same shape — a stale belief about who hosts DNS, stated
+   confidently in a runbook and never re-checked. It first described delegating
+   a subdomain from **Squarespace**; the zone was actually on **Google Cloud
+   DNS**; and now the whole zone has moved to **Cloudflare**. Before following
+   any DNS instruction here, run the `dig` above. It takes two seconds and it is
+   the only thing in this section that cannot go stale.
 
-     Or from the CLI, which is less error-prone because it takes all the values
-     in one command:
-
-     ```sh
-     gcloud dns record-sets create kt.gdbsecurity.com. \
-       --zone=<ZONE_NAME> --type=NS --ttl=3600 \
-       --rrdatas="ns1.example.ns.cloudflare.com.,ns2.example.ns.cloudflare.com."
-     ```
-
-     Cloudflare issues **two** nameservers for a zone and both are required. A
-     delegation missing one looks complete in the interface and resolves
-     intermittently, which is a tedious thing to debug from the symptom.
-
-   Confirm the delegation before going further, since everything after this
-   depends on it. Allow for the parent's TTL — the zone's SOA minimum is 300s,
-   so this should be quick, but a stale resolver cache can outlast it:
+   **What moving the whole zone cost, and what to verify after any such move.**
+   The original design delegated only `kt.` precisely so the website and email
+   would not depend on the change. They now do. Both survived — confirmed —
+   but this is the check to run, not to assume:
 
    ```sh
-   dig +short NS kt.gdbsecurity.com          # expect the Cloudflare nameservers
-   dig +short NS kt.gdbsecurity.com @8.8.8.8 # and from a resolver that is not yours
+   dig +short MX gdbsecurity.com @1.1.1.1   # expect the Google Workspace MX set
+   dig +short A  gdbsecurity.com @1.1.1.1   # expect the site to still resolve
    ```
+
+   An MX record dropped in a nameserver migration does not fail loudly. Mail
+   simply stops arriving, and the first evidence is somebody mentioning that
+   they never got a reply.
 
 2. **Authenticate and create the tunnel** — interactive, once:
 
