@@ -30,13 +30,15 @@
 #
 # ── Placeholders ─────────────────────────────────────────────────────────────
 #
-# TUNNEL_UUID is printed by `cloudflared tunnel create kt-witness`. The
+# c9718b0f-32b0-4bd3-93ec-3f5451b1a3bc is printed by `cloudflared tunnel create kt-witness`. The
 # credentials file it writes is a secret: it authenticates this tunnel to
 # Cloudflare. Keep it out of the repository — .gitignore already covers *.json
 # under this directory.
 
-tunnel: TUNNEL_UUID
-credentials-file: /etc/cloudflared/TUNNEL_UUID.json
+tunnel: c9718b0f-32b0-4bd3-93ec-3f5451b1a3bc
+# Mounted at creds/ rather than directly in /etc/cloudflared, because a
+# directory mounted over that path would shadow this very file.
+credentials-file: /etc/cloudflared/creds/c9718b0f-32b0-4bd3-93ec-3f5451b1a3bc.json
 
 # Keep the connection warm across the dynamic address changes this exists for.
 protocol: quic
