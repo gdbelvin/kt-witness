@@ -88,3 +88,42 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: ["tunnel", "--config", "/etc/cloudflared/config.yml", "run"]
+
+    # The witness listens on the host, and the tunnel dials it over the host's
+    # loopback rather than the Docker network: the ingress rule names
+    # 127.0.0.1:8088, and that has to mean the same interface the witness is
+    # published on.
+    network_mode: host
+
+    # Run as the host user that owns the credentials.
+    #
+    # The image is distroless and runs as its own non-root user, which cannot
+    # read a 0600 file owned by somebody else — cloudflared reports that as
+    # "credentials file doesn't exist", which sends you looking for a missing
+    # file that is right there. The alternative was loosening the secret to
+    # 0644 inside a world-traversable directory, which is the wrong direction
+    # for the one file that authenticates this tunnel.
+    user: "1000:1000"
+
+    volumes:
+      - ./deploy/cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+      # Credentials go in a SUBdirectory. Mounting the secrets directory
+      # directly onto /etc/cloudflared would shadow the config file mounted
+      # above it — two mounts claiming the same path, where the one that wins
+      # depends on Docker's ordering rather than on anything stated here.
+      #
+      # The credentials authenticate this tunnel to Cloudflare. Read-only, and
+      # .gitignore covers /secrets/ — keep it that way.
+      - ./secrets/cloudflared:/etc/cloudflared/creds:ro
+
+    depends_on:
+      - kt-witness
+
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
