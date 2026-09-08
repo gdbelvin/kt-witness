@@ -46,7 +46,18 @@ retries: 5
 grace-period: 30s
 
 ingress:
-  - hostname: witness.kt.gdbsecurity.com
+  # One label, not two.
+  #
+  # This was witness.kt.gdbsecurity.com, and Cloudflare's free Universal SSL
+  # covers gdbsecurity.com and *.gdbsecurity.com — a single label. It has no
+  # certificate for a two-label name and aborts the TLS handshake before DNS,
+  # the tunnel or the origin matter at all. HTTP worked throughout, which made
+  # the failure look like a tunnel problem rather than a certificate one.
+  #
+  # The alternatives were a separate kt.gdbsecurity.com zone, where the name
+  # would be first-level again, or Advanced Certificate Manager. Renaming was
+  # free and simpler — but only because nothing had been published yet.
+  - hostname: witness.gdbsecurity.com
     service: http://127.0.0.1:8088
     originRequest:
       # The monitoring endpoint is fetched by other witnesses and by C2SP
@@ -54,7 +65,7 @@ ingress:
       # Nothing here should buffer or rewrite it.
       connectTimeout: 10s
       noTLSVerify: false
-      httpHostHeader: witness.kt.gdbsecurity.com
+      httpHostHeader: witness.gdbsecurity.com
 
   # Anything else reaching this tunnel is not ours to answer.
   - service: http_status:404

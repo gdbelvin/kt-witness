@@ -1,5 +1,5 @@
 {
-  "name": "witness.kt.gdbsecurity.com",
+  "name": "witness.gdbsecurity.com",
   "listen": ":8080",
   "pprof_listen": "0.0.0.0:6060",
   "db": "/data/witness.db",

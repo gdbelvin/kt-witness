@@ -21,13 +21,13 @@
 # one.
 #
 # The alternative, if inbound ports are ever unavailable, is acme-dns: a one-off
-# CNAME from _acme-challenge.witness.kt.gdbsecurity.com to a service that does
+# CNAME from _acme-challenge.witness.gdbsecurity.com to a service that does
 # have an API. That keeps automation without moving the zone. It is more moving
 # parts, so it is the fallback rather than the plan.
 #
 # ── What has to be true first ─────────────────────────────────────────────────
 #
-#  1. A record: witness.kt.gdbsecurity.com -> the site's public IP.
+#  1. A record: witness.gdbsecurity.com -> the site's public IP.
 #     Residential addresses move. If this one is not static, point the record at
 #     a dynamic-DNS name instead, or the witness silently becomes unreachable
 #     and its cosignatures stop being fetchable — which looks, from outside,
@@ -40,12 +40,12 @@
 # Verify both before reloading, because a name that does not resolve makes Caddy
 # retry issuance in a loop and bury the real error in noise:
 #
-#     dig +short witness.kt.gdbsecurity.com
-#     curl -sS -o /dev/null -w '%{http_code}\n' http://witness.kt.gdbsecurity.com/
+#     dig +short witness.gdbsecurity.com
+#     curl -sS -o /dev/null -w '%{http_code}\n' http://witness.gdbsecurity.com/
 #
 # ── The site ──────────────────────────────────────────────────────────────────
 
-witness.kt.gdbsecurity.com {
+witness.gdbsecurity.com {
 	# The monitoring endpoint is the product: other witnesses and C2SP tooling
 	# fetch cosigned checkpoints from here, so it is served to everyone,
 	# unauthenticated, exactly as the plain-text contract expects.
