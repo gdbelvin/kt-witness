@@ -24,20 +24,16 @@ services:
       # from the outside, which is what made it dangerous.
       - ./deploy/witness.json:/config/witness.json:ro
 
-    environment:
-      # Proton's tree rebuild is CPU-bound and does NOT go through the audit
-      # governor, so its share is set here rather than discovered.
-      #
-      # PROTON_TREE_WORKERS is gone with the local Proton replay.
-      #
-      # It governed how much of this machine a tree rebuild could take, and the
-      # answer was sixteen of thirty-two cores for roughly two hours of every
-      # four-hour epoch. The rebuild now runs beside a GPU that does it in sixty
-      # seconds, and this witness imports the verdict — so the whole question,
-      # and the tuning that went with it, no longer arises here. The AKD sweep
-      # gets the machine, which is the consumer that cannot be accelerated:
-      # Meta and WhatsApp publish proofs, not trees, and there is nothing to
-      # rebuild.
+    # No environment block: PROTON_TREE_WORKERS went with the local Proton
+    # replay.
+    #
+    # It governed how much of this machine a tree rebuild could take, and the
+    # answer was sixteen of thirty-two cores for roughly two hours of every
+    # four-hour epoch. The rebuild now runs beside a GPU that does it in sixty
+    # seconds and this witness imports the verdict, so the whole question — and
+    # the tuning that went with it — no longer arises here. The AKD sweep gets
+    # the machine, which is the consumer that cannot be accelerated: Meta and
+    # WhatsApp publish proofs, not trees, and there is nothing to rebuild.
 
     # Read the mounted config, not the copy under /data.
     # -backfill walks each log's published history and records the verified
