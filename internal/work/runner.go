@@ -53,10 +53,18 @@ type Runner struct {
 	// half-finished assignment sitting on a lease while the machine idled.
 	BeforeNext func(ctx context.Context) error
 
-	// Parallel is how many epochs to verify at once. Workers target N-2 CPUs:
-	// enough to use the machine, with two left so the host stays responsive and
-	// the runner's own bookkeeping is never the thing waiting for a core.
-	Parallel int
+	// Parallel reports how many epochs to verify at once, consulted once per
+	// assignment. Nil means N-2.
+	//
+	// A function rather than a number because the two hosts answer it
+	// differently. A laptop answers with a constant — N-2 of the cores it is
+	// allowed, which is what the operator asked for — and paces itself by not
+	// asking for more work. The witness cannot: it shares its box with live
+	// witnessing, which never yields, so its measured headroom sits at the
+	// floor and a fixed threshold gate would wait forever. It answers instead
+	// with what its governor says the machine can currently afford, and so
+	// works one epoch at a time when the box is busy and eight when it is not.
+	Parallel func() int
 
 	Name string
 	Idle time.Duration
@@ -69,6 +77,9 @@ type Runner struct {
 
 	send sync.Mutex
 }
+
+// Fixed is a constant answer to Parallel, for a host whose share does not move.
+func Fixed(n int) func() int { return func() int { return n } }
 
 // DefaultParallel is N-2 cores, floored at one.
 func DefaultParallel() int {
@@ -125,9 +136,12 @@ func (r *Runner) Run(ctx context.Context) error {
 }
 
 func (r *Runner) do(ctx context.Context, a Assignment, timeout time.Duration) {
-	par := r.Parallel
+	par := DefaultParallel()
+	if r.Parallel != nil {
+		par = r.Parallel()
+	}
 	if par < 1 {
-		par = DefaultParallel()
+		par = 1
 	}
 	if r.Log != nil {
 		r.Log.Info("assignment", "id", a.ID, "origin", a.Origin,

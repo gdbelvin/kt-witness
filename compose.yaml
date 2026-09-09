@@ -30,13 +30,6 @@ services:
     env_file:
       - ./secrets/work.env
 
-    # The work channel listens on the LAN address named in witness.json, so the
-    # container needs the host's network. It is deliberately NOT published
-    # through the tunnel: nothing outside this network has any business
-    # submitting verification results.
-    ports:
-      - "192.168.0.10:8090:8090"
-
     # No environment block: PROTON_TREE_WORKERS went with the local Proton
     # replay.
     #
@@ -60,11 +53,21 @@ services:
     tmpfs:
       - /tmp:size=1g
 
-    # Host port is configurable because 8080 is heavily contested — on the
+    # One ports list, because two keys in the same mapping is not a merge — YAML
+    # rejects the duplicate, and a parser that tolerates it silently keeps one
+    # and drops the other. Whichever lost, the symptom would have been a service
+    # that looked fine and was missing a listener.
+    #
+    # The host port is configurable because 8080 is heavily contested — on the
     # first host this was deployed to, hashtopolis already held it. The
     # container port stays 8080; only the outside changes.
+    #
+    # The work channel is bound to ONE LAN address rather than published
+    # broadly, and is deliberately not routed through the tunnel: nothing
+    # outside this network has any business submitting verification results.
     ports:
       - "${KT_WITNESS_PORT:-8080}:8080"
+      - "192.168.0.10:8090:8090"
 
     # One AKD verification peaks around 3.7 GB RSS. The limit is above that with
     # headroom, and deliberately not far above: exceeding it should kill the

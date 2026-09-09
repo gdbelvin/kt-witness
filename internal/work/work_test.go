@@ -194,3 +194,39 @@ func TestAPartlyReportedAssignmentStillReturnsToTheQueue(t *testing.T) {
 		t.Errorf("reclaimed %d..%d, want the whole range back", back.From, back.To)
 	}
 }
+
+// The give-up must survive the path results actually take.
+//
+// Results go through Accept before anything reschedules them, and an earlier
+// version cleared the attempt counter there unconditionally — so every failure
+// looked like the first, the give-up at maxAttempts was unreachable, and a
+// permanently-lost epoch would have been re-leased forever. A test that called
+// Reschedule directly could not see it; this one drives the real sequence.
+func TestRetriesTerminateAlongTheRealResultPath(t *testing.T) {
+	q := NewQueue(time.Minute)
+	now := time.Now()
+	q.now = func() time.Time { return now }
+	q.Add("m/kt", 7, 7)
+
+	var last bool
+	for i := 1; i <= maxAttempts; i++ {
+		now = now.Add(time.Hour) // past any backoff
+		a, err := q.Lease("w", nil)
+		if err != nil {
+			t.Fatalf("attempt %d: nothing to lease (%v)", i, err)
+		}
+		res := Result{AssignmentID: a.ID, Nonce: a.Nonce, Origin: a.Origin, Epoch: 7,
+			Err: "the operator no longer holds this epoch"}
+		if err := q.Accept(res); err != nil {
+			t.Fatalf("attempt %d: %v", i, err)
+		}
+		_, last = q.Reschedule(res.Origin, res.Epoch)
+	}
+	if last {
+		t.Errorf("still rescheduling after %d attempts; the give-up is unreachable", maxAttempts)
+	}
+	now = now.Add(time.Hour)
+	if _, err := q.Lease("w", nil); err != ErrNoWork {
+		t.Error("an epoch the queue gave up on came back around anyway")
+	}
+}

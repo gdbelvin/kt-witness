@@ -254,7 +254,7 @@ func (w *worker) run(ctx context.Context) error {
 	r := &work.Runner{
 		Name:     w.name,
 		Log:      w.log,
-		Parallel: par,
+		Parallel: work.Fixed(par),
 		// The governor's whole remaining job: decide when to ask for more.
 		//
 		// It asks whether the machine can support the parallelism this worker

@@ -218,6 +218,7 @@ func (q *Queue) Accept(r Result) error {
 	}
 	if q.now().After(a.Deadline) {
 		delete(q.leased, r.AssignmentID)
+		delete(q.reported, r.AssignmentID)
 		q.pending = append(q.pending, stripLease(a))
 		return ErrLeaseExpired
 	}
@@ -244,7 +245,16 @@ func (q *Queue) Accept(r Result) error {
 		delete(q.leased, r.AssignmentID)
 		delete(q.reported, r.AssignmentID)
 	}
-	delete(q.attempts, epochKey(r.Origin, r.Epoch))
+	if r.Err == "" {
+		// Clear the retry counter only on an answer that stuck.
+		//
+		// Clearing it unconditionally made the give-up unreachable: Accept runs
+		// before the caller reschedules, so every failure looked like the first
+		// one and a permanently-lost epoch would have been re-leased forever on
+		// a one-minute backoff — the queue busily re-discovering, at the
+		// ecosystem's expense, a fact it had already recorded.
+		delete(q.attempts, epochKey(r.Origin, r.Epoch))
+	}
 	return nil
 }
 

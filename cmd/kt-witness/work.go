@@ -11,6 +11,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/gdbsecurity/kt-witness/internal/audit"
 	"github.com/gdbsecurity/kt-witness/internal/pace"
 	"github.com/gdbsecurity/kt-witness/internal/store"
 	"github.com/gdbsecurity/kt-witness/internal/work"
@@ -81,9 +82,15 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 	// The witness's own verification, as ordinary participants on the same
 	// queue. Nothing here is privileged and nothing bypasses the lease: local
 	// work is just the worker with the shortest network path.
+	// The same derivation the sidecar pool uses, not a second guess at it.
+	//
+	// The config leaves sidecar_workers unset on purpose so the count follows
+	// the container's memory limit; a local constant here would have sized the
+	// local worker for four while the pool and the governor were sized for
+	// eight, and nothing in the logs would have said which number was in force.
 	local := cfg.Audit.SidecarWorkers
 	if local < 1 {
-		local = 4
+		local = audit.DefaultWorkers()
 	}
 	startLocalWorkers(ctx, cfg, db, q, gov, local, log)
 

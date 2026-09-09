@@ -21,7 +21,7 @@ func TestPacingGatesRequestsForWorkRatherThanEpochs(t *testing.T) {
 
 	r := &Runner{
 		Name:     "t",
-		Parallel: 2,
+		Parallel: Fixed(2),
 		BeforeNext: func(context.Context) error {
 			atomic.AddInt32(&asks, 1)
 			return nil
@@ -96,7 +96,7 @@ func TestAnUnavailableEpochIsReportedRatherThanDropped(t *testing.T) {
 
 	r := &Runner{
 		Name:     "t",
-		Parallel: 1,
+		Parallel: Fixed(1),
 		Verify: func(_ context.Context, _ string, e int64) (string, string, error) {
 			if e == 2 {
 				return "", "", errors.New("404 from the operator")
@@ -137,7 +137,7 @@ func TestEpochsWithinAnAssignmentRunInParallel(t *testing.T) {
 
 	r := &Runner{
 		Name:     "t",
-		Parallel: par,
+		Parallel: Fixed(par),
 		Verify: func(context.Context, string, int64) (string, string, error) {
 			n := atomic.AddInt32(&live, 1)
 			mu.Lock()
@@ -179,7 +179,7 @@ func TestWorkStopsAtTheLeaseDeadline(t *testing.T) {
 	var reported []Result
 	r := &Runner{
 		Name:     "t",
-		Parallel: 2,
+		Parallel: Fixed(2),
 		Verify:   func(context.Context, string, int64) (string, string, error) { return "aa", "aa", nil },
 		Report: func(_ context.Context, res Result) error {
 			mu.Lock()
@@ -196,5 +196,49 @@ func TestWorkStopsAtTheLeaseDeadline(t *testing.T) {
 	defer mu.Unlock()
 	if len(reported) != 0 {
 		t.Errorf("reported %d results past an expired lease", len(reported))
+	}
+}
+
+// Parallelism is asked fresh for each assignment, so a host whose share moves
+// can narrow without stopping. The witness answers with its governor's permits:
+// one epoch at a time while live witnessing has the box, more when it does not.
+func TestParallelismIsAskedPerAssignment(t *testing.T) {
+	width := int32(1)
+	var mu sync.Mutex
+	var peaks []int32
+	var live int32
+
+	r := &Runner{
+		Name:     "t",
+		Parallel: func() int { return int(atomic.LoadInt32(&width)) },
+		Verify: func(context.Context, string, int64) (string, string, error) {
+			n := atomic.AddInt32(&live, 1)
+			mu.Lock()
+			if len(peaks) > 0 && n > peaks[len(peaks)-1] {
+				peaks[len(peaks)-1] = n
+			}
+			mu.Unlock()
+			time.Sleep(5 * time.Millisecond)
+			atomic.AddInt32(&live, -1)
+			return "aa", "aa", nil
+		},
+		Report: func(context.Context, Result) error { return nil },
+	}
+
+	for _, w := range []int32{1, 4} {
+		atomic.StoreInt32(&width, w)
+		mu.Lock()
+		peaks = append(peaks, 0)
+		mu.Unlock()
+		r.do(context.Background(), Assignment{ID: "a", From: 1, To: 12}, time.Minute)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if peaks[0] != 1 {
+		t.Errorf("narrow assignment peaked at %d, want 1", peaks[0])
+	}
+	if peaks[1] < 2 {
+		t.Errorf("wide assignment peaked at %d; the new answer was not read", peaks[1])
 	}
 }

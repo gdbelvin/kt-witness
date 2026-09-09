@@ -34,24 +34,39 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 	bin := cfg.Audit.SidecarPath
 	name := "witness"
 	r := &work.Runner{
-		Name:     name,
-		Log:      log.With("worker", name),
-		Parallel: n,
+		Name: name,
+		Log:  log.With("worker", name),
+		// How much of this box to use, asked fresh for each range.
+		//
+		// The governor's permits are exactly this quantity — how many
+		// verifications the machine can currently afford — so the sweep runs
+		// one at a time when live witnessing has the box and up to n when it
+		// does not. A fixed n gated on "wait until there is room for n" was the
+		// tempting alternative and would have starved silently: live witnessing
+		// does not consult this governor and can hold the machine indefinitely,
+		// so permits sit at their floor and the gate would never open.
+		Parallel: func() int {
+			if g == nil {
+				return n
+			}
+			p := int(g.Permits())
+			switch {
+			case p < 1:
+				return 1
+			case p > n:
+				return n
+			}
+			return p
+		},
 		Next: func(ctx context.Context) (work.Assignment, error) {
 			return q.Lease(name, nil)
 		},
 		Verify: func(ctx context.Context, origin string, epoch int64) (string, string, error) {
 			return akdVerify(ctx, bin, origin, epoch)
 		},
-		// Ask for another range only when the box can support n at once.
-		//
-		// The witness shares its machine with live witnessing, which is the
-		// work that must never wait. Gating here rather than per epoch means a
-		// busy machine simply stops taking on new ranges, instead of holding a
-		// lease it has decided not to work.
-		BeforeNext: func(ctx context.Context) error {
-			return g.WaitForWork(ctx, float64(n))
-		},
+		// No request gate here, deliberately: the width above is this host's
+		// yielding, and a second brake that can never release would be one
+		// silent stall waiting to happen.
 		Report: func(ctx context.Context, res work.Result) error {
 			if err := q.Accept(res); err != nil {
 				return err
