@@ -2,6 +2,10 @@ package cpuload
 
 import (
 	"encoding/binary"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -88,11 +92,71 @@ func readSelfUsec(_ string) (uint64, bool) {
 	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &self); err != nil {
 		return 0, false
 	}
-	total := usec(self)
+	// SELF is this process, CHILDREN is the ones already reaped, and live() is
+	// the ones running right now.
+	//
+	// All three are needed, and the third is the one that matters. Every
+	// expensive thing happens in a sidecar that is still running, so
+	// SELF+CHILDREN reports a worker saturating a laptop as using almost
+	// nothing — and a governor computing "what is everyone ELSE using" from
+	// that attributes our own four hashing threads to the machine's owner, sees
+	// them as a busy laptop, and stops asking for work. Which is what it did:
+	// roughly half the time, throttled by its own load.
+	//
+	// The sum stays monotonic across a child exiting: its time moves out of
+	// live() and into CHILDREN in the same step.
+	total := usec(self) + liveChildrenUsec()
 	if err := syscall.Getrusage(syscall.RUSAGE_CHILDREN, &kids); err == nil {
 		total += usec(kids)
 	}
 	return total, true
+}
+
+// liveChildrenUsec sums the CPU time of every running process in this process
+// group except this one.
+//
+// Shelling out to ps once per control interval, because the alternative is
+// proc_pid_rusage through cgo and a C toolchain in the build. Fifteen seconds
+// apart, the cost does not register against a machine doing proof replays.
+func liveChildrenUsec() uint64 {
+	self := os.Getpid()
+	pgid, err := syscall.Getpgid(self)
+	if err != nil {
+		return 0
+	}
+	out, err := exec.Command("ps", "-eo", "pid=,pgid=,time=").Output()
+	if err != nil {
+		return 0
+	}
+	var total uint64
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 3 {
+			continue
+		}
+		pid, err1 := strconv.Atoi(f[0])
+		pg, err2 := strconv.Atoi(f[1])
+		if err1 != nil || err2 != nil || pg != pgid || pid == self {
+			continue
+		}
+		total += parsePsTime(f[2])
+	}
+	return total
+}
+
+// parsePsTime reads ps's cumulative CPU time — [[HH:]MM:]SS[.ss] — in
+// microseconds. An unparseable field contributes nothing rather than a guess.
+func parsePsTime(s string) uint64 {
+	parts := strings.Split(s, ":")
+	var secs float64
+	for _, p := range parts {
+		v, err := strconv.ParseFloat(p, 64)
+		if err != nil {
+			return 0
+		}
+		secs = secs*60 + v
+	}
+	return uint64(secs * 1e6)
 }
 
 func usec(r syscall.Rusage) uint64 {
