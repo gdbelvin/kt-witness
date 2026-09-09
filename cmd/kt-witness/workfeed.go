@@ -82,34 +82,56 @@ func (f *feeder) topUp() {
 		byOrigin[h.Origin] = h
 	}
 
-	for _, origin := range f.origins {
-		h := byOrigin[origin]
-		if h == nil || h.To <= h.From {
-			continue
-		}
-		limit := h.To
-		at, seen := f.next[origin]
-		if !seen || at < h.From {
-			at = h.From
-		}
-		for at+feedChunk <= limit {
+	// One chunk per origin per pass, cycling, rather than filling from the
+	// first origin until the queue is full.
+	//
+	// The straightforward loop starved every origin but the first. It queued
+	// Meta until the depth limit and returned, and because the cursor is
+	// remembered, the next pass carried on with Meta — so WhatsApp ranges were
+	// never offered at all. A laptop that had declared only WhatsApp sat idle
+	// with a full queue in front of it, and nothing in either log said why:
+	// from the witness's side the queue was busy, and from the worker's side
+	// there was simply no work.
+	//
+	// Interleaving also means a worker that can only do one log is never more
+	// than a few chunks from something it can take.
+	for {
+		queued := 0
+		for _, origin := range f.origins {
 			if pending, leased = f.q.Stats(); pending+leased >= feedDepth {
-				f.next[origin] = at
 				return
 			}
-			to := at + feedChunk - 1
-			// A cheap probe rather than a full coverage count: scanning every
-			// audit record for an origin costs more than occasionally
-			// re-queueing a chunk somebody already did, and a duplicate
-			// overwrites itself.
-			if a, err := f.db.GetAudit(origin, at); err == nil && a != nil && a.Verified {
-				at = to + 1
+			h := byOrigin[origin]
+			if h == nil || h.To <= h.From {
 				continue
 			}
+			at, seen := f.next[origin]
+			if !seen || at < h.From {
+				at = h.From
+			}
+			// Skip forward over anything already verified. A cheap probe
+			// rather than a full coverage count: scanning every audit record
+			// for an origin costs more than occasionally re-queueing a chunk
+			// somebody already did, and a duplicate overwrites itself.
+			for at+feedChunk <= h.To {
+				if a, err := f.db.GetAudit(origin, at); err == nil && a != nil && a.Verified {
+					at += feedChunk
+					continue
+				}
+				break
+			}
+			if at+feedChunk > h.To {
+				f.next[origin] = at
+				continue // this origin has nothing left to offer this pass
+			}
+			to := at + feedChunk - 1
 			f.q.Add(origin, at, to)
 			f.log.Debug("queued work", "origin", origin, "from", at, "to", to)
-			at = to + 1
+			f.next[origin] = to + 1
+			queued++
 		}
-		f.next[origin] = at
+		if queued == 0 {
+			return // nothing anywhere is ready to be queued
+		}
 	}
 }
