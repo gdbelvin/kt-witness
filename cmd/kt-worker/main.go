@@ -33,10 +33,13 @@ import (
 	"syscall"
 	"time"
 
+	"fmt"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/gdbsecurity/kt-witness/internal/work"
 	pb "github.com/gdbsecurity/kt-witness/internal/workpb"
 )
 
@@ -147,12 +150,12 @@ type worker struct {
 	verified atomic.Int64
 }
 
-// run opens one session and works it until the stream ends.
+// run opens one session and works it with the same loop the witness runs.
 //
-// The session is bidirectional: assignments arrive as the witness frees them,
-// results go back as they are produced, and both directions share one
-// connection. A worker that vanishes is visible immediately — the stream closes
-// — rather than only when its lease ages out.
+// The assignment stream and the result stream are the two ends of one
+// bidirectional RPC; work.Runner does not know that. It asks for an assignment
+// and reports a verdict, and whether those cross a network or a function call
+// is the only difference between this worker and the ones inside the witness.
 func (w *worker) run(ctx context.Context) error {
 	creds := insecure.NewCredentials() // the channel is confined to this LAN
 	conn, err := grpc.NewClient(w.server, grpc.WithTransportCredentials(creds))
@@ -178,81 +181,70 @@ func (w *worker) run(ctx context.Context) error {
 	}
 	w.log.Info("session open", "server", w.server, "origins", w.origins)
 
-	// Acks arrive interleaved with assignments; read them off so the stream
-	// does not stall, and surface a refusal because a worker that is being
-	// refused should say so in its OWN log rather than only in the witness's.
-	for {
-		msg, err := stream.Recv()
-		if err != nil {
-			return err
-		}
-		switch m := msg.Msg.(type) {
-		case *pb.WitnessMessage_Assignment:
-			w.do(ctx, stream, m.Assignment)
-		case *pb.WitnessMessage_Ack:
-			if !m.Ack.Accepted {
-				w.log.Warn("result refused", "assignment", m.Ack.AssignmentId,
-					"epoch", m.Ack.Epoch, "reason", m.Ack.Reason)
-			}
-		}
-	}
-}
-
-// do works one assignment, streaming each verdict back as it is reached.
-//
-// Results go one at a time rather than in a batch at the end: an assignment can
-// take many minutes, and a witness that learns nothing until the last epoch
-// cannot tell a slow worker from a dead one.
-func (w *worker) do(ctx context.Context, stream pb.Work_SessionClient, a *pb.Assignment) {
-	deadline := time.Unix(a.DeadlineUnix, 0)
-	w.log.Info("assignment", "id", a.Id, "origin", a.Origin, "from", a.From, "to", a.To,
-		"lease", time.Until(deadline).Round(time.Second).String())
-
-	for e := a.From; e <= a.To; e++ {
-		if ctx.Err() != nil {
-			return
-		}
-		// Past the deadline the witness refuses whatever we send and the range
-		// may already belong to somebody else. Stopping is both the polite
-		// thing and the only useful one.
-		if time.Now().After(deadline) {
-			w.log.Warn("lease expired mid-assignment; stopping", "id", a.Id, "reached", e)
-			return
-		}
-		start := time.Now()
-		res := &pb.Result{
-			AssignmentId: a.Id, Nonce: a.Nonce, Origin: a.Origin,
-			Epoch: e, Worker: w.name,
-		}
-		switch v, ok := w.verifiers[a.Origin]; {
-		case w.dry:
-			res.Error = "dry run"
-		case !ok:
-			res.Error = "no verifier configured for " + a.Origin
-		default:
-			ec, cancel := context.WithTimeout(ctx, epochTimeout)
-			root, signed, err := v.verify(ec, a.Origin, e)
-			cancel()
+	// Assignments arrive on the stream; the runner consumes them from here.
+	// Acks are read in the same place and surfaced, because a worker that is
+	// being refused should say so in its OWN log rather than only the
+	// witness's.
+	assignments := make(chan work.Assignment, 4)
+	recvErr := make(chan error, 1)
+	go func() {
+		defer close(assignments)
+		for {
+			msg, err := stream.Recv()
 			if err != nil {
-				res.Error = err.Error()
-			} else {
-				res.Root, res.SignedRoot = root, signed
-				// The worker states what it computed and what the operator
-				// signed. It does not decide what a disagreement means: that is
-				// a claim about an operator's conduct, and it belongs to the
-				// witness, which re-runs the epoch before believing it.
-				res.Verified = root != "" && root == signed
+				recvErr <- err
+				return
+			}
+			switch m := msg.Msg.(type) {
+			case *pb.WitnessMessage_Assignment:
+				a := m.Assignment
+				assignments <- work.Assignment{
+					ID: a.Id, Origin: a.Origin, From: a.From, To: a.To,
+					Nonce: a.Nonce, Deadline: time.Unix(a.DeadlineUnix, 0),
+				}
+			case *pb.WitnessMessage_Ack:
+				if !m.Ack.Accepted {
+					w.log.Warn("result refused", "assignment", m.Ack.AssignmentId,
+						"epoch", m.Ack.Epoch, "reason", m.Ack.Reason)
+				}
 			}
 		}
-		res.DurationMs = time.Since(start).Milliseconds()
-		if res.Verified {
-			w.verified.Add(1)
-		}
-		if err := stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Result{Result: res}}); err != nil {
-			w.log.Warn("sending result", "epoch", e, "err", err)
-			return
-		}
+	}()
+
+	r := &work.Runner{
+		Name: w.name,
+		Log:  w.log,
+		Next: func(ctx context.Context) (work.Assignment, error) {
+			select {
+			case <-ctx.Done():
+				return work.Assignment{}, ctx.Err()
+			case a, ok := <-assignments:
+				if !ok {
+					return work.Assignment{}, <-recvErr
+				}
+				return a, nil
+			}
+		},
+		Verify: func(ctx context.Context, origin string, epoch int64) (string, string, error) {
+			v, ok := w.verifiers[origin]
+			if !ok {
+				return "", "", fmt.Errorf("no verifier configured for %s", origin)
+			}
+			return v.verify(ctx, origin, epoch)
+		},
+		Report: func(ctx context.Context, res work.Result) error {
+			if res.Verified {
+				w.verified.Add(1)
+			}
+			return stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Result{Result: &pb.Result{
+				AssignmentId: res.AssignmentID, Nonce: res.Nonce, Origin: res.Origin,
+				Epoch: res.Epoch, Verified: res.Verified, Root: res.Root,
+				SignedRoot: res.SignedRoot, Worker: res.Worker,
+				DurationMs: res.DurationMS, Error: res.Err,
+			}}})
+		},
 	}
+	return r.Run(ctx)
 }
 
 func hostname() string {

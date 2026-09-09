@@ -24,6 +24,19 @@ services:
       # from the outside, which is what made it dangerous.
       - ./deploy/witness.json:/config/witness.json:ro
 
+    # The work channel's shared token, from a file the operator owns rather
+    # than the compose file. A missing token closes the channel rather than
+    # opening it, so an unset variable here fails safe.
+    env_file:
+      - ./secrets/work.env
+
+    # The work channel listens on the LAN address named in witness.json, so the
+    # container needs the host's network. It is deliberately NOT published
+    # through the tunnel: nothing outside this network has any business
+    # submitting verification results.
+    ports:
+      - "192.168.0.10:8090:8090"
+
     # No environment block: PROTON_TREE_WORKERS went with the local Proton
     # replay.
     #

@@ -511,5 +511,10 @@
       "base_url": "https://log2025-1.rekor.sigstore.dev/api/v2",
       "vkey": "log2025-1.rekor.sigstore.dev+cf119915+AbfK5adZJxsI323FwGD2AJJ9F4i89cfDuLdGJBIYntuO"
     }
-  ]
+  ],
+  "work": {
+    "listen": "192.168.0.10:8090",
+    "token_env": "KT_WORK_TOKEN",
+    "lease": "20m"
+  }
 }

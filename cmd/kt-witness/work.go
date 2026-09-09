@@ -65,7 +65,29 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, log *sl
 			log.Error("work channel stopped", "err", err)
 		}
 	}()
+	// Feed it from the oldest unaudited epochs, which is the end this witness's
+	// own downward sweep is furthest from.
+	origins := cfg.Work.Origins
+	if len(origins) == 0 {
+		for _, l := range cfg.Logs {
+			if l.Type == "akd" {
+				origins = append(origins, l.Origin)
+			}
+		}
+	}
+	startWorkFeed(ctx, db, q, origins, log)
+
+	// The witness's own verification, as ordinary participants on the same
+	// queue. Nothing here is privileged and nothing bypasses the lease: local
+	// work is just the worker with the shortest network path.
+	local := cfg.Audit.SidecarWorkers
+	if local < 1 {
+		local = 4
+	}
+	startLocalWorkers(ctx, cfg, db, q, local, log)
+
 	log.Info("work channel listening", "addr", cfg.Work.Listen, "lease", lease.String(),
+		"origins", origins,
 		"note", "local network only; not published through the tunnel")
 
 	return srv.Workers, nil

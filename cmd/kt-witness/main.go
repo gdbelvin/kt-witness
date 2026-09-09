@@ -148,6 +148,12 @@ type config struct {
 		Listen   string `json:"listen"`
 		TokenEnv string `json:"token_env"`
 		Lease    string `json:"lease"`
+		// Origins workers may be given. Empty means every AKD log, which is
+		// the set that benefits: AKD replay is stateless, so any worker can do
+		// any epoch. Proton is deliberately not in the default, because its
+		// rebuild needs the previous epoch's tree and only the machine holding
+		// it can do the work.
+		Origins []string `json:"origins"`
 	} `json:"work"`
 
 	Audit struct {
