@@ -138,6 +138,18 @@ type config struct {
 		ImportResults string `json:"import_results"`
 	} `json:"proton_audit"`
 
+	// Work hands verification out to machines on the operator's own network.
+	//
+	// Disabled unless BOTH an address and a token are set. Two switches rather
+	// than one because each guards a different mistake: an address that is not
+	// local refuses to start, and a missing token closes the channel rather
+	// than opening it.
+	Work struct {
+		Listen   string `json:"listen"`
+		TokenEnv string `json:"token_env"`
+		Lease    string `json:"lease"`
+	} `json:"work"`
+
 	Audit struct {
 		SidecarPath string `json:"sidecar_path"`
 
@@ -673,11 +685,23 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 	if len(cfg.PeerStatusURLs) > 0 {
 		startPeerPolling(ctx, cfg.PeerStatusURLs, db, log)
 	}
+	var workers func() map[string]time.Time
+	if cfg.Work.Listen != "" {
+		w, err := startWorkChannel(ctx, cfg, db, log)
+		if err != nil {
+			// Refusing to start is the point. A work channel that silently did
+			// not come up would leave the witness looking healthy while the
+			// machines meant to be helping it sat idle.
+			log.Error("work channel", "err", err)
+			os.Exit(1)
+		}
+		workers = w
+	}
 	defer stop()
 
 	srv := &http.Server{
 		Addr: cfg.Listen,
-		Handler: (&server.Server{Store: db, VKey: vkey, Version: version, Commit: gitCommit, Built: buildDate, Tiers: tiers, Kinds: kinds,
+		Handler: (&server.Server{Store: db, VKey: vkey, Version: version, Commit: gitCommit, Built: buildDate, Workers: workers, Log: log, Tiers: tiers, Kinds: kinds,
 			Events:  events,
 			Storage: server.StoragePaths{DBPath: cfg.DB, ExportDir: cfg.ExportDir}}).Handler(),
 	}

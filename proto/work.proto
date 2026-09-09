@@ -1,0 +1,119 @@
+// The contract between a witness and the machines that verify for it.
+//
+// This file is the specification. Prose in a README is a poor protocol
+// definition for anything a third party might implement, and the point of this
+// channel is that other people's machines can join it.
+//
+// # What a worker is trusted with, which is almost nothing
+//
+// A worker reports that an epoch verified. It cannot be believed on that alone:
+// the operator's signed root is public, so a worker that did no work can still
+// report the correct answer. Everything below is shaped by that.
+//
+//   - Assignments carry a nonce that must be echoed, so a result answers one
+//     dispatch and an older honest result cannot be replayed as new work.
+//   - Results outside the assigned range are refused.
+//   - An expired lease returns its range to the queue with a FRESH nonce, so an
+//     abandoned worker's late reply cannot answer the reissue.
+//   - Nothing a worker says produces a misbehaviour finding. A disagreement
+//     means the witness re-runs the epoch itself, and its own answer decides.
+//
+// A hostile worker can waste dispatch and inflate a coverage figure until it is
+// spot-checked. It cannot make this witness accuse an operator.
+
+syntax = "proto3";
+
+package ktwitness.work.v1;
+
+option go_package = "github.com/gdbsecurity/kt-witness/internal/workpb;workpb";
+
+// Work is one long-lived bidirectional session per worker.
+//
+// Bidirectional rather than lease-and-submit because the witness should be able
+// to push a range the moment one becomes available, and because a worker that
+// disappears should be detectable by the stream closing rather than by a lease
+// quietly ageing out.
+service Work {
+  rpc Session(stream WorkerMessage) returns (stream WitnessMessage);
+}
+
+message WorkerMessage {
+  oneof msg {
+    Hello hello = 1;
+    Result result = 2;
+    Progress progress = 3;
+  }
+}
+
+message WitnessMessage {
+  oneof msg {
+    Assignment assignment = 1;
+    Ack ack = 2;
+  }
+}
+
+// Hello opens the session. It must be the first message.
+message Hello {
+  string name = 1;
+  // Origins this worker has a verifier for. A worker handed work it cannot do
+  // reports every epoch unavailable, which from the witness's side is
+  // indistinguishable from the log being down — so it is asked rather than
+  // assumed.
+  repeated string origins = 2;
+  // How many epochs it will work on at once. Advisory: it sizes assignments,
+  // and a worker that overstates it simply misses deadlines.
+  int32 parallel = 3;
+  // Free-text, for the operator's own benefit when something looks wrong.
+  string version = 4;
+  string platform = 5;
+}
+
+// Assignment is a contiguous range of epochs on one log.
+message Assignment {
+  string id = 1;
+  string origin = 2;
+  int64 from = 3;
+  int64 to = 4;
+  // Echoed in every result for this assignment.
+  string nonce = 5;
+  // Unix seconds. Past it the lease is void: results will be refused and the
+  // range may already belong to somebody else, so a worker should stop rather
+  // than finish.
+  int64 deadline_unix = 6;
+}
+
+message Result {
+  string assignment_id = 1;
+  string nonce = 2;
+  string origin = 3;
+  int64 epoch = 4;
+
+  bool verified = 5;
+  // What the worker computed, and what the operator signed. Both are sent
+  // because the witness decides what a disagreement means, and cannot do that
+  // from a boolean.
+  string root = 6;
+  string signed_root = 7;
+
+  string worker = 8;
+  int64 duration_ms = 9;
+  // Set when the epoch could not be verified. Not a finding: an epoch that
+  // could not be fetched is unavailable, not evidence of anything.
+  string error = 10;
+}
+
+// Progress lets a long assignment say it is still alive, so a slow worker is
+// distinguishable from a dead one before its lease expires.
+message Progress {
+  string assignment_id = 1;
+  int64 epoch = 2;
+}
+
+message Ack {
+  string assignment_id = 1;
+  int64 epoch = 2;
+  bool accepted = 3;
+  // Why not, when it was refused. Sent so a misbehaving or misconfigured worker
+  // can be diagnosed from its own logs rather than only from the witness's.
+  string reason = 4;
+}

@@ -22,25 +22,27 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
 	"flag"
-	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/gdbsecurity/kt-witness/internal/work"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+
+	pb "github.com/gdbsecurity/kt-witness/internal/workpb"
 )
+
+// version is stamped for the Hello message, so the witness's log says which
+// build of a worker is talking to it.
+const version = "0.1.0"
 
 func main() {
 	var (
@@ -79,12 +81,11 @@ func main() {
 	defer stop()
 
 	w := &worker{
-		server: strings.TrimRight(*server, "/"),
+		server: *server,
 		name:   *name,
 		token:  token,
 		dry:    *dry,
 		log:    log,
-		client: &http.Client{Timeout: 0}, // the assignment stream is long-lived
 	}
 	w.verifiers = map[string]verifier{}
 	if *akdBin != "" {
@@ -138,130 +139,120 @@ type worker struct {
 	origins             []string
 	dry                 bool
 	log                 *slog.Logger
-	client              *http.Client
 	// verifiers by origin. A worker declares only the origins it has a
 	// verifier for, so it is never handed work it would report as unavailable
 	// — which from the witness's side looks exactly like the log being down.
 	verifiers map[string]verifier
 
-	verified atomicInt64
+	verified atomic.Int64
 }
 
-// run holds the assignment stream open and works each one as it arrives.
+// run opens one session and works it until the stream ends.
+//
+// The session is bidirectional: assignments arrive as the witness frees them,
+// results go back as they are produced, and both directions share one
+// connection. A worker that vanishes is visible immediately — the stream closes
+// — rather than only when its lease ages out.
 func (w *worker) run(ctx context.Context) error {
-	q := url.Values{"name": {w.name}}
-	if len(w.origins) > 0 {
-		q.Set("origins", strings.Join(w.origins, ","))
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, w.server+"/work/stream?"+q.Encode(), nil)
+	creds := insecure.NewCredentials() // the channel is confined to this LAN
+	conn, err := grpc.NewClient(w.server, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+w.token)
-	resp, err := w.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("work stream: %s: %s", resp.Status, strings.TrimSpace(string(b)))
-	}
-	w.log.Info("connected to the work stream")
+	defer conn.Close()
 
-	sc := bufio.NewScanner(resp.Body)
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue // keepalive: the witness has nothing to hand out
-		}
-		var a work.Assignment
-		if err := json.Unmarshal([]byte(line), &a); err != nil {
-			w.log.Warn("unparseable assignment", "err", err)
-			continue
-		}
-		w.do(ctx, a)
+	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+w.token)
+	stream, err := pb.NewWorkClient(conn).Session(ctx)
+	if err != nil {
+		return err
 	}
-	return sc.Err()
+
+	if err := stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Hello{Hello: &pb.Hello{
+		Name:     w.name,
+		Origins:  w.origins,
+		Parallel: int32(runtime.GOMAXPROCS(0)),
+		Version:  version,
+		Platform: runtime.GOOS + "/" + runtime.GOARCH,
+	}}}); err != nil {
+		return err
+	}
+	w.log.Info("session open", "server", w.server, "origins", w.origins)
+
+	// Acks arrive interleaved with assignments; read them off so the stream
+	// does not stall, and surface a refusal because a worker that is being
+	// refused should say so in its OWN log rather than only in the witness's.
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+		switch m := msg.Msg.(type) {
+		case *pb.WitnessMessage_Assignment:
+			w.do(ctx, stream, m.Assignment)
+		case *pb.WitnessMessage_Ack:
+			if !m.Ack.Accepted {
+				w.log.Warn("result refused", "assignment", m.Ack.AssignmentId,
+					"epoch", m.Ack.Epoch, "reason", m.Ack.Reason)
+			}
+		}
+	}
 }
 
-// do works one assignment and streams its results back.
-func (w *worker) do(ctx context.Context, a work.Assignment) {
-	w.log.Info("assignment", "id", a.ID, "origin", a.Origin,
-		"from", a.From, "to", a.To, "deadline", time.Until(a.Deadline).Round(time.Second).String())
+// do works one assignment, streaming each verdict back as it is reached.
+//
+// Results go one at a time rather than in a batch at the end: an assignment can
+// take many minutes, and a witness that learns nothing until the last epoch
+// cannot tell a slow worker from a dead one.
+func (w *worker) do(ctx context.Context, stream pb.Work_SessionClient, a *pb.Assignment) {
+	deadline := time.Unix(a.DeadlineUnix, 0)
+	w.log.Info("assignment", "id", a.Id, "origin", a.Origin, "from", a.From, "to", a.To,
+		"lease", time.Until(deadline).Round(time.Second).String())
 
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
 	for e := a.From; e <= a.To; e++ {
 		if ctx.Err() != nil {
 			return
 		}
-		// Past the deadline the witness will refuse whatever we send, and the
-		// range has probably been handed to somebody else. Stopping is the
-		// polite thing and also the only useful one.
-		if time.Now().After(a.Deadline) {
-			w.log.Warn("lease expired mid-assignment; stopping", "id", a.ID, "reached", e)
-			break
+		// Past the deadline the witness refuses whatever we send and the range
+		// may already belong to somebody else. Stopping is both the polite
+		// thing and the only useful one.
+		if time.Now().After(deadline) {
+			w.log.Warn("lease expired mid-assignment; stopping", "id", a.Id, "reached", e)
+			return
 		}
 		start := time.Now()
-		res := work.Result{
-			AssignmentID: a.ID, Nonce: a.Nonce, Origin: a.Origin,
+		res := &pb.Result{
+			AssignmentId: a.Id, Nonce: a.Nonce, Origin: a.Origin,
 			Epoch: e, Worker: w.name,
 		}
 		switch v, ok := w.verifiers[a.Origin]; {
 		case w.dry:
-			res.Err = "dry run"
+			res.Error = "dry run"
 		case !ok:
-			res.Err = "no verifier configured for " + a.Origin
+			res.Error = "no verifier configured for " + a.Origin
 		default:
 			ec, cancel := context.WithTimeout(ctx, epochTimeout)
 			root, signed, err := v.verify(ec, a.Origin, e)
 			cancel()
-			switch {
-			case err != nil:
-				res.Err = err.Error()
-			default:
+			if err != nil {
+				res.Error = err.Error()
+			} else {
 				res.Root, res.SignedRoot = root, signed
 				// The worker states what it computed and what the operator
-				// signed. It does NOT decide what a mismatch means: that is a
-				// claim about an operator's conduct, and it belongs to the
-				// witness, which re-runs the epoch itself before believing it.
+				// signed. It does not decide what a disagreement means: that is
+				// a claim about an operator's conduct, and it belongs to the
+				// witness, which re-runs the epoch before believing it.
 				res.Verified = root != "" && root == signed
 			}
 		}
-		res.DurationMS = time.Since(start).Milliseconds()
+		res.DurationMs = time.Since(start).Milliseconds()
 		if res.Verified {
 			w.verified.Add(1)
 		}
-		enc.Encode(res)
+		if err := stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Result{Result: res}}); err != nil {
+			w.log.Warn("sending result", "epoch", e, "err", err)
+			return
+		}
 	}
-	if buf.Len() == 0 {
-		return
-	}
-	if err := w.report(ctx, &buf); err != nil {
-		w.log.Warn("reporting results", "id", a.ID, "err", err)
-	}
-}
-
-func (w *worker) report(ctx context.Context, body io.Reader) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.server+"/work/results", body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+w.token)
-	req.Header.Set("Content-Type", "application/x-ndjson")
-	resp, err := (&http.Client{Timeout: 2 * time.Minute}).Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(b)))
-	}
-	w.log.Info("reported", "response", strings.TrimSpace(string(b)))
-	return nil
 }
 
 func hostname() string {
@@ -271,11 +262,3 @@ func hostname() string {
 	}
 	return h
 }
-
-type atomicInt64 struct {
-	mu sync.Mutex
-	n  int64
-}
-
-func (a *atomicInt64) Add(n int64) { a.mu.Lock(); a.n += n; a.mu.Unlock() }
-func (a *atomicInt64) Load() int64 { a.mu.Lock(); defer a.mu.Unlock(); return a.n }
