@@ -178,6 +178,15 @@ type config struct {
 		ShadowVerify *bool `json:"shadow_verify"`
 		ShadowEvery  int   `json:"shadow_every"`
 
+		// CanaryEvery is how often a proof that just verified is corrupted and
+		// re-verified, to prove the verifier can still say no. 100 tests one
+		// epoch in a hundred; 0 means that default; negative disables it.
+		//
+		// There is no good reason to disable it. A verifier that has stopped
+		// checking looks exactly like one that is working, right up until it
+		// is asked to reject something.
+		CanaryEvery int `json:"canary_every"`
+
 		// ReserveCores is how many cores to leave free for everything else. The
 		// backlog sweep's budget is derived from the machine: it drives total
 		// usage toward (cores - reserve). Defaults to 1 when pacing is on.
@@ -618,13 +627,28 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		}
 		pool := audit.NewPool(cfg.Audit.SidecarPath, workers)
 		var sidecar audit.Verifier = pool
+
+		// A corrupted proof, one epoch in a hundred, that both verifiers must
+		// reject. This is the only check here that can tell a verifier from a
+		// rubber stamp: everything else asks it to agree with a valid proof,
+		// which a verifier that always says yes does perfectly.
+		//
+		// Inside the shadow rather than outside it, so the canary sees the
+		// retained proof before the shadow deletes it.
+		if cfg.Audit.CanaryEvery >= 0 {
+			pool.KeepProofs()
+			sidecar = &audit.Canary{Primary: pool, Log: log, Every: cfg.Audit.CanaryEvery}
+			log.Info("canary verification enabled",
+				"every", canaryEvery(cfg.Audit.CanaryEvery),
+				"note", "a corrupted proof that verifies means every verdict from that verifier is worthless")
+		}
 		if cfg.Audit.ShadowVerify == nil || *cfg.Audit.ShadowVerify {
 			// Ask the sidecar to keep what it downloads, so the shadow checks
 			// the same bytes rather than fetching them again. Without this it
 			// could only see epochs that happened to be in the prefetch cache,
 			// which was two in ten.
 			pool.KeepProofs()
-			sidecar = &audit.Shadow{Primary: pool, Log: log, Every: cfg.Audit.ShadowEvery}
+			sidecar = &audit.Shadow{Primary: sidecar, Log: log, Every: cfg.Audit.ShadowEvery}
 			log.Info("shadow verification enabled",
 				"note", "the Rust reference decides; the Go verifier is only observed",
 				"every", max(1, cfg.Audit.ShadowEvery))
@@ -1813,4 +1837,11 @@ func governorFor(a *audit.Auditor) *pace.Governor {
 		return nil
 	}
 	return a.Governor
+}
+
+func canaryEvery(n int) int {
+	if n <= 0 {
+		return 100
+	}
+	return n
 }
