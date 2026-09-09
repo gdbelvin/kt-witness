@@ -19,13 +19,9 @@ func background(_ bool) (string, int, error) {
 	return fmt.Sprintf("nice 19, %d of %d cores", n, runtime.NumCPU()), n, nil
 }
 
-// cpuBudget leaves two cores for the host, or half the machine on anything
-// small enough that two is most of it.
+// cpuBudget is N-2, the same rule as everywhere else.
 func cpuBudget() int {
 	n := runtime.NumCPU() - 2
-	if half := runtime.NumCPU() / 2; n > half && half >= 1 {
-		n = half
-	}
 	if n < 1 {
 		n = 1
 	}

@@ -442,33 +442,47 @@ Measured on an M-series laptop: one WhatsApp epoch is a 40 MB proof, 1.3 s to
 download and 1.45 s to verify. Meta's are far larger (~37 s an epoch on the
 witness), so a laptop on a home link is better pointed at WhatsApp.
 
-### How much of a Mac it takes
+### How much of a machine it takes
 
-**Every efficiency core plus two performance cores**, leaving two performance
-cores for whoever is using the machine — eight of ten logical CPUs on an
-M-series laptop. It says so at startup:
+**N-2 logical CPUs**, as a hard ceiling: `epochs × threads-per-epoch` never
+exceeds it. Eight of ten on an M-series laptop, and it says so at startup:
 
 ```
-scheduling="nice 10, 8 of 10 logical CPUs (6 efficiency + 2 performance, 2 left free)"
-cpu budget logical_cpus=8 epochs_at_once=3 threads_per_epoch=4
+scheduling="nice 10, 8 of 10 logical CPUs (N-2; this machine has 6 efficiency and 4 performance)"
+cpu budget logical_cpus=8 epochs_at_once=2 threads_per_epoch=4 threads_total=8
 ```
 
-Background QoS is **off**, deliberately. It is the strongest "never make this
+A ceiling, not an average — that distinction cost a laptop. Sizing
+parallelism from what an epoch was *measured* to cost (2.3 cores against a
+4-thread cap, because a proof spends real time arriving before there is
+anything to hash) gave three epochs at four threads: twelve threads on ten
+cores. The measurement was taken on one epoch running alone and does not
+survive concurrency, where one epoch's download overlaps another's hashing and
+every thread goes runnable at once. An average is the wrong shape for a
+promise about somebody's machine.
+
+Background QoS is **off** by default. It is the strongest "never make this
 laptop feel slow" macOS offers, but it is a *placement*, not a budget: it pins
-every thread to the efficiency cluster, so "and two performance cores" is
-unreachable while it is set. What replaces it is `nice 10` — which children
-inherit, and the sidecars are what actually burn the CPU — plus the arithmetic
-above. The trade is that nice no longer throttles disk I/O and no longer
-guarantees we stay off a performance core.
+every thread to the efficiency cluster. What replaces it is `nice 10` — which
+children inherit, and the sidecars are what burn the CPU — plus the ceiling.
+
+**Be plain about what that promises.** macOS has no affinity API, so the two
+CPUs held back are a count, not designated cores; the scheduler may still run
+our threads on performance cores, and nice is advisory. Two dials:
+
+```sh
+-cpus 4                    # set the total directly
+-efficiency-cores-only     # background QoS: efficiency cluster only, throttled
+                           # disk I/O. Uses less of an idle machine, and is the
+                           # only mode where placement is actually guaranteed.
+```
 
 **One epoch is not one core.** The sidecar builds a runtime sized from the
 machine and took 3.7 cores by itself, so counting epochs as cores overshoots
-nearly fourfold. `KT_AKD_THREADS` caps it, and the worker splits its budget
+nearly fourfold. `KT_AKD_THREADS` caps it, and the worker divides its budget
 into epochs × threads. Measured on WhatsApp epoch 1,000,000: uncapped 10.7 s
-CPU / 3.4 s wall; capped at four, 7.9 s / 3.5 s — same throughput, a quarter
-less CPU, and 2.3 cores rather than 4, because a proof spends real time
-arriving before there is anything to hash. Parallelism is sized from that
-measured cost, not from the cap.
+CPU / 3.4 s wall; capped at four, 7.9 s / 3.5 s — same throughput for a
+quarter less CPU.
 
 The governor then decides only *when to ask for more work*, and says so both
 ways in the log:

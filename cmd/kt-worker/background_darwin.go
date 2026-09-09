@@ -42,10 +42,10 @@ const (
 // — but it is the only setting under which a laptop genuinely does not feel
 // slower.
 //
-// The default is a budget instead: a nice level the sidecars inherit, and a
-// thread count that leaves two logical CPUs unused. Worth being plain about
-// what that does and does not promise — the OS may still run those threads on
-// performance cores, and nice is advisory. What is enforced is the count.
+// The default is a budget instead: a nice level the sidecars inherit, and N-2
+// logical CPUs' worth of threads. Worth being plain about what that does and
+// does not promise — the OS may still run those threads on performance cores,
+// and nice is advisory. What is enforced is the count.
 func background(eCoresOnly bool) (string, int, error) {
 	if eCoresOnly {
 		if err := syscall.Setpriority(prioDarwinProcess, 0, prioDarwinBG); err != nil {
@@ -64,35 +64,28 @@ func background(eCoresOnly bool) (string, int, error) {
 	}
 	n := cpuBudget()
 	runtime.GOMAXPROCS(n)
-	return fmt.Sprintf("nice 10, %d of %d logical CPUs (%d efficiency + %d performance, %d left free)",
-		n, runtime.NumCPU(), efficiencyCores(), n-efficiencyCores(),
-		runtime.NumCPU()-n), n, nil
+	return fmt.Sprintf("nice 10, %d of %d logical CPUs (N-2; this machine has %d efficiency and %d performance)",
+		n, runtime.NumCPU(), efficiencyCores(), performanceCores()), n, nil
 }
 
-// cpuBudget is every efficiency core plus two performance cores.
+// cpuBudget is N-2: every logical CPU but two.
 //
-// Stated that way rather than as "N-2" because on this machine they are not the
-// same number and the difference matters: 6 + 2 is eight of ten, and the two
-// held back are performance cores, which is what makes the laptop stay
-// responsive rather than merely idle.
+// It was briefly expressed as "every efficiency core plus two performance
+// cores", which on this laptop is the same eight of ten — but the cluster
+// arithmetic was carrying an implication it could not deliver. macOS has no
+// affinity API: the only way to choose which cores run something is the
+// background QoS class, and that is all-or-nothing (efficiency only). So a
+// budget built from cluster counts still ran wherever the scheduler liked, and
+// only the total was ever enforced. N-2 says exactly what is true.
+//
+// The two held back are logical CPUs, not designated cores. What that buys is
+// real anyway — the machine is never fully subscribed by this worker — and
+// -efficiency-cores-only is there for anyone who wants the placement guarantee
+// instead.
 func cpuBudget() int {
-	e := efficiencyCores()
-	p := performanceCores()
-
-	spare := 2 // performance cores left for whoever is using the machine
-	take := p - spare
-	if take < 0 {
-		take = 0
-	}
-	n := e + take
+	n := runtime.NumCPU() - 2
 	if n < 1 {
 		n = 1
-	}
-	// Never take the whole machine, whatever the cluster counts say — an Intel
-	// Mac reports no clusters, and a future one might report something this
-	// arithmetic did not anticipate.
-	if max := runtime.NumCPU() - 2; max >= 1 && n > max {
-		n = max
 	}
 	return n
 }
