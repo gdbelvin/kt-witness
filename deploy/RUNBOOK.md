@@ -423,12 +423,24 @@ unset variable fails safe, and the witness refuses to start the channel at all.
 ### Running a worker
 
 ```sh
-go build ./cmd/kt-worker
-export KT_WORK_TOKEN=...           # same value as secrets/work.env
-./kt-worker -server 192.168.0.10:18090 \
-            -akd-bin ./kt-akd-verify \
-            -akd-origins meta.messenger.kt/v1,whatsapp.kt/v2
+go build -o bin/kt-worker ./cmd/kt-worker
+(cd rust/kt-akd-verify && cargo build --release)
+
+set -a; . ./secrets/work.env; set +a          # KT_WORK_TOKEN
+./bin/kt-worker -server 192.168.0.10:18090 \
+  -akd-bin ./rust/kt-akd-verify/target/release/kt-akd-verify \
+  -akd-origins whatsapp.kt/v2 \
+  -name "$(hostname -s)"
 ```
+
+`-config` defaults to `deploy/witness.json` and is read for each log's public
+proof directory. The worker resolves each epoch itself from the operator's
+object listing — the key names both roots — so it checks the proof against
+what the log published rather than against anything the witness asserted.
+
+Measured on an M-series laptop: one WhatsApp epoch is a 40 MB proof, 1.3 s to
+download and 1.45 s to verify. Meta's are far larger (~37 s an epoch on the
+witness), so a laptop on a home link is better pointed at WhatsApp.
 
 On a Mac it puts itself in the background QoS class, which schedules it onto
 the efficiency cores, and caps `GOMAXPROCS` to the E-core count. It then works
@@ -447,6 +459,25 @@ the one it holds.
 | `epoch unavailable ... rescheduled=true` | A worker could not fetch it; the queue will hand it to someone else |
 | `epoch unavailable ... rescheduled=false` | Three attempts; the data is gone, and that is a finding, not an error |
 | `A WORKER REPORTS A CONSTRUCTION MISMATCH` | Recorded unverified. **This witness must re-run the epoch itself before any finding is made** |
+
+### Watching the fleet
+
+Workers report what they can currently do, every thirty seconds, and the
+dashboard's **The fleet** row graphs it:
+
+| Metric | |
+|---|---|
+| `kt_witness_worker_parallel{worker}` | Epochs it will run at once, right now |
+| `kt_witness_worker_cpus{worker}` | CPUs it may use — on a Mac in background QoS, its E-cores |
+| `kt_witness_worker_load_cores{worker}` | Load across its whole machine, as it measures it |
+| `kt_witness_worker_budget_cores{worker}` | The ceiling it holds itself to |
+| `kt_witness_worker_capacity_reported_unix{worker}` | Last report; stale means it stopped talking |
+
+A laptop's line dipping in the evening and recovering overnight is the
+governor working, not a fault. The witness's own worker reports through the
+same path, so it appears on the same graph — which is the point of the shared
+queue. All of it is advisory: nothing is checked, and a worker that lies about
+its capacity is lying to a dashboard.
 
 ### What a worker is trusted with, which is almost nothing
 
