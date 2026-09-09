@@ -40,6 +40,20 @@ type Runner struct {
 	Idle time.Duration
 	Log  *slog.Logger
 
+	// Acquire gates concurrency on THIS host, and is where a worker protects
+	// the machine it is borrowing.
+	//
+	// It belongs here rather than on the witness because the question is local:
+	// how much of this machine may a background job take without making it
+	// unpleasant for whoever is actually using it. A witness cannot answer that
+	// for a laptop — it has no idea what else the laptop is doing — and a
+	// laptop taking its concurrency from a 32-core server would either idle or
+	// bring its owner's machine to a crawl.
+	//
+	// Nil means no gating, which is right only for a machine doing nothing
+	// else.
+	Acquire func(ctx context.Context) (release func(), err error)
+
 	// EpochTimeout bounds one epoch. A rebuild is about a minute on a GPU and
 	// a proof replay tens of seconds; far past that something has gone wrong in
 	// a way that waiting will not fix, and the lease is expiring meanwhile.
@@ -95,6 +109,21 @@ func (r *Runner) do(ctx context.Context, a Assignment, timeout time.Duration) {
 			}
 			return
 		}
+		release := func() {}
+		if r.Acquire != nil {
+			rel, err := r.Acquire(ctx)
+			if err != nil {
+				// Could not get permission to run. Not a failure of the epoch:
+				// stop the assignment and let the lease return it, rather than
+				// reporting epochs unverified because this host was busy.
+				if r.Log != nil {
+					r.Log.Info("yielding: this host is too busy to continue", "err", err)
+				}
+				return
+			}
+			release = rel
+		}
+
 		start := time.Now()
 		res := Result{
 			AssignmentID: a.ID, Nonce: a.Nonce, Origin: a.Origin,
@@ -110,6 +139,7 @@ func (r *Runner) do(ctx context.Context, a Assignment, timeout time.Duration) {
 			res.Verified = root != "" && root == signed
 		}
 		res.DurationMS = time.Since(start).Milliseconds()
+		release()
 
 		if err := r.Report(ctx, res); err != nil {
 			if r.Log != nil {

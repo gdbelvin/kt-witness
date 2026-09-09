@@ -39,6 +39,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/gdbsecurity/kt-witness/internal/pace"
 	"github.com/gdbsecurity/kt-witness/internal/work"
 	pb "github.com/gdbsecurity/kt-witness/internal/workpb"
 )
@@ -211,9 +212,33 @@ func (w *worker) run(ctx context.Context) error {
 		}
 	}()
 
+	// This worker's own governor, measuring THIS machine.
+	//
+	// The background QoS class decides where threads run; this decides whether
+	// to start another epoch at all. They are different questions: a laptop
+	// pinned to its efficiency cores can still make itself unpleasant if it
+	// keeps four sidecar processes resident while somebody is trying to use it.
+	//
+	// The budget is deliberately small. This is a favour the machine is doing,
+	// and a worker that gets switched off because it made a laptop hot verifies
+	// nothing at all.
+	gov := &pace.Governor{
+		TargetCores:   float64(runtime.GOMAXPROCS(0)) * 0.75,
+		MaxConcurrent: runtime.GOMAXPROCS(0),
+		MinPermits:    1,
+		Log:           w.log,
+	}
+	go gov.Run(ctx)
+
 	r := &work.Runner{
 		Name: w.name,
 		Log:  w.log,
+		Acquire: func(ctx context.Context) (func(), error) {
+			if err := gov.Acquire(ctx); err != nil {
+				return nil, err
+			}
+			return gov.Release, nil
+		},
 		Next: func(ctx context.Context) (work.Assignment, error) {
 			select {
 			case <-ctx.Done():

@@ -11,13 +11,14 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/gdbsecurity/kt-witness/internal/pace"
 	"github.com/gdbsecurity/kt-witness/internal/store"
 	"github.com/gdbsecurity/kt-witness/internal/work"
 	"github.com/gdbsecurity/kt-witness/internal/workrpc"
 )
 
 // startWorkChannel serves verification work to machines on this network.
-func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, log *slog.Logger) (func() map[string]time.Time, error) {
+func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pace.Governor, log *slog.Logger) (func() map[string]time.Time, error) {
 	if err := workrpc.CheckListenAddr(cfg.Work.Listen); err != nil {
 		return nil, err
 	}
@@ -84,7 +85,7 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, log *sl
 	if local < 1 {
 		local = 4
 	}
-	startLocalWorkers(ctx, cfg, db, q, local, log)
+	startLocalWorkers(ctx, cfg, db, q, gov, local, log)
 
 	log.Info("work channel listening", "addr", cfg.Work.Listen, "lease", lease.String(),
 		"origins", origins,

@@ -21,6 +21,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gdbsecurity/kt-witness/internal/pace"
+
 	"filippo.io/torchwood"
 	"github.com/gdbsecurity/kt-witness/internal/audit"
 	"github.com/gdbsecurity/kt-witness/internal/cosig"
@@ -609,9 +611,9 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		// the previous value was chosen when a verification took 94 s on four
 		// cores, and after more cores arrived it left five of them idle while
 		// the backlog still measured months.
-		var governor *audit.Governor
+		var governor *pace.Governor
 		if cfg.Audit.Pace || cfg.Audit.TargetCores > 0 || cfg.Audit.ReserveCores > 0 {
-			governor = &audit.Governor{
+			governor = &pace.Governor{
 				ReserveCores:  cfg.Audit.ReserveCores,
 				TargetCores:   cfg.Audit.TargetCores,
 				MaxConcurrent: workers,
@@ -693,7 +695,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 	}
 	var workers func() map[string]time.Time
 	if cfg.Work.Listen != "" {
-		w, err := startWorkChannel(ctx, cfg, db, log)
+		w, err := startWorkChannel(ctx, cfg, db, governorFor(auditor), log)
 		if err != nil {
 			// Refusing to start is the point. A work channel that silently did
 			// not come up would leave the witness looking healthy while the
@@ -1761,3 +1763,12 @@ func storedHistory(db *store.Store, origin string) *store.History {
 // rewrites an object nobody re-reads — which is exactly where a rewrite would
 // be put. A daily full walk closes that, at two minutes of listing.
 const fullBackfillEvery = 24 * time.Hour
+
+// governorFor is the pacer the local workers share with the rest of the
+// witness's own load, so the two do not each think they have the machine.
+func governorFor(a *audit.Auditor) *pace.Governor {
+	if a == nil {
+		return nil
+	}
+	return a.Governor
+}

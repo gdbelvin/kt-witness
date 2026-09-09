@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gdbsecurity/kt-witness/internal/pace"
 	"github.com/gdbsecurity/kt-witness/internal/store"
 	"github.com/gdbsecurity/kt-witness/internal/work"
 )
@@ -24,7 +25,7 @@ import (
 // Concurrency is the number of sidecar workers the machine is configured for.
 // How FAST they go is still the governor's business, upstream of this; what to
 // work on is the queue's. That separation is what the queue bought.
-func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *work.Queue, n int, log *slog.Logger) {
+func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *work.Queue, g *pace.Governor, n int, log *slog.Logger) {
 	if n < 1 {
 		n = 1
 	}
@@ -39,6 +40,15 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 			},
 			Verify: func(ctx context.Context, origin string, epoch int64) (string, string, error) {
 				return akdVerify(ctx, bin, origin, epoch)
+			},
+			Acquire: func(ctx context.Context) (func(), error) {
+				if g == nil {
+					return func() {}, nil
+				}
+				if err := g.Acquire(ctx); err != nil {
+					return nil, err
+				}
+				return g.Release, nil
 			},
 			Report: func(ctx context.Context, res work.Result) error {
 				if err := q.Accept(res); err != nil {

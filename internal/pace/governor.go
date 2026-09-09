@@ -1,4 +1,16 @@
-package audit
+// Package pace decides how much of a machine a background job may take.
+//
+// It lives outside internal/audit because every participant needs it, not just
+// this one. Verification is handed out to whatever machines the operator owns,
+// and each of them has to answer the same question about ITS OWN host: how much
+// of this can I take without making the machine unpleasant for whoever is
+// actually using it.
+//
+// That question cannot be answered centrally. A witness has no idea what else
+// a laptop is doing, and a laptop that took its concurrency from a 32-core
+// server would either idle or make its owner's machine crawl. So the queue
+// decides what to work on and this decides how fast, once per host.
+package pace
 
 import (
 	"context"
@@ -76,7 +88,6 @@ type Governor struct {
 	MaxConcurrent int
 
 	Log *slog.Logger
-
 
 	mu       sync.Mutex
 	permits  float64

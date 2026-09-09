@@ -3,10 +3,12 @@ package audit
 import (
 	"context"
 	"fmt"
-	"github.com/gdbsecurity/kt-witness/internal/metrics"
-	"github.com/gdbsecurity/kt-witness/internal/netmeter"
 	"log/slog"
 	"time"
+
+	"github.com/gdbsecurity/kt-witness/internal/metrics"
+	"github.com/gdbsecurity/kt-witness/internal/netmeter"
+	"github.com/gdbsecurity/kt-witness/internal/pace"
 
 	"github.com/gdbsecurity/kt-witness/internal/store"
 )
@@ -43,7 +45,7 @@ type Auditor struct {
 	// Governor, if set, paces the BACKWARDS sweep against measured CPU. Live
 	// auditing is never paced: it follows the tip and is what would notice an
 	// operator misbehaving now.
-	Governor *Governor
+	Governor *pace.Governor
 
 	// Rate is the fraction of epochs verified, published alongside results.
 	Rate float64
