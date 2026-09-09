@@ -120,3 +120,47 @@ wrong — no judgement calls, no "close enough".
 For a system whose output is an accusation about an operator, this is not
 diligence, it is the point. Which is also why the GPU never decides: a mismatch
 means rebuild on the CPU and let the CPU say.
+
+
+## Worked example: the ratio test said no
+
+The method above was applied to a proposal to build a GPU verifier for the AKD
+logs — Meta and WhatsApp — on the reasoning that a GPU was sitting idle while
+every core in the house was busy verifying. It is the same shape of work as the
+Proton rebuild that the GPU handles well: a sparse Merkle tree, rebuilt from
+its nodes, checked against a published root.
+
+Phase split first (§1), from the sidecar's own timers, averaged over the
+epochs verified that day:
+
+    meta       verify 61.3 s   decode 4.3 s   download 2.2 s     per epoch
+    whatsapp   verify  4.8 s   decode 0.4 s   download 0.3 s
+
+Verification is ~90% of it, so that is the phase to size. Then the counts and
+the ratio (§2, §3), measured on one real epoch of each log with the machine's
+own hash rate taken in the same process:
+
+    meta epoch 300,000    3.6M nodes   ~7.25M node hashes
+      hash rate 7.41 M/s   expected 0.98 s   actual 14.54 s   RATIO 14.8x
+
+    whatsapp epoch 1,000,000    0.8M nodes   ~1.6M node hashes
+      hash rate 8.31 M/s   expected 0.19 s   actual  3.47 s   RATIO 17.9x
+
+**A GPU would accelerate 6-7% of the work.** Verification is not hash-bound:
+at 3.3 cores for 14.5 s, a Meta epoch spends about 13 microseconds per node
+against a hash costing 0.13 — a hundred to one, which is allocation, hash-map
+lookups and node objects inside the `akd` crate, not arithmetic.
+
+Two things worth keeping from this.
+
+The tool is `rust/kt-akd-verify/src/bin/ratio.rs`, and it took twenty minutes.
+The GPU verifier it retired would have taken days, and would have been correct,
+fast, and pointed at 7% of the problem — which is the failure mode this whole
+document is about. Note also that it measures the hash rate in its own process
+on the machine under test rather than quoting a number from anywhere: an
+imported rate is how the earlier 3.6x estimation error happened.
+
+And the answer it gives is directional, not final. If the CPU implementation
+ever stops being the bottleneck — a faster azks construction, or a different
+proof format — the ratio moves and the question is worth asking again. Run the
+tool, do not re-run the reasoning.
