@@ -166,6 +166,16 @@ func (r *Runner) do(ctx context.Context, a Assignment, timeout time.Duration) {
 			"lease", time.Until(a.Deadline).Round(time.Second).String())
 	}
 
+	// A range stops the moment its results have nowhere to go.
+	//
+	// Without this the worker carried on verifying into a closed stream: every
+	// epoch after a disconnect cost real CPU on somebody's laptop and was
+	// thrown away, and the range sat on a lease that could not be given back
+	// until it expired. Observed on the first restart the laptop survived —
+	// eight epochs verified and discarded before anyone noticed.
+	ctx, stopRange := context.WithCancel(ctx)
+	defer stopRange()
+
 	epochs := make(chan int64)
 	go func() {
 		defer close(epochs)
@@ -193,15 +203,20 @@ func (r *Runner) do(ctx context.Context, a Assignment, timeout time.Duration) {
 		go func() {
 			defer wg.Done()
 			for e := range epochs {
-				r.one(ctx, a, e, timeout)
+				if err := r.one(ctx, a, e, timeout); err != nil {
+					stopRange()
+					return
+				}
 			}
 		}()
 	}
 	wg.Wait()
 }
 
-// one verifies a single epoch and reports whatever came of it.
-func (r *Runner) one(ctx context.Context, a Assignment, e int64, timeout time.Duration) {
+// one verifies a single epoch and reports whatever came of it. It returns an
+// error only when the REPORT could not be delivered — a verification that
+// failed is an answer and is reported as one.
+func (r *Runner) one(ctx context.Context, a Assignment, e int64, timeout time.Duration) error {
 	start := time.Now()
 	res := Result{
 		AssignmentID: a.ID, Nonce: a.Nonce, Origin: a.Origin,
@@ -222,7 +237,12 @@ func (r *Runner) one(ctx context.Context, a Assignment, e int64, timeout time.Du
 
 	r.send.Lock()
 	defer r.send.Unlock()
-	if err := r.Report(ctx, res); err != nil && r.Log != nil {
-		r.Log.Warn("reporting", "epoch", e, "err", err)
+	if err := r.Report(ctx, res); err != nil {
+		if r.Log != nil {
+			r.Log.Warn("cannot report; abandoning the rest of this range",
+				"epoch", e, "err", err)
+		}
+		return err
 	}
+	return nil
 }

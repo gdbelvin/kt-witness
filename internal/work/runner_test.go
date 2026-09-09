@@ -242,3 +242,45 @@ func TestParallelismIsAskedPerAssignment(t *testing.T) {
 		t.Errorf("wide assignment peaked at %d; the new answer was not read", peaks[1])
 	}
 }
+
+// When results have nowhere to go, the range stops.
+//
+// Without this the worker carries on verifying into a closed stream: every
+// epoch after a disconnect costs real CPU on somebody's laptop and is thrown
+// away, while the range sits on a lease that cannot be reissued until it
+// expires. Seen for real on the first restart the laptop survived.
+func TestAFailedReportAbandonsTheRestOfTheRange(t *testing.T) {
+	var mu sync.Mutex
+	verified, reported := 0, 0
+	gone := errors.New("connection closed")
+
+	r := &Runner{
+		Name:     "t",
+		Parallel: Fixed(1),
+		Verify: func(context.Context, string, int64) (string, string, error) {
+			mu.Lock()
+			verified++
+			mu.Unlock()
+			return "aa", "aa", nil
+		},
+		Report: func(context.Context, Result) error {
+			mu.Lock()
+			defer mu.Unlock()
+			reported++
+			if reported >= 2 {
+				return gone
+			}
+			return nil
+		},
+	}
+	r.do(context.Background(), Assignment{ID: "a", From: 1, To: 50}, time.Minute)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if verified > 4 {
+		t.Errorf("verified %d epochs after the stream died; it should stop promptly", verified)
+	}
+	if reported < 2 {
+		t.Errorf("reported %d; the failure should have been attempted", reported)
+	}
+}
