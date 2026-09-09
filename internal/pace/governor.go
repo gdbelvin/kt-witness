@@ -382,3 +382,14 @@ func (g *Governor) WaitForWork(ctx context.Context, want float64) error {
 		}
 	}
 }
+
+// Observed reports the last measured machine load and the ceiling it is being
+// held to, both in cores. For telling somebody else what this machine is doing.
+func (g *Governor) Observed() (load, budget float64) {
+	if g == nil {
+		return 0, 0
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.last.MachineCores, g.budget(g.last.TotalCores)
+}

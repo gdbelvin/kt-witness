@@ -32,8 +32,13 @@ type Server struct {
 	// range. Whether the EPOCH verified is this function's judgement, not the
 	// worker's and not the session's.
 	OnResult func(work.Result) error
-	Token    string
-	Log      *slog.Logger
+	// OnCapacity records what a worker says it can currently do. Advisory:
+	// nothing is checked and nothing changes what the queue hands out. It
+	// exists so the operator can see a fleet yielding correctly, which from the
+	// witness's own side is indistinguishable from a fleet that has broken.
+	OnCapacity func(worker string, c work.Capacity)
+	Token      string
+	Log        *slog.Logger
 
 	// Idle is how long to wait before asking the queue again when it had
 	// nothing. Short enough that a freed range is picked up promptly, long
@@ -87,6 +92,14 @@ func (s *Server) Session(stream pb.Work_SessionServer) error {
 		switch m := msg.Msg.(type) {
 		case *pb.WorkerMessage_Result:
 			s.handleResult(stream, hello.Name, m.Result)
+		case *pb.WorkerMessage_Capacity:
+			if s.OnCapacity != nil {
+				c := m.Capacity
+				s.OnCapacity(hello.Name, work.Capacity{
+					Parallel: int(c.Parallel), CPUs: int(c.Cpus),
+					LoadCores: c.LoadCores, BudgetCores: c.BudgetCores,
+				})
+			}
 		case *pb.WorkerMessage_Progress:
 			// Nothing to do yet. Kept in the protocol because a slow worker and
 			// a dead one are indistinguishable without it, and the difference

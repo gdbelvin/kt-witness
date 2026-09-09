@@ -85,6 +85,27 @@ type Result struct {
 	Err string `json:"err,omitempty"`
 }
 
+// Capacity is what a worker can currently do, as it measures itself.
+//
+// Reported rather than inferred, because the witness cannot tell the difference
+// between a machine that is yielding correctly and one that has broken: both
+// look like results arriving more slowly. A worker saying "one at a time, my
+// owner is back" is a healthy system doing its job, and that should be visible
+// as such.
+type Capacity struct {
+	// Parallel is how many epochs it will run at once right now — its own
+	// measurement, not a configured ceiling.
+	Parallel int
+	// CPUs it may use. On a Mac in background QoS this is the efficiency-core
+	// count rather than the machine's, which is the point of running there.
+	CPUs int
+	// LoadCores and BudgetCores are what the worker sees of its whole machine
+	// and the ceiling it holds itself to. Two machines will not agree on what a
+	// core is; the interesting shape is each machine against its own budget.
+	LoadCores   float64
+	BudgetCores float64
+}
+
 // Hello is what a worker sends when it connects.
 type Hello struct {
 	Name string `json:"name"`

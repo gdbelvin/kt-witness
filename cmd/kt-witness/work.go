@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
 
 	"github.com/gdbsecurity/kt-witness/internal/audit"
+	"github.com/gdbsecurity/kt-witness/internal/metrics"
 	"github.com/gdbsecurity/kt-witness/internal/pace"
 	"github.com/gdbsecurity/kt-witness/internal/store"
 	"github.com/gdbsecurity/kt-witness/internal/work"
@@ -58,6 +60,9 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 		Log:   log,
 		OnResult: func(r work.Result) error {
 			return recordWorkerResult(db, q, r, log)
+		},
+		OnCapacity: func(worker string, c work.Capacity) {
+			recordCapacity(worker, c)
 		},
 	}
 
@@ -166,4 +171,38 @@ func recordWorkerResult(db *store.Store, q *work.Queue, r work.Result, log *slog
 		Strategy: "worker:" + r.Worker, Verified: r.Verified, Attempts: 1,
 		DecidedAt: time.Now().UTC(),
 	})
+}
+
+var capacityOnce sync.Once
+
+// recordCapacity publishes what a worker says it can currently do.
+//
+// A gauge per worker, so the shape over time is the fleet's shape: a laptop
+// dropping to one at a time in the evening and back to four overnight is the
+// governor doing its job, and that is worth being able to see. The witness's
+// own worker reports through the same path, so it appears on the same graph as
+// everybody else — which is the whole conceit of the queue.
+//
+// Advisory throughout. Nothing here is checked and nothing here changes what
+// the queue hands out; a worker that lies about its capacity is lying to a
+// dashboard.
+func recordCapacity(worker string, c work.Capacity) {
+	capacityOnce.Do(func() {
+		metrics.Describe("kt_witness_worker_parallel", metrics.Gauge,
+			"Epochs this worker is currently willing to verify at once")
+		metrics.Describe("kt_witness_worker_cpus", metrics.Gauge,
+			"Logical CPUs the worker may use (on a Mac in background QoS, its efficiency cores)")
+		metrics.Describe("kt_witness_worker_load_cores", metrics.Gauge,
+			"Cores in use across the worker's whole machine, as the worker measures it")
+		metrics.Describe("kt_witness_worker_budget_cores", metrics.Gauge,
+			"Cores the worker is holding itself to")
+		metrics.Describe("kt_witness_worker_capacity_reported_unix", metrics.Gauge,
+			"When this worker last reported its capacity; a stale value is a worker that stopped talking")
+	})
+	l := map[string]string{"worker": worker}
+	metrics.Set("kt_witness_worker_parallel", l, float64(c.Parallel))
+	metrics.Set("kt_witness_worker_cpus", l, float64(c.CPUs))
+	metrics.Set("kt_witness_worker_load_cores", l, c.LoadCores)
+	metrics.Set("kt_witness_worker_budget_cores", l, c.BudgetCores)
+	metrics.Set("kt_witness_worker_capacity_reported_unix", l, float64(time.Now().Unix()))
 }

@@ -42,6 +42,7 @@ message WorkerMessage {
     Hello hello = 1;
     Result result = 2;
     Progress progress = 3;
+    Capacity capacity = 4;
   }
 }
 
@@ -107,6 +108,32 @@ message Result {
 message Progress {
   string assignment_id = 1;
   int64 epoch = 2;
+}
+
+// Capacity is what a worker can currently do, sent periodically and unprompted.
+//
+// The witness cannot infer this. It sees results arriving and cannot tell a
+// laptop that has been closed from one whose owner is compiling something, or a
+// machine that is yielding correctly from one that is broken — and those want
+// opposite responses. A worker that says "I am down to one at a time because my
+// owner came back" is reporting a healthy system doing what it was built to do.
+//
+// It is advisory in the strict sense: nothing here is checked, and nothing here
+// changes what the queue hands out. It is for the operator to look at.
+message Capacity {
+  // How many epochs this worker will run at once, right now. Its own
+  // measurement of itself, not a configured maximum.
+  int32 parallel = 1;
+  // Cores the worker believes are in use across its whole machine, and the
+  // ceiling it is holding itself to. Both in cores, both as the worker
+  // measures them — two machines will not agree on what a core is, and that is
+  // fine: the interesting shape is each machine against its own budget.
+  double load_cores = 2;
+  double budget_cores = 3;
+  // Logical CPUs the worker may use. On a Mac in background QoS this is the
+  // efficiency-core count, not the machine's core count, and the difference is
+  // the whole point of running there.
+  int32 cpus = 4;
 }
 
 message Ack {

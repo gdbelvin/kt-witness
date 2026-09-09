@@ -276,6 +276,35 @@ func (w *worker) run(ctx context.Context) error {
 	}
 	go gov.Run(ctx)
 
+	// Say what this machine can currently do, unprompted, every half minute.
+	//
+	// The witness cannot work this out from the outside: a laptop that has been
+	// closed, one whose owner is compiling something, and one that has crashed
+	// all look identical from there — results simply stop. Reported, they are
+	// three different pictures, and only one of them is a problem.
+	//
+	// Nothing is checked and nothing changes what the queue hands out. It is
+	// for the operator to look at.
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			load, budget := gov.Observed()
+			if err := stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Capacity{
+				Capacity: &pb.Capacity{
+					Parallel: int32(par), Cpus: int32(runtime.GOMAXPROCS(0)),
+					LoadCores: load, BudgetCores: budget,
+				}}}); err != nil {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
+
 	r := &work.Runner{
 		Name:     w.name,
 		Log:      w.log,

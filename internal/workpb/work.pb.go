@@ -51,6 +51,7 @@ type WorkerMessage struct {
 	//	*WorkerMessage_Hello
 	//	*WorkerMessage_Result
 	//	*WorkerMessage_Progress
+	//	*WorkerMessage_Capacity
 	Msg           isWorkerMessage_Msg `protobuf_oneof:"msg"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -120,6 +121,15 @@ func (x *WorkerMessage) GetProgress() *Progress {
 	return nil
 }
 
+func (x *WorkerMessage) GetCapacity() *Capacity {
+	if x != nil {
+		if x, ok := x.Msg.(*WorkerMessage_Capacity); ok {
+			return x.Capacity
+		}
+	}
+	return nil
+}
+
 type isWorkerMessage_Msg interface {
 	isWorkerMessage_Msg()
 }
@@ -136,11 +146,17 @@ type WorkerMessage_Progress struct {
 	Progress *Progress `protobuf:"bytes,3,opt,name=progress,proto3,oneof"`
 }
 
+type WorkerMessage_Capacity struct {
+	Capacity *Capacity `protobuf:"bytes,4,opt,name=capacity,proto3,oneof"`
+}
+
 func (*WorkerMessage_Hello) isWorkerMessage_Msg() {}
 
 func (*WorkerMessage_Result) isWorkerMessage_Msg() {}
 
 func (*WorkerMessage_Progress) isWorkerMessage_Msg() {}
+
+func (*WorkerMessage_Capacity) isWorkerMessage_Msg() {}
 
 type WitnessMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -572,6 +588,93 @@ func (x *Progress) GetEpoch() int64 {
 	return 0
 }
 
+// Capacity is what a worker can currently do, sent periodically and unprompted.
+//
+// The witness cannot infer this. It sees results arriving and cannot tell a
+// laptop that has been closed from one whose owner is compiling something, or a
+// machine that is yielding correctly from one that is broken — and those want
+// opposite responses. A worker that says "I am down to one at a time because my
+// owner came back" is reporting a healthy system doing what it was built to do.
+//
+// It is advisory in the strict sense: nothing here is checked, and nothing here
+// changes what the queue hands out. It is for the operator to look at.
+type Capacity struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// How many epochs this worker will run at once, right now. Its own
+	// measurement of itself, not a configured maximum.
+	Parallel int32 `protobuf:"varint,1,opt,name=parallel,proto3" json:"parallel,omitempty"`
+	// Cores the worker believes are in use across its whole machine, and the
+	// ceiling it is holding itself to. Both in cores, both as the worker
+	// measures them — two machines will not agree on what a core is, and that is
+	// fine: the interesting shape is each machine against its own budget.
+	LoadCores   float64 `protobuf:"fixed64,2,opt,name=load_cores,json=loadCores,proto3" json:"load_cores,omitempty"`
+	BudgetCores float64 `protobuf:"fixed64,3,opt,name=budget_cores,json=budgetCores,proto3" json:"budget_cores,omitempty"`
+	// Logical CPUs the worker may use. On a Mac in background QoS this is the
+	// efficiency-core count, not the machine's core count, and the difference is
+	// the whole point of running there.
+	Cpus          int32 `protobuf:"varint,4,opt,name=cpus,proto3" json:"cpus,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Capacity) Reset() {
+	*x = Capacity{}
+	mi := &file_proto_work_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Capacity) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Capacity) ProtoMessage() {}
+
+func (x *Capacity) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_work_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Capacity.ProtoReflect.Descriptor instead.
+func (*Capacity) Descriptor() ([]byte, []int) {
+	return file_proto_work_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *Capacity) GetParallel() int32 {
+	if x != nil {
+		return x.Parallel
+	}
+	return 0
+}
+
+func (x *Capacity) GetLoadCores() float64 {
+	if x != nil {
+		return x.LoadCores
+	}
+	return 0
+}
+
+func (x *Capacity) GetBudgetCores() float64 {
+	if x != nil {
+		return x.BudgetCores
+	}
+	return 0
+}
+
+func (x *Capacity) GetCpus() int32 {
+	if x != nil {
+		return x.Cpus
+	}
+	return 0
+}
+
 type Ack struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	AssignmentId string                 `protobuf:"bytes,1,opt,name=assignment_id,json=assignmentId,proto3" json:"assignment_id,omitempty"`
@@ -586,7 +689,7 @@ type Ack struct {
 
 func (x *Ack) Reset() {
 	*x = Ack{}
-	mi := &file_proto_work_proto_msgTypes[6]
+	mi := &file_proto_work_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -598,7 +701,7 @@ func (x *Ack) String() string {
 func (*Ack) ProtoMessage() {}
 
 func (x *Ack) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_work_proto_msgTypes[6]
+	mi := &file_proto_work_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -611,7 +714,7 @@ func (x *Ack) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ack.ProtoReflect.Descriptor instead.
 func (*Ack) Descriptor() ([]byte, []int) {
-	return file_proto_work_proto_rawDescGZIP(), []int{6}
+	return file_proto_work_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Ack) GetAssignmentId() string {
@@ -646,11 +749,12 @@ var File_proto_work_proto protoreflect.FileDescriptor
 
 const file_proto_work_proto_rawDesc = "" +
 	"\n" +
-	"\x10proto/work.proto\x12\x11ktwitness.work.v1\"\xb8\x01\n" +
+	"\x10proto/work.proto\x12\x11ktwitness.work.v1\"\xf3\x01\n" +
 	"\rWorkerMessage\x120\n" +
 	"\x05hello\x18\x01 \x01(\v2\x18.ktwitness.work.v1.HelloH\x00R\x05hello\x123\n" +
 	"\x06result\x18\x02 \x01(\v2\x19.ktwitness.work.v1.ResultH\x00R\x06result\x129\n" +
-	"\bprogress\x18\x03 \x01(\v2\x1b.ktwitness.work.v1.ProgressH\x00R\bprogressB\x05\n" +
+	"\bprogress\x18\x03 \x01(\v2\x1b.ktwitness.work.v1.ProgressH\x00R\bprogress\x129\n" +
+	"\bcapacity\x18\x04 \x01(\v2\x1b.ktwitness.work.v1.CapacityH\x00R\bcapacityB\x05\n" +
 	"\x03msg\"\x84\x01\n" +
 	"\x0eWitnessMessage\x12?\n" +
 	"\n" +
@@ -688,7 +792,13 @@ const file_proto_work_proto_rawDesc = "" +
 	" \x01(\tR\x05error\"E\n" +
 	"\bProgress\x12#\n" +
 	"\rassignment_id\x18\x01 \x01(\tR\fassignmentId\x12\x14\n" +
-	"\x05epoch\x18\x02 \x01(\x03R\x05epoch\"t\n" +
+	"\x05epoch\x18\x02 \x01(\x03R\x05epoch\"|\n" +
+	"\bCapacity\x12\x1a\n" +
+	"\bparallel\x18\x01 \x01(\x05R\bparallel\x12\x1d\n" +
+	"\n" +
+	"load_cores\x18\x02 \x01(\x01R\tloadCores\x12!\n" +
+	"\fbudget_cores\x18\x03 \x01(\x01R\vbudgetCores\x12\x12\n" +
+	"\x04cpus\x18\x04 \x01(\x05R\x04cpus\"t\n" +
 	"\x03Ack\x12#\n" +
 	"\rassignment_id\x18\x01 \x01(\tR\fassignmentId\x12\x14\n" +
 	"\x05epoch\x18\x02 \x01(\x03R\x05epoch\x12\x1a\n" +
@@ -709,7 +819,7 @@ func file_proto_work_proto_rawDescGZIP() []byte {
 	return file_proto_work_proto_rawDescData
 }
 
-var file_proto_work_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_proto_work_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_proto_work_proto_goTypes = []any{
 	(*WorkerMessage)(nil),  // 0: ktwitness.work.v1.WorkerMessage
 	(*WitnessMessage)(nil), // 1: ktwitness.work.v1.WitnessMessage
@@ -717,21 +827,23 @@ var file_proto_work_proto_goTypes = []any{
 	(*Assignment)(nil),     // 3: ktwitness.work.v1.Assignment
 	(*Result)(nil),         // 4: ktwitness.work.v1.Result
 	(*Progress)(nil),       // 5: ktwitness.work.v1.Progress
-	(*Ack)(nil),            // 6: ktwitness.work.v1.Ack
+	(*Capacity)(nil),       // 6: ktwitness.work.v1.Capacity
+	(*Ack)(nil),            // 7: ktwitness.work.v1.Ack
 }
 var file_proto_work_proto_depIdxs = []int32{
 	2, // 0: ktwitness.work.v1.WorkerMessage.hello:type_name -> ktwitness.work.v1.Hello
 	4, // 1: ktwitness.work.v1.WorkerMessage.result:type_name -> ktwitness.work.v1.Result
 	5, // 2: ktwitness.work.v1.WorkerMessage.progress:type_name -> ktwitness.work.v1.Progress
-	3, // 3: ktwitness.work.v1.WitnessMessage.assignment:type_name -> ktwitness.work.v1.Assignment
-	6, // 4: ktwitness.work.v1.WitnessMessage.ack:type_name -> ktwitness.work.v1.Ack
-	0, // 5: ktwitness.work.v1.Work.Session:input_type -> ktwitness.work.v1.WorkerMessage
-	1, // 6: ktwitness.work.v1.Work.Session:output_type -> ktwitness.work.v1.WitnessMessage
-	6, // [6:7] is the sub-list for method output_type
-	5, // [5:6] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	6, // 3: ktwitness.work.v1.WorkerMessage.capacity:type_name -> ktwitness.work.v1.Capacity
+	3, // 4: ktwitness.work.v1.WitnessMessage.assignment:type_name -> ktwitness.work.v1.Assignment
+	7, // 5: ktwitness.work.v1.WitnessMessage.ack:type_name -> ktwitness.work.v1.Ack
+	0, // 6: ktwitness.work.v1.Work.Session:input_type -> ktwitness.work.v1.WorkerMessage
+	1, // 7: ktwitness.work.v1.Work.Session:output_type -> ktwitness.work.v1.WitnessMessage
+	7, // [7:8] is the sub-list for method output_type
+	6, // [6:7] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_proto_work_proto_init() }
@@ -743,6 +855,7 @@ func file_proto_work_proto_init() {
 		(*WorkerMessage_Hello)(nil),
 		(*WorkerMessage_Result)(nil),
 		(*WorkerMessage_Progress)(nil),
+		(*WorkerMessage_Capacity)(nil),
 	}
 	file_proto_work_proto_msgTypes[1].OneofWrappers = []any{
 		(*WitnessMessage_Assignment)(nil),
@@ -754,7 +867,7 @@ func file_proto_work_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_work_proto_rawDesc), len(file_proto_work_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

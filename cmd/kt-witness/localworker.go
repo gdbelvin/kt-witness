@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"time"
 
 	"github.com/gdbsecurity/kt-witness/internal/audit"
@@ -61,17 +62,18 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 		// consult this governor and can hold the machine indefinitely, so
 		// permits sit at their floor and the gate would never open.
 		Parallel: func() int {
-			if g == nil {
-				return n
+			w := n
+			if g != nil {
+				switch p := int(g.Spare()); {
+				case p < 1:
+					w = 1 // always some progress; one replay is 3.7 GB of 44
+				case p > n:
+					w = n
+				default:
+					w = p
+				}
 			}
-			p := int(g.Spare())
-			switch {
-			case p < 1:
-				return 1 // always some progress; one replay is 3.7 GB of 44
-			case p > n:
-				return n
-			}
-			return p
+			return w
 		},
 		// No request gate here, deliberately: the width above is this host's
 		// yielding, and a second brake that can never release would be one
@@ -92,6 +94,30 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 	go func() {
 		if err := r.Run(ctx); err != nil && ctx.Err() == nil {
 			log.Error("local worker stopped", "name", name, "err", err)
+		}
+	}()
+
+	// Report capacity the way a remote worker does, so the witness appears on
+	// the same graph as every other participant rather than as a gap in the
+	// middle of it.
+	//
+	// On a timer rather than when a range starts: an idle machine is exactly
+	// the interesting case, and a series that stops when there is no work says
+	// nothing about whether the worker is well.
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			load, budget := g.Observed()
+			recordCapacity(name, work.Capacity{
+				Parallel: r.Parallel(), CPUs: runtime.NumCPU(),
+				LoadCores: load, BudgetCores: budget,
+			})
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
 		}
 	}()
 	log.Info("local worker leasing from the shared queue", "parallel", n,
