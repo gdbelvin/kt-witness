@@ -26,6 +26,10 @@ type Sidecar struct {
 	// machine, which is only correct when exactly one is running.
 	Threads int
 
+	// KeepProof retains downloaded proofs for a second verifier to read. The
+	// caller must delete them.
+	KeepProof bool
+
 	mu     sync.Mutex // one verification at a time: each peaks ~3.7 GB RSS
 	cmd    *exec.Cmd
 	stdin  *bufio.Writer
@@ -37,6 +41,14 @@ type request struct {
 	Epoch        int64  `json:"epoch"`
 	PrevRoot     string `json:"prev_root"`
 	CurrRoot     string `json:"curr_root"`
+
+	// KeepProof asks the sidecar to leave the proof it downloaded on disk and
+	// say where. Set when a second verifier is going to check the same bytes:
+	// the alternative is fetching a 284 MB proof twice to compare our own
+	// arithmetic, which spends the resource that actually bounds this witness.
+	//
+	// Whoever sets this owns the file. Nothing in the sidecar will delete it.
+	KeepProof bool `json:"keep_proof,omitempty"`
 
 	// ProofPath, when set, is a proof already on local disk. The sidecar reads
 	// it instead of downloading, which is what lets the link run ahead of the
@@ -59,6 +71,10 @@ type Result struct {
 	DecodeMS   int64 `json:"decode_ms"`
 	VerifyMS   int64 `json:"verify_ms"`
 	Bytes      int64 `json:"bytes"`
+
+	// ProofPath is where the sidecar left the proof, when asked to keep it.
+	// The caller owns the file from here.
+	ProofPath string `json:"proof_path"`
 }
 
 // VerificationFailed reports whether this result is evidence the log built its
@@ -146,6 +162,7 @@ func (s *Sidecar) VerifyCached(ctx context.Context, logDirectory string, epoch i
 	req, err := json.Marshal(request{
 		LogDirectory: logDirectory, Epoch: epoch,
 		PrevRoot: prevRoot, CurrRoot: currRoot, ProofPath: proofPath,
+		KeepProof: s.KeepProof && proofPath == "",
 	})
 	if err != nil {
 		return nil, err
@@ -274,6 +291,14 @@ func (p *Pool) Size() int { return cap(p.free) }
 
 // Threads reports how wide each verification may be.
 func (p *Pool) Threads() int { return p.threads }
+
+// KeepProofs makes every worker retain the proofs it downloads, for a second
+// verifier to read. The caller becomes responsible for deleting them.
+func (p *Pool) KeepProofs() {
+	for _, s := range p.all {
+		s.KeepProof = true
+	}
+}
 
 // Verify checks out a worker, runs one verification, and returns the worker.
 //

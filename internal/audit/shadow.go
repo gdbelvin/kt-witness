@@ -74,8 +74,25 @@ func (s *Shadow) VerifyCached(ctx context.Context, logDirectory string, epoch in
 	if err != nil || res == nil {
 		return res, err
 	}
-	if proofPath == "" {
-		metrics.Inc("kt_witness_shadow_skipped_total", map[string]string{"reason": "no cached proof"})
+
+	// Where to read the same bytes the reference just read.
+	//
+	// Either the prefetcher's file, which belongs to the prefetcher and must be
+	// left alone, or one the sidecar was asked to retain for us — which we then
+	// own and must delete, because it is a 284 MB temp file and there are eight
+	// of these in flight.
+	read := proofPath
+	if read == "" && res.ProofPath != "" {
+		read = res.ProofPath
+		defer func() {
+			if rmErr := os.Remove(res.ProofPath); rmErr != nil && s.Log != nil {
+				s.Log.Warn("could not remove a retained proof; disk will fill",
+					"path", res.ProofPath, "err", rmErr)
+			}
+		}()
+	}
+	if read == "" {
+		metrics.Inc("kt_witness_shadow_skipped_total", map[string]string{"reason": "no proof to read"})
 		return res, err
 	}
 	if !res.OK && res.Kind != "verify" {
@@ -96,7 +113,7 @@ func (s *Shadow) VerifyCached(ctx context.Context, logDirectory string, epoch in
 	}
 
 	start := time.Now()
-	agreed, shadowErr := s.check(proofPath, epoch, prevRoot, currRoot, res.OK)
+	agreed, shadowErr := s.check(read, epoch, prevRoot, currRoot, res.OK)
 	took := time.Since(start)
 
 	switch {
@@ -119,7 +136,7 @@ func (s *Shadow) VerifyCached(ctx context.Context, logDirectory string, epoch in
 				"nothing about the log is being claimed",
 				"origin_directory", logDirectory, "epoch", epoch,
 				"reference_verified", res.OK, "shadow_verified", !res.OK,
-				"proof", proofPath)
+				"proof", read)
 		}
 	}
 	return res, err

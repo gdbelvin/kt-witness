@@ -619,6 +619,11 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		pool := audit.NewPool(cfg.Audit.SidecarPath, workers)
 		var sidecar audit.Verifier = pool
 		if cfg.Audit.ShadowVerify == nil || *cfg.Audit.ShadowVerify {
+			// Ask the sidecar to keep what it downloads, so the shadow checks
+			// the same bytes rather than fetching them again. Without this it
+			// could only see epochs that happened to be in the prefetch cache,
+			// which was two in ten.
+			pool.KeepProofs()
 			sidecar = &audit.Shadow{Primary: pool, Log: log, Every: cfg.Audit.ShadowEvery}
 			log.Info("shadow verification enabled",
 				"note", "the Rust reference decides; the Go verifier is only observed",

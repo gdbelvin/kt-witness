@@ -44,6 +44,11 @@ struct Request {
     /// The file is NOT deleted here — whoever cached it owns its lifetime.
     #[serde(default)]
     proof_path: Option<String>,
+
+    /// Keep the downloaded proof and report where. The caller becomes
+    /// responsible for deleting it; nothing here will.
+    #[serde(default)]
+    keep_proof: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -80,6 +85,16 @@ struct Success {
     decode_ms: u128,
     verify_ms: u128,
     bytes: u64,
+    /// Where the downloaded proof was left, when the caller asked for it to be
+    /// kept.
+    ///
+    /// Exists so a second verifier can check the same bytes without fetching
+    /// them again. The witness runs a Go implementation beside this one and
+    /// compares verdicts; without this it could only shadow the epochs that
+    /// happened to be in the prefetch cache, which was two in ten. Downloading
+    /// a 284 MB proof twice to check our own arithmetic is not a trade worth
+    /// making, so the file is retained instead and the caller deletes it.
+    proof_path: Option<String>,
 }
 
 /// Deletes the downloaded proof on drop so a 284MB temp file never leaks,
@@ -145,6 +160,7 @@ fn handle(rt: &tokio::runtime::Runtime, req: &Request) -> Result<Success, Failur
     let key = format!("{}/{}/{}", req.epoch, req.prev_root, req.curr_root);
     let url = format!("{}/{}", req.log_directory.trim_end_matches('/'), key);
 
+    let mut kept: Option<String> = None;
     let t = Instant::now();
     let (data, bytes) = match req.proof_path.as_deref() {
         Some(path) => {
@@ -159,9 +175,18 @@ fn handle(rt: &tokio::runtime::Runtime, req: &Request) -> Result<Success, Failur
             let (proof_file, bytes) = download(&url)?;
             let data = std::fs::read(proof_file.path())
                 .map_err(|e| fail(Kind::Fetch, format!("read temp proof: {e}")))?;
-            // Temp file is no longer needed; free the disk before the
-            // memory-heavy part.
-            drop(proof_file);
+            if req.keep_proof {
+                // Hand the file to the caller instead of dropping it. Leaking a
+                // 284 MB temp file is a real hazard, so ownership transfers
+                // explicitly and the path is reported: whoever asked for it
+                // deletes it.
+                let path = proof_file.path().to_string_lossy().into_owned();
+                std::mem::forget(proof_file);
+                kept = Some(path);
+            } else {
+                // Free the disk before the memory-heavy part.
+                drop(proof_file);
+            }
             (data, bytes)
         }
     };
@@ -205,6 +230,7 @@ fn handle(rt: &tokio::runtime::Runtime, req: &Request) -> Result<Success, Failur
         decode_ms,
         verify_ms,
         bytes,
+        proof_path: kept,
     })
 }
 
@@ -297,6 +323,7 @@ fn main() {
                 "decode_ms": s.decode_ms,
                 "verify_ms": s.verify_ms,
                 "bytes": s.bytes,
+                "proof_path": s.proof_path,
             }),
             Ok(Err(f)) => serde_json::json!({
                 "ok": false,
