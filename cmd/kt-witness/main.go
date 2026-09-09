@@ -651,6 +651,9 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		log.Info("tier B auditing enabled", "sidecar", cfg.Audit.SidecarPath,
 			"sample_rate", rate, "logs", len(resolvers), "interval", auditInterval.String(),
 			"workers", sidecar.Size(),
+			"threads_each", sidecar.Threads(),
+			"threads_total", sidecar.Size()*sidecar.Threads(),
+			"machine_cores", runtime.NumCPU(),
 			"workers_derived", cfg.Audit.SidecarWorkers < 1,
 			"peak_memory_estimate_gb", float64(sidecar.Size())*3.7)
 	}

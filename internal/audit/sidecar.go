@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -20,6 +22,9 @@ import (
 // pool.
 type Sidecar struct {
 	Path string
+	// Threads caps the sidecar's runtime. Zero lets it size itself from the
+	// machine, which is only correct when exactly one is running.
+	Threads int
 
 	mu     sync.Mutex // one verification at a time: each peaks ~3.7 GB RSS
 	cmd    *exec.Cmd
@@ -64,11 +69,27 @@ func (r *Result) VerificationFailed() bool {
 
 func NewSidecar(path string) *Sidecar { return &Sidecar{Path: path} }
 
+// NewSidecarWithThreads bounds one worker's runtime.
+//
+// Left unbounded, the sidecar sizes its thread pool from the machine's core
+// count and ignores how many of itself are running. On the witness that meant
+// three concurrent verifications asking for ninety-six threads on
+// thirty-two cores: measured load average 55, and a box spending its time
+// switching between threads instead of hashing. The pool is what decides how
+// many run at once; this is what decides how wide each one is, and the two
+// have to be set together or neither is a bound.
+func NewSidecarWithThreads(path string, threads int) *Sidecar {
+	return &Sidecar{Path: path, Threads: threads}
+}
+
 func (s *Sidecar) start() error {
 	if s.cmd != nil && s.cmd.Process != nil {
 		return nil
 	}
 	cmd := exec.Command(s.Path)
+	if s.Threads > 0 {
+		cmd.Env = append(os.Environ(), fmt.Sprintf("KT_AKD_THREADS=%d", s.Threads))
+	}
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -209,6 +230,10 @@ var (
 type Pool struct {
 	free chan *Sidecar
 
+	// threads is how wide each worker may be; reported so the operator can see
+	// the two halves of the bound together.
+	threads int
+
 	// all is kept so Close can reach every worker, including any currently
 	// checked out — those are returned to free before Close is reachable in
 	// practice, but relying on that would make shutdown depend on timing.
@@ -222,9 +247,22 @@ func NewPool(path string, n int) *Pool {
 	if n < 1 {
 		n = 1
 	}
-	p := &Pool{free: make(chan *Sidecar, n)}
+	// Divide the machine between the workers rather than giving each one all of
+	// it. Unbounded, every sidecar sizes its runtime from the core count, so a
+	// pool of eight asks for eight times the machine — measured on the witness:
+	// three concurrent verifications, ninety-six threads, thirty-two cores, and
+	// a load average of 55 spent switching between them rather than hashing.
+	//
+	// Two threads minimum: below that the runtime cannot overlap a download
+	// with the hashing of what already arrived, which is most of what the
+	// parallelism inside one epoch is for.
+	threads := runtime.NumCPU() / n
+	if threads < 2 {
+		threads = 2
+	}
+	p := &Pool{free: make(chan *Sidecar, n), threads: threads}
 	for i := 0; i < n; i++ {
-		s := NewSidecar(path)
+		s := NewSidecarWithThreads(path, threads)
 		p.all = append(p.all, s)
 		p.free <- s
 	}
@@ -233,6 +271,9 @@ func NewPool(path string, n int) *Pool {
 
 // Size reports how many verifications may run at once.
 func (p *Pool) Size() int { return cap(p.free) }
+
+// Threads reports how wide each verification may be.
+func (p *Pool) Threads() int { return p.threads }
 
 // Verify checks out a worker, runs one verification, and returns the worker.
 //
