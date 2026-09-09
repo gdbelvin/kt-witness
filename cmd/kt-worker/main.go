@@ -40,6 +40,7 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/gdbsecurity/kt-witness/internal/hostmem"
 	"github.com/gdbsecurity/kt-witness/internal/pace"
 	"github.com/gdbsecurity/kt-witness/internal/work"
 	pb "github.com/gdbsecurity/kt-witness/internal/workpb"
@@ -141,8 +142,41 @@ func main() {
 		parallel = 1
 		epochThreads = budget
 	}
+	// Cap by memory as well as cores.
+	//
+	// The core budget says nothing about RAM, and a verification is measured in
+	// gigabytes: 0.61 GB for a WhatsApp epoch and about 3.7 GB for a Meta one,
+	// which is why the estimate follows the origins this worker actually
+	// serves. Without this a worker sits inside its core budget while pushing
+	// its host into swap — which it did, killing two of the operator's
+	// background tasks while reporting itself healthy on two of eight cores.
+	//
+	// Half of what is available, because the other half belongs to whoever owns
+	// the machine. If the figure cannot be read at all the cap is not applied:
+	// an unknown is not permission to assume there is room, but neither is it
+	// grounds to refuse to work — the CPU budget still bounds this, and the
+	// worker says out loud that it is flying blind.
+	perEpoch := perEpochMemory(strings.Split(*akdOrigins, ","))
+	if avail, ok := hostmem.Available(); ok {
+		byMem := int(uint64(float64(avail)*0.5) / perEpoch)
+		if byMem < 1 {
+			byMem = 1
+		}
+		if byMem < parallel {
+			log.Info("memory is the tighter constraint, not cores",
+				"available_gb", float64(avail)/(1<<30),
+				"per_epoch_gb", float64(perEpoch)/(1<<30),
+				"epochs_by_cpu", parallel, "epochs_by_memory", byMem)
+			parallel = byMem
+		}
+	} else {
+		log.Warn("cannot read available memory; pacing on cores alone",
+			"note", "a worker within its core budget can still push its host into swap")
+	}
+
 	log.Info("cpu budget", "logical_cpus", budget, "epochs_at_once", parallel,
-		"threads_per_epoch", epochThreads, "threads_total", parallel*epochThreads)
+		"threads_per_epoch", epochThreads, "threads_total", parallel*epochThreads,
+		"memory_per_epoch_gb", float64(perEpoch)/(1<<30))
 
 	w := &worker{
 		parallel:     parallel,
@@ -446,4 +480,28 @@ func hostname() string {
 		return "worker"
 	}
 	return h
+}
+
+// perEpochMemory estimates the peak RSS of one verification, from the logs this
+// worker is configured for.
+//
+// Measured rather than assumed: a WhatsApp epoch peaked at 0.61 GB on an M4,
+// and a Meta epoch at about 3.7 GB on the witness — the difference tracks proof
+// size, 50 MB against 279 MB. A single constant would either strand a
+// WhatsApp-only worker at one epoch or let a Meta worker take six and swap.
+//
+// The larger estimate wins when a worker serves both, because it is the one
+// that has to fit.
+func perEpochMemory(origins []string) uint64 {
+	const (
+		whatsappPeak = 1 << 30               // 0.61 GB measured, rounded up
+		metaPeak     = uint64(4) * (1 << 30) // 3.7 GB measured, rounded up
+	)
+	var peak uint64 = whatsappPeak
+	for _, o := range origins {
+		if strings.Contains(strings.TrimSpace(o), "meta") {
+			peak = metaPeak
+		}
+	}
+	return peak
 }
