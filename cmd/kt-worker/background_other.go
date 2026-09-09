@@ -12,7 +12,7 @@ import (
 // the lowest scheduling priority the process may set for itself, and half the
 // machine. A worker that makes its host unpleasant to use gets turned off, and
 // a worker that is turned off verifies nothing.
-func background() (string, int, error) {
+func background(_ bool) (string, int, error) {
 	_ = syscall.Setpriority(syscall.PRIO_PROCESS, 0, 19)
 	n := cpuBudget()
 	runtime.GOMAXPROCS(n)

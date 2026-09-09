@@ -27,13 +27,36 @@ import (
 // logical CPUs, and the two left over are the fast ones.
 const (
 	prioDarwinProcess = 4
-	prioDarwinBG      = 0x1000 // no longer used; kept so the history is legible
+	prioDarwinBG      = 0x1000
 )
 
 // background lowers this process's priority and returns the CPU budget it
 // should hold itself to, in logical CPUs.
-func background() (string, int, error) {
-	// Nice rather than background QoS: still yields to the owner's work, but
+//
+// Two modes, because macOS offers no way to reserve particular cores and the
+// two things it does offer sit on either side of what was asked for.
+//
+// eCoresOnly is the strict one: the background QoS class, which schedules every
+// thread onto the efficiency cluster and throttles disk I/O too. It cannot be
+// asked for a performance core at all, so it under-uses a machine that is idle
+// — but it is the only setting under which a laptop genuinely does not feel
+// slower.
+//
+// The default is a budget instead: a nice level the sidecars inherit, and a
+// thread count that leaves two logical CPUs unused. Worth being plain about
+// what that does and does not promise — the OS may still run those threads on
+// performance cores, and nice is advisory. What is enforced is the count.
+func background(eCoresOnly bool) (string, int, error) {
+	if eCoresOnly {
+		if err := syscall.Setpriority(prioDarwinProcess, 0, prioDarwinBG); err != nil {
+			return "", efficiencyCores(), fmt.Errorf("entering background QoS: %w", err)
+		}
+		n := efficiencyCores()
+		runtime.GOMAXPROCS(n)
+		return fmt.Sprintf("background QoS, %d efficiency cores of %d logical",
+			n, runtime.NumCPU()), n, nil
+	}
+	// Nice rather than background QoS: still yields to the owner's work, and
 	// remains eligible for the performance cores the budget below counts on.
 	// Children inherit it, which matters — the sidecars do the actual work.
 	if err := syscall.Setpriority(syscall.PRIO_PROCESS, 0, 10); err != nil {

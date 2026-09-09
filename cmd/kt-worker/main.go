@@ -62,6 +62,8 @@ func main() {
 		dry        = flag.Bool("dry-run", false, "take assignments and report them unverified, to exercise the channel")
 		akdBin     = flag.String("akd-bin", "", "path to kt-akd-verify")
 		akdConfig  = flag.String("config", "deploy/witness.json", "witness config, read for each AKD log's public proof directory")
+		cpus       = flag.Int("cpus", 0, "logical CPUs this worker may use in total (default: every efficiency core plus two performance cores)")
+		eCores     = flag.Bool("efficiency-cores-only", false, "macOS: run in the background QoS class, which confines every thread to the efficiency cores and throttles disk I/O. Uses less of the machine, and is the only setting under which the laptop genuinely does not feel slower")
 		akdOrigins = flag.String("akd-origins", "meta.messenger.kt/v1,whatsapp.kt/v2", "origins the AKD sidecar can verify")
 		protonBin  = flag.String("proton-bin", "", "path to kt-proton-gpu")
 		protonDir  = flag.String("proton-dir", "", "directory holding the retained Proton tree and manifest")
@@ -83,13 +85,20 @@ func main() {
 		os.Exit(2)
 	}
 
-	mode, budget, err := background()
+	mode, budget, err := background(*eCores)
 	if err != nil {
 		// Not fatal. A worker that cannot lower its own priority is merely
 		// rude, and refusing to run would trade a real contribution for a
 		// preference.
 		log.Warn("could not lower this process's priority; continuing at normal priority", "err", err)
 		mode = "normal priority"
+	}
+	if *cpus > 0 {
+		// The operator's number wins over anything derived here. This is their
+		// machine, and the derived figure is a guess about how they use it.
+		budget = *cpus
+		runtime.GOMAXPROCS(budget)
+		mode += fmt.Sprintf(", overridden to %d CPUs", budget)
 	}
 	log.Info("kt-worker", "server", *server, "name", *name, "scheduling", mode)
 
@@ -108,28 +117,32 @@ func main() {
 	// memory while it is checked (40 MB for WhatsApp, gigabytes for Meta), so
 	// concurrency costs memory in a way threads inside one process do not, and
 	// finishing an epoch sooner also returns it to the queue sooner.
+	// The budget is a HARD ceiling on threads: epochs times threads-per-epoch
+	// never exceeds it.
+	//
+	// An earlier version divided the budget by what an epoch was measured to
+	// cost — 2.3 cores against a 4-thread cap — reasoning that a proof spends
+	// real time arriving before there is anything to hash, so the threads sit
+	// idle for part of it. That measurement was taken on ONE epoch running
+	// alone, and it does not survive concurrency: with three in flight, one
+	// epoch's download overlaps another's hashing, every thread becomes
+	// runnable, and the machine sees the full twelve. Observed on this laptop —
+	// two sidecars at 401% and 226% of a core, a load average of 9 on ten
+	// cores, and an owner who noticed.
+	//
+	// An average is the wrong shape for a promise about somebody's laptop. The
+	// promise was two cores left free; only a ceiling keeps it.
 	epochThreads := 4
 	if epochThreads > budget {
 		epochThreads = budget
 	}
-	// A thread cap is a ceiling, not an average. Measured on this laptop with
-	// the cap at four: one WhatsApp epoch takes 7.9 s of CPU over 3.5 s of wall
-	// clock — 2.3 cores, about 57% of what it was allowed, because a proof
-	// spends real time arriving over the network before there is anything to
-	// hash. Dividing the budget by the cap would therefore have used half the
-	// machine the operator offered.
-	//
-	// So the divisor is what an epoch actually costs. It is a measurement and
-	// will drift with proof sizes and links; being wrong here overshoots the
-	// budget rather than the machine, which nice and the two reserved cores
-	// absorb.
-	const observedShareOfCap = 0.6
-	parallel := int(float64(budget) / (float64(epochThreads) * observedShareOfCap))
+	parallel := budget / epochThreads
 	if parallel < 1 {
 		parallel = 1
+		epochThreads = budget
 	}
 	log.Info("cpu budget", "logical_cpus", budget, "epochs_at_once", parallel,
-		"threads_per_epoch", epochThreads)
+		"threads_per_epoch", epochThreads, "threads_total", parallel*epochThreads)
 
 	w := &worker{
 		parallel:     parallel,
