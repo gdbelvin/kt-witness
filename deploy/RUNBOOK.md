@@ -442,12 +442,45 @@ Measured on an M-series laptop: one WhatsApp epoch is a 40 MB proof, 1.3 s to
 download and 1.45 s to verify. Meta's are far larger (~37 s an epoch on the
 witness), so a laptop on a home link is better pointed at WhatsApp.
 
-On a Mac it puts itself in the background QoS class, which schedules it onto
-the efficiency cores, and caps `GOMAXPROCS` to the E-core count. It then works
-**N-2 of those** epochs at a time — two on a four-E-core laptop — and its
-governor decides only *when to ask for more work*, measured against the whole
-machine. A laptop somebody starts using stops taking on new ranges and finishes
-the one it holds.
+### How much of a Mac it takes
+
+**Every efficiency core plus two performance cores**, leaving two performance
+cores for whoever is using the machine — eight of ten logical CPUs on an
+M-series laptop. It says so at startup:
+
+```
+scheduling="nice 10, 8 of 10 logical CPUs (6 efficiency + 2 performance, 2 left free)"
+cpu budget logical_cpus=8 epochs_at_once=3 threads_per_epoch=4
+```
+
+Background QoS is **off**, deliberately. It is the strongest "never make this
+laptop feel slow" macOS offers, but it is a *placement*, not a budget: it pins
+every thread to the efficiency cluster, so "and two performance cores" is
+unreachable while it is set. What replaces it is `nice 10` — which children
+inherit, and the sidecars are what actually burn the CPU — plus the arithmetic
+above. The trade is that nice no longer throttles disk I/O and no longer
+guarantees we stay off a performance core.
+
+**One epoch is not one core.** The sidecar builds a runtime sized from the
+machine and took 3.7 cores by itself, so counting epochs as cores overshoots
+nearly fourfold. `KT_AKD_THREADS` caps it, and the worker splits its budget
+into epochs × threads. Measured on WhatsApp epoch 1,000,000: uncapped 10.7 s
+CPU / 3.4 s wall; capped at four, 7.9 s / 3.5 s — same throughput, a quarter
+less CPU, and 2.3 cores rather than 4, because a proof spends real time
+arriving before there is anything to hash. Parallelism is sized from that
+measured cost, not from the cap.
+
+The governor then decides only *when to ask for more work*, and says so both
+ways in the log:
+
+```
+holding off asking for work; the host is busy  reason="machine is using 6.1 of 8.0 cores allowed"
+host has room again; asking for work
+```
+
+A laptop somebody starts using stops taking on new ranges and finishes the one
+it holds. On macOS the load figure is the one-minute load average — not
+utilisation, and it lags — which errs toward taking less of somebody's machine.
 
 ### What to expect in the logs
 
