@@ -100,6 +100,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	if timeout <= 0 {
 		timeout = 15 * time.Minute
 	}
+	holding := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -111,6 +112,18 @@ func (r *Runner) Run(ctx context.Context) error {
 				}
 				// The host does not want more work yet. Wait and ask again;
 				// this is pacing, not failure.
+				//
+				// Said out loud on the way in and the way out, because a worker
+				// that is deliberately holding back and one that has hung look
+				// identical from every other angle — and the silent version of
+				// this cost an afternoon: a laptop sat in a gate that never
+				// opened, never asked for work, and never noticed its own
+				// connection had died, because nothing downstream of the gate
+				// ever ran.
+				if !holding && r.Log != nil {
+					r.Log.Info("holding off asking for work; the host is busy", "reason", err)
+				}
+				holding = true
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
@@ -118,6 +131,10 @@ func (r *Runner) Run(ctx context.Context) error {
 				}
 				continue
 			}
+			if holding && r.Log != nil {
+				r.Log.Info("host has room again; asking for work")
+			}
+			holding = false
 		}
 		a, err := r.Next(ctx)
 		switch {

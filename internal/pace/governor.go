@@ -364,6 +364,19 @@ func (g *Governor) Permits() float64 {
 // Note that permits are floored at minPermits, so a caller asking for one will
 // never wait. That is intended: a worker that intends to do one thing at a time
 // is not what a busy machine needs protecting from.
+// Ready is WaitForWork's question without the waiting, so a caller can say out
+// loud that it is holding back. A gate that blocks silently is indistinguishable
+// from a broken worker, and this project keeps rediscovering that.
+func (g *Governor) Ready(want float64) bool {
+	if g == nil {
+		return true
+	}
+	if want < 1 {
+		want = 1
+	}
+	return g.Permits() >= want
+}
+
 func (g *Governor) WaitForWork(ctx context.Context, want float64) error {
 	if g == nil {
 		return nil

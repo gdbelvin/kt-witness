@@ -134,6 +134,7 @@ func main() {
 	w := &worker{
 		parallel:     parallel,
 		epochThreads: epochThreads,
+		budget:       budget,
 		server:       *server,
 		name:         *name,
 		token:        token,
@@ -205,6 +206,7 @@ type worker struct {
 	server, name, token string
 	parallel            int
 	epochThreads        int
+	budget              int // logical CPUs this worker may use
 	origins             []string
 	dry                 bool
 	log                 *slog.Logger
@@ -287,6 +289,13 @@ func (w *worker) run(ctx context.Context) error {
 		for {
 			msg, err := stream.Recv()
 			if err != nil {
+				// Logged here rather than only handed to the runner: the
+				// runner may be paced back and not asking, in which case
+				// nothing would ever read this and the session would die in
+				// silence.
+				if ctx.Err() == nil {
+					w.log.Warn("session ended", "err", err)
+				}
 				recvErr <- err
 				return
 			}
@@ -323,7 +332,12 @@ func (w *worker) run(ctx context.Context) error {
 	// This is a favour the machine is doing. A worker that gets switched off
 	// because it made a laptop hot verifies nothing at all.
 	gov := &pace.Governor{
-		TargetCores: float64(runtime.NumCPU()) * 0.5,
+		// The budget this worker was given, not a fraction of the machine: the
+		// operator said which cores may be used, and a second, smaller number
+		// derived here would quietly overrule that. On this laptop the derived
+		// figure was five of ten, below the eight actually offered, so the gate
+		// below never opened and the worker sat idle without saying why.
+		TargetCores: float64(w.budget),
 		// Room above the parallelism actually used, so "permits >= par" means
 		// the machine has headroom rather than that the controller happens to
 		// be sitting exactly at its ceiling.
@@ -374,7 +388,11 @@ func (w *worker) run(ctx context.Context) error {
 		// stops taking on ranges — while finishing the one it holds, because
 		// abandoning that would strand a lease for no gain.
 		BeforeNext: func(ctx context.Context) error {
-			return gov.WaitForWork(ctx, float64(par))
+			if !gov.Ready(float64(par)) {
+				load, budget := gov.Observed()
+				return fmt.Errorf("machine is using %.1f of %.1f cores allowed", load, budget)
+			}
+			return nil
 		},
 		Next: func(ctx context.Context) (work.Assignment, error) {
 			select {

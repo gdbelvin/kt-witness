@@ -17,17 +17,20 @@
 // reports the host. That is exactly what is wanted here — the neighbours on this
 // box are the thing to yield to.
 //
+// Both of those are Linux. The witness runs there; the machines lent to it may
+// not, and a sampler that silently reports nothing on a Mac is worse than one
+// that refuses to build — the governor holds at its floor when it cannot see,
+// which on a worker means it never asks for work at all and never says why.
+// That was not hypothetical: it cost an afternoon. So the two readers are
+// per-platform, and every platform has one.
+//
 // Both are cumulative counters, so a Sampler must be read repeatedly; the first
 // reading establishes a baseline and reports nothing.
 package cpuload
 
 import (
-	"bufio"
 	"fmt"
-	"os"
 	"runtime"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -59,7 +62,7 @@ type Sampler struct {
 	mu sync.Mutex
 
 	lastSelfUsec  uint64
-	lastMachine   cpuTimes
+	lastMachine   machineState
 	lastAt        time.Time
 	haveBaseline  bool
 	selfStatPath  string
@@ -81,7 +84,7 @@ func (s *Sampler) Sample() Sample {
 
 	now := time.Now()
 	selfUsec, selfOK := readSelfUsec(s.selfStatPath)
-	machine, machineOK := readProcStat()
+	machine, machineOK := readMachine()
 
 	out := Sample{TotalCores: s.totalCoresNum}
 	if !s.haveBaseline {
@@ -103,9 +106,8 @@ func (s *Sampler) Sample() Sample {
 		ok = false
 	}
 	if machineOK {
-		busy, total := machine.delta(s.lastMachine)
-		if total > 0 {
-			out.MachineCores = busy / total * s.totalCoresNum
+		if cores, cok := machine.cores(s.lastMachine, s.totalCoresNum); cok {
+			out.MachineCores = cores
 		} else {
 			ok = false
 		}
@@ -116,72 +118,6 @@ func (s *Sampler) Sample() Sample {
 
 	s.lastSelfUsec, s.lastMachine, s.lastAt = selfUsec, machine, now
 	return out
-}
-
-func readSelfUsec(path string) (uint64, bool) {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, false
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		k, v, ok := strings.Cut(strings.TrimSpace(sc.Text()), " ")
-		if !ok || k != "usage_usec" {
-			continue
-		}
-		n, err := strconv.ParseUint(strings.TrimSpace(v), 10, 64)
-		if err != nil {
-			return 0, false
-		}
-		return n, true
-	}
-	return 0, false
-}
-
-// cpuTimes is the aggregate line from /proc/stat.
-type cpuTimes struct {
-	total, idle float64
-}
-
-func (c cpuTimes) delta(prev cpuTimes) (busy, total float64) {
-	total = c.total - prev.total
-	idle := c.idle - prev.idle
-	busy = total - idle
-	if busy < 0 {
-		busy = 0
-	}
-	return busy, total
-}
-
-func readProcStat() (cpuTimes, bool) {
-	f, err := os.Open("/proc/stat")
-	if err != nil {
-		return cpuTimes{}, false
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	if !sc.Scan() {
-		return cpuTimes{}, false
-	}
-	fields := strings.Fields(sc.Text())
-	if len(fields) < 6 || fields[0] != "cpu" {
-		return cpuTimes{}, false
-	}
-	var t cpuTimes
-	for i, f := range fields[1:] {
-		v, err := strconv.ParseFloat(f, 64)
-		if err != nil {
-			return cpuTimes{}, false
-		}
-		t.total += v
-		// Fields 3 and 4 (0-indexed) are idle and iowait. Both are time the
-		// machine had nothing to do, so both count as free.
-		if i == 3 || i == 4 {
-			t.idle += v
-		}
-	}
-	return t, true
 }
 
 func (s Sample) String() string {
