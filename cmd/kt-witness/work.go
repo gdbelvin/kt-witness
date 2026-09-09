@@ -47,7 +47,7 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 		Token: token,
 		Log:   log,
 		OnResult: func(r work.Result) error {
-			return recordWorkerResult(db, r, log)
+			return recordWorkerResult(db, q, r, log)
 		},
 	}
 
@@ -106,13 +106,24 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 // that did nothing can report it; that is what spot-checking is for, and it is
 // not built yet. Until it is, this channel should only be given to machines the
 // operator controls, which is also why the listener refuses a public address.
-func recordWorkerResult(db *store.Store, r work.Result, log *slog.Logger) error {
+func recordWorkerResult(db *store.Store, q *work.Queue, r work.Result, log *slog.Logger) error {
 	if r.Err != "" {
-		// Unavailable, not evidence. Recorded as a settled-but-unverified
-		// epoch so coverage reflects the gap rather than hiding it.
+		// Unavailable is an answer, and the worker was right to send it rather
+		// than retry on its own. Two things follow from it.
+		//
+		// It is recorded as a settled-but-unverified epoch, so coverage
+		// reflects the gap rather than hiding it — an epoch nobody can fetch is
+		// the finding this witness most wants to surface, not an error to
+		// swallow. And it goes back to the queue, which may hand it to a
+		// different machine; after a few attempts the queue stops, because at
+		// that point the answer is the answer.
+		attempt, again := q.Reschedule(r.Origin, r.Epoch)
+		log.Info("epoch unavailable", "origin", r.Origin, "epoch", r.Epoch,
+			"worker", r.Worker, "attempt", attempt, "rescheduled", again,
+			"err", r.Err)
 		return db.RecordAudit(&store.Audit{
 			Origin: r.Origin, Epoch: r.Epoch, Sampled: true, Rate: 1,
-			Strategy: "worker:" + r.Worker, Verified: false, Attempts: 1,
+			Strategy: "worker:" + r.Worker, Verified: false, Attempts: attempt,
 			DecidedAt: time.Now().UTC(),
 		})
 	}

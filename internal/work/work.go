@@ -52,6 +52,11 @@ type Assignment struct {
 	// evidence of new work.
 	Nonce string `json:"nonce"`
 
+	// notBefore holds a retry back until its backoff has passed. Unexported:
+	// it is the queue's bookkeeping and has no meaning to a worker, so it does
+	// not belong on the wire.
+	notBefore time.Time
+
 	// Deadline is when the lease expires and the range returns to the queue. A
 	// worker past it should stop: its results will be refused, and continuing
 	// wastes the one resource this whole design exists to conserve.
@@ -111,13 +116,44 @@ type Queue struct {
 	lease   time.Duration
 	now     func() time.Time
 	nextSeq int
+
+	// reported counts what has come back for each leased assignment, so a
+	// finished range can be released instead of sitting on a lease until it
+	// expires and is handed out again.
+	reported map[string]map[int64]bool
+
+	// attempts counts failures per epoch, so an epoch that is simply gone stops
+	// being rescheduled. Entries are dropped on success or on giving up.
+	attempts map[string]int
 }
+
+const (
+	// maxAttempts is how many times an epoch that came back unavailable is
+	// handed out again before the queue accepts the answer.
+	//
+	// Three, because the two failures worth retrying — a worker that lost its
+	// network, an operator having a bad minute — clear inside minutes, and the
+	// failure that is not worth retrying is the one this witness exists to
+	// find: data that has aged out and is never coming back. Retrying that
+	// forever would burn the ecosystem's scarcest resource re-discovering a
+	// fact already recorded.
+	maxAttempts = 3
+
+	// retryBase is the first backoff; it doubles per attempt. Long enough that
+	// a retry is not simply the same request into the same broken thing.
+	retryBase = time.Minute
+)
 
 func NewQueue(lease time.Duration) *Queue {
 	if lease <= 0 {
 		lease = 10 * time.Minute
 	}
-	return &Queue{leased: map[string]Assignment{}, lease: lease, now: time.Now}
+	return &Queue{
+		leased:   map[string]Assignment{},
+		reported: map[string]map[int64]bool{},
+		attempts: map[string]int{},
+		lease:    lease, now: time.Now,
+	}
 }
 
 // Add queues a range for dispatch.
@@ -145,14 +181,20 @@ func (q *Queue) Lease(worker string, origins []string) (Assignment, error) {
 	for _, o := range origins {
 		can[o] = true
 	}
+	now := q.now()
 	for i, a := range q.pending {
 		if len(can) > 0 && !can[a.Origin] {
 			continue
 		}
+		if !a.notBefore.IsZero() && now.Before(a.notBefore) {
+			continue // a retry whose backoff has not elapsed
+		}
 		q.pending = append(q.pending[:i], q.pending[i+1:]...)
 		a.Nonce = newNonce()
-		a.Deadline = q.now().Add(q.lease)
+		a.notBefore = time.Time{}
+		a.Deadline = now.Add(q.lease)
 		q.leased[a.ID] = a
+		q.reported[a.ID] = map[int64]bool{}
 		return a, nil
 	}
 	return Assignment{}, ErrNoWork
@@ -183,7 +225,66 @@ func (q *Queue) Accept(r Result) error {
 		return fmt.Errorf("work: epoch %d is outside assignment %s (%d..%d)",
 			r.Epoch, a.ID, a.From, a.To)
 	}
+
+	// Release the range as soon as its last epoch is in.
+	//
+	// Nothing used to do this, and the consequence was quiet: a finished
+	// assignment sat in the leased map until its deadline, and reclaimLocked
+	// then put it back on the queue as though it had been abandoned. Every
+	// range would have been verified twice, once for real and once ten minutes
+	// later, and the only visible symptom is a coverage rate that is half what
+	// the hardware should give.
+	seen := q.reported[r.AssignmentID]
+	if seen == nil {
+		seen = map[int64]bool{}
+		q.reported[r.AssignmentID] = seen
+	}
+	seen[r.Epoch] = true
+	if int64(len(seen)) == a.To-a.From+1 {
+		delete(q.leased, r.AssignmentID)
+		delete(q.reported, r.AssignmentID)
+	}
+	delete(q.attempts, epochKey(r.Origin, r.Epoch))
 	return nil
+}
+
+// Reschedule takes an epoch a worker could not verify and decides whether
+// anyone should try again. It reports the attempt number and whether the epoch
+// went back on the queue.
+//
+// Rescheduling lives here rather than in the worker deliberately. A worker that
+// retried its own failures would be making a scheduling decision from inside
+// the machine that just failed — retrying the same fetch, over the same broken
+// network, while holding a lease — and a worker that simply dropped them would
+// leave the epoch unexamined with nothing recording that it had been skipped.
+// Reported back as an answer, it becomes the queue's business, and the queue is
+// the one party that can hand it to a different machine.
+func (q *Queue) Reschedule(origin string, epoch int64) (attempt int, requeued bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	k := epochKey(origin, epoch)
+	n := q.attempts[k] + 1
+	if n >= maxAttempts {
+		// Accept the answer. The epoch is unavailable, which is a finding about
+		// the ecosystem rather than a failure of this queue, and the caller has
+		// already recorded it.
+		delete(q.attempts, k)
+		return n, false
+	}
+	q.attempts[k] = n
+
+	q.nextSeq++
+	q.pending = append(q.pending, Assignment{
+		ID:     fmt.Sprintf("%s#%d-retry%d", origin, q.nextSeq, n),
+		Origin: origin, From: epoch, To: epoch,
+		notBefore: q.now().Add(retryBase << (n - 1)),
+	})
+	return n, true
+}
+
+func epochKey(origin string, epoch int64) string {
+	return fmt.Sprintf("%s@%d", origin, epoch)
 }
 
 // Done releases an assignment once its whole range has been reported.
@@ -207,6 +308,7 @@ func (q *Queue) reclaimLocked() {
 	for id, a := range q.leased {
 		if now.After(a.Deadline) {
 			delete(q.leased, id)
+			delete(q.reported, id)
 			q.pending = append(q.pending, stripLease(a))
 		}
 	}

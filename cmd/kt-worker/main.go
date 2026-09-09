@@ -158,6 +158,15 @@ type worker struct {
 // and reports a verdict, and whether those cross a network or a function call
 // is the only difference between this worker and the ones inside the witness.
 func (w *worker) run(ctx context.Context) error {
+	// Parallelism is N-2: use the machine, and leave two.
+	//
+	// N here is GOMAXPROCS, which on a Mac is already the efficiency-core count
+	// — so this is two spare of the cores this worker is allowed at all, not
+	// two of the whole laptop. On a four-E-core machine that is two epochs at a
+	// time, which is the intent: visible progress, invisible to whoever is
+	// using the laptop.
+	par := work.DefaultParallel()
+
 	creds := insecure.NewCredentials() // the channel is confined to this LAN
 	conn, err := grpc.NewClient(w.server, grpc.WithTransportCredentials(creds))
 	if err != nil {
@@ -172,9 +181,12 @@ func (w *worker) run(ctx context.Context) error {
 	}
 
 	if err := stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Hello{Hello: &pb.Hello{
-		Name:     w.name,
-		Origins:  w.origins,
-		Parallel: int32(runtime.GOMAXPROCS(0)),
+		Name:    w.name,
+		Origins: w.origins,
+		// Declare what will actually be done, not what the machine has. The
+		// witness sizes assignments from this, and an overstated figure only
+		// buys ranges that miss their deadline.
+		Parallel: int32(par),
 		Version:  version,
 		Platform: runtime.GOOS + "/" + runtime.GOARCH,
 	}}}); err != nil {
@@ -214,30 +226,43 @@ func (w *worker) run(ctx context.Context) error {
 
 	// This worker's own governor, measuring THIS machine.
 	//
-	// The background QoS class decides where threads run; this decides whether
-	// to start another epoch at all. They are different questions: a laptop
+	// The background QoS class decides WHERE threads run; this decides whether
+	// to take on more work at all. They are different questions: a laptop
 	// pinned to its efficiency cores can still make itself unpleasant if it
-	// keeps four sidecar processes resident while somebody is trying to use it.
+	// keeps several sidecar processes resident while somebody is using it.
 	//
-	// The budget is deliberately small. This is a favour the machine is doing,
-	// and a worker that gets switched off because it made a laptop hot verifies
-	// nothing at all.
+	// The budget is machine-wide, and deliberately generous about everybody
+	// else: half the laptop's logical cores, measured across all of them rather
+	// than across the E-cores this worker is confined to. Budgeting against
+	// GOMAXPROCS instead would compare a machine-wide measurement against a
+	// four-core ceiling and conclude the laptop was overloaded the moment its
+	// owner opened anything.
+	//
+	// This is a favour the machine is doing. A worker that gets switched off
+	// because it made a laptop hot verifies nothing at all.
 	gov := &pace.Governor{
-		TargetCores:   float64(runtime.GOMAXPROCS(0)) * 0.75,
-		MaxConcurrent: runtime.GOMAXPROCS(0),
+		TargetCores: float64(runtime.NumCPU()) * 0.5,
+		// Room above the parallelism actually used, so "permits >= par" means
+		// the machine has headroom rather than that the controller happens to
+		// be sitting exactly at its ceiling.
+		MaxConcurrent: par * 2,
 		MinPermits:    1,
 		Log:           w.log,
 	}
 	go gov.Run(ctx)
 
 	r := &work.Runner{
-		Name: w.name,
-		Log:  w.log,
-		Acquire: func(ctx context.Context) (func(), error) {
-			if err := gov.Acquire(ctx); err != nil {
-				return nil, err
-			}
-			return gov.Release, nil
+		Name:     w.name,
+		Log:      w.log,
+		Parallel: par,
+		// The governor's whole remaining job: decide when to ask for more.
+		//
+		// It asks whether the machine can support the parallelism this worker
+		// is about to use, so a laptop that somebody has started using simply
+		// stops taking on ranges — while finishing the one it holds, because
+		// abandoning that would strand a lease for no gain.
+		BeforeNext: func(ctx context.Context) error {
+			return gov.WaitForWork(ctx, float64(par))
 		},
 		Next: func(ctx context.Context) (work.Assignment, error) {
 			select {

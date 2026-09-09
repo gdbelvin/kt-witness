@@ -326,3 +326,40 @@ func (g *Governor) Permits() float64 {
 	defer g.mu.Unlock()
 	return g.permits
 }
+
+// WaitForWork blocks until the machine has room for want concurrent
+// verifications, and is how a worker paces its REQUESTS for work.
+//
+// It deliberately takes no permit and holds nothing. An earlier design had the
+// worker Acquire around each epoch, which put the governor in the middle of an
+// assignment it had already accepted: the machine would take a lease on a
+// range, then refuse to work it, and the range sat on a timer while the worker
+// idled. Pacing belongs at the point where more work is taken on, because that
+// is the only decision that is still free to be made differently.
+//
+// want is the parallelism the caller is about to use, so the question asked is
+// the honest one — "can this machine support the work I am about to start" —
+// rather than "is there one core spare", which is true on a machine already
+// saturated by this same worker.
+//
+// Note that permits are floored at minPermits, so a caller asking for one will
+// never wait. That is intended: a worker that intends to do one thing at a time
+// is not what a busy machine needs protecting from.
+func (g *Governor) WaitForWork(ctx context.Context, want float64) error {
+	if g == nil {
+		return nil
+	}
+	if want < 1 {
+		want = 1
+	}
+	for {
+		if g.Permits() >= want {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(governorInterval / 3):
+		}
+	}
+}
