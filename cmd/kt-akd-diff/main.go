@@ -27,6 +27,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"runtime/pprof"
 	"time"
 
 	"github.com/gdbsecurity/kt-witness/internal/akdtree"
@@ -40,8 +41,22 @@ func main() {
 		from       = flag.Int64("from", 0, "first epoch (0 picks one from the middle of the published range)")
 		n          = flag.Int("n", 10, "how many consecutive epochs to check")
 		mutate     = flag.Bool("mutate", false, "also corrupt each proof and require rejection")
+		cpuprofile = flag.String("cpuprofile", "", "write a CPU profile here")
 	)
 	flag.Parse()
+
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		defer pprof.StopCPUProfile()
+	}
 
 	sources, err := loadSources(*configPath)
 	if err != nil {

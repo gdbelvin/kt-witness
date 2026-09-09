@@ -44,8 +44,10 @@
 package akdtree
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
+	"slices"
 	"sort"
 
 	"lukechampine.com/blake3"
@@ -67,14 +69,18 @@ type Element struct {
 	Value Digest
 }
 
-func hash(parts ...[]byte) Digest {
-	h := blake3.New(32, nil)
-	for _, p := range parts {
-		h.Write(p)
-	}
-	var out Digest
-	copy(out[:], h.Sum(nil))
-	return out
+// hash is one-shot and allocation-free.
+//
+// The streaming form — New, Write, Sum(nil) — allocates a hasher and a result
+// slice per call, and this is called four times per node. On a Meta proof that
+// is fifteen million allocations, and the profile showed the cost not in the
+// hashing but in the garbage collector's threads: kevent and pthread_cond_wait
+// were 36% of the runtime, ahead of blake3 itself at 7%.
+func hash2(a, b []byte) Digest {
+	var buf [64]byte
+	copy(buf[:32], a)
+	copy(buf[32:], b)
+	return blake3.Sum256(buf[:])
 }
 
 var (
@@ -97,14 +103,14 @@ func labelValue(label [32]byte, l uint32) Digest {
 	var buf [36]byte
 	binary.BigEndian.PutUint32(buf[0:4], l)
 	copy(buf[4:], label[:])
-	return hash(buf[:])
+	return blake3.Sum256(buf[:])
 }
 
 // parentHash combines two children: blake3( blake3(lv||ll) || blake3(rv||rl) ).
 func parentHash(lv, ll, rv, rl Digest) Digest {
-	left := hash(lv[:], ll[:])
-	right := hash(rv[:], rl[:])
-	return hash(left[:], right[:])
+	left := hash2(lv[:], ll[:])
+	right := hash2(rv[:], rl[:])
+	return hash2(left[:], right[:])
 }
 
 // HashLeafWithCommitment is applied to every inserted value before the second
@@ -113,21 +119,27 @@ func HashLeafWithCommitment(v Digest, epoch uint64) Digest {
 	var buf [40]byte
 	copy(buf[:32], v[:])
 	binary.BigEndian.PutUint64(buf[32:], epoch)
-	return hash(buf[:])
+	return blake3.Sum256(buf[:])
 }
 
-func emptyRootValue() Digest { return hash(emptyValue) }
-
-func emptyNodeHash() Digest {
-	inner := hash(emptyValue)
-	lv := labelValue(emptyLabelVal, 0)
-	return hash(inner[:], lv[:])
-}
-
-func rootLabelValue() Digest {
-	var zero [32]byte
-	return labelValue(zero, 0)
-}
+// These three are constants of the configuration, so they are computed once.
+//
+// emptyNodeHash in particular is asked for at every childless branch — the
+// commonest event in a sparse tree — and computing its three hashes each time
+// was pure repetition of a fixed answer.
+var (
+	emptyRootValueV = blake3.Sum256(emptyValue)
+	emptyNodeHashV  = func() Digest {
+		inner := blake3.Sum256(emptyValue)
+		lv := labelValue(emptyLabelVal, 0)
+		return hash2(inner[:], lv[:])
+	}()
+	emptyLabelValueV = labelValue(emptyLabelVal, 0)
+	rootLabelValueV  = func() Digest {
+		var zero [32]byte
+		return labelValue(zero, 0)
+	}()
+)
 
 // bitAt reads bit i of a label, most significant bit of byte 0 first.
 func bitAt(label *[32]byte, i uint32) int {
@@ -185,15 +197,22 @@ func prefixOf(label [32]byte, l uint32) [32]byte {
 // once turns the whole build into index arithmetic over one array, which is the
 // single largest difference between the two implementations.
 func Sort(elems []Element) {
-	sort.Slice(elems, func(i, j int) bool {
-		a, b := &elems[i], &elems[j]
-		for k := 0; k < 32; k++ {
-			if a.Label[k] != b.Label[k] {
-				return a.Label[k] < b.Label[k]
-			}
+	slices.SortFunc(elems, func(a, b Element) int {
+		c := bytes.Compare(a.Label[:], b.Label[:])
+		if c != 0 {
+			return c
 		}
-		return a.Len < b.Len
+		return int(a.Len) - int(b.Len)
 	})
+}
+
+// less is the same order, for the merge.
+func less(a, b *Element) bool {
+	c := bytes.Compare(a.Label[:], b.Label[:])
+	if c != 0 {
+		return c < 0
+	}
+	return a.Len < b.Len
 }
 
 // Root builds the trie over elems and returns the tree's root hash.
@@ -205,9 +224,7 @@ func Root(elems []Element) (Digest, error) {
 	if len(elems) == 0 {
 		// An empty tree keeps the root's initial value rather than combining
 		// two absent children.
-		v := emptyRootValue()
-		rl := rootLabelValue()
-		return hash(v[:], rl[:]), nil
+		return hash2(emptyRootValueV[:], rootLabelValueV[:]), nil
 	}
 
 	// The root's label is zero-length, so the split is on bit 0.
@@ -223,8 +240,7 @@ func Root(elems []Element) (Digest, error) {
 		return Digest{}, err
 	}
 	rootVal := parentHash(lv, ll, rv, rl)
-	rlv := rootLabelValue()
-	return hash(rootVal[:], rlv[:]), nil
+	return hash2(rootVal[:], rootLabelValueV[:]), nil
 }
 
 // subtree returns the hash and hashed label of the node covering elems, which
@@ -235,7 +251,7 @@ func subtree(elems []Element, depth uint32) (val, lab Digest, err error) {
 		// No child on this side. The reference substitutes a fixed hash and the
 		// empty label rather than skipping the term, so the shape of the parent
 		// hash does not depend on how many children a node has.
-		return emptyNodeHash(), labelValue(emptyLabelVal, 0), nil
+		return emptyNodeHashV, emptyLabelValueV, nil
 	case 1:
 		e := &elems[0]
 		// A leaf's hash is its value: auditor mode does not mix in the epoch.
@@ -279,16 +295,28 @@ func subtree(elems []Element, depth uint32) (val, lab Digest, err error) {
 	return parentHash(lv, ll, rv, rl), labelValue(prefixOf(elems[0].Label, lcp), lcp), nil
 }
 
+// A Verifier holds the scratch space for the merged node set.
+//
+// Reused across epochs on purpose. The merged set for a Meta proof is about
+// 3.6 million elements — a quarter of a gigabyte — and allocating it per epoch
+// put the garbage collector's madvise at 15% of the runtime. A worker verifies
+// thousands of epochs in a row; it should allocate that buffer once.
+//
+// Not safe for concurrent use. Give each goroutine its own.
+type Verifier struct {
+	scratch []Element
+}
+
 // VerifyAppendOnly checks one epoch transition.
 //
 // unchanged must rebuild prevRoot on its own, and unchanged plus inserted —
 // each inserted value first committed to endEpoch — must rebuild currRoot. Both
-// slices are modified in place (sorted, and inserted values replaced).
+// slices are sorted in place.
 //
 // It reports whether the proof holds. An error means this implementation could
 // not reach a verdict, which is not the same as a proof being bad and must
 // never be reported as one.
-func VerifyAppendOnly(unchanged, inserted []Element, prevRoot, currRoot Digest, endEpoch uint64) (bool, error) {
+func (v *Verifier) VerifyAppendOnly(unchanged, inserted []Element, prevRoot, currRoot Digest, endEpoch uint64) (bool, error) {
 	Sort(unchanged)
 	got, err := Root(unchanged)
 	if err != nil {
@@ -298,17 +326,49 @@ func VerifyAppendOnly(unchanged, inserted []Element, prevRoot, currRoot Digest, 
 		return false, nil
 	}
 
-	both := make([]Element, 0, len(unchanged)+len(inserted))
-	both = append(both, unchanged...)
+	// Commit each inserted value to the epoch, then MERGE rather than
+	// concatenate and re-sort. Both inputs are sorted by this point, so the
+	// combined order costs one linear pass instead of a second n log n over a
+	// set that is mostly the same elements in the same order.
 	for i := range inserted {
-		e := inserted[i]
-		e.Value = HashLeafWithCommitment(e.Value, endEpoch)
-		both = append(both, e)
+		inserted[i].Value = HashLeafWithCommitment(inserted[i].Value, endEpoch)
 	}
-	Sort(both)
+	Sort(inserted)
+
+	n := len(unchanged) + len(inserted)
+	if cap(v.scratch) < n {
+		v.scratch = make([]Element, n)
+	}
+	both := v.scratch[:n]
+	merge(both, unchanged, inserted)
+
 	got, err = Root(both)
 	if err != nil {
 		return false, fmt.Errorf("rebuilding the current root: %w", err)
 	}
 	return got == currRoot, nil
+}
+
+// VerifyAppendOnly is the one-shot form, for callers that verify a single
+// epoch and do not want to hold scratch space.
+func VerifyAppendOnly(unchanged, inserted []Element, prevRoot, currRoot Digest, endEpoch uint64) (bool, error) {
+	var v Verifier
+	return v.VerifyAppendOnly(unchanged, inserted, prevRoot, currRoot, endEpoch)
+}
+
+// merge writes the ordered union of two sorted slices into out.
+func merge(out, a, b []Element) {
+	i, j, k := 0, 0, 0
+	for i < len(a) && j < len(b) {
+		if less(&a[i], &b[j]) {
+			out[k] = a[i]
+			i++
+		} else {
+			out[k] = b[j]
+			j++
+		}
+		k++
+	}
+	k += copy(out[k:], a[i:])
+	copy(out[k:], b[j:])
 }
