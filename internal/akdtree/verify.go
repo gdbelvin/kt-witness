@@ -46,6 +46,7 @@ package akdtree
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"sort"
@@ -371,4 +372,18 @@ func merge(out, a, b []Element) {
 	}
 	k += copy(out[k:], a[i:])
 	copy(out[k:], b[j:])
+}
+
+// ParseDigest reads a 64-character hex root.
+func ParseDigest(s string) (Digest, error) {
+	var d Digest
+	if len(s) != 64 {
+		return d, fmt.Errorf("akdtree: root is %d hex chars, want 64", len(s))
+	}
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return d, fmt.Errorf("akdtree: root is not hex: %w", err)
+	}
+	copy(d[:], b)
+	return d, nil
 }

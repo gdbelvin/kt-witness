@@ -166,6 +166,18 @@ type config struct {
 		// about how fast auditing ought to go. Defaults to 1.
 		SidecarWorkers int `json:"sidecar_workers"`
 
+		// ShadowVerify runs the Go verifier beside the Rust reference and
+		// records whether they agree. The reference still decides; this only
+		// builds the record that would one day justify trusting the faster
+		// one. Defaults to on, and costs about an eighth of a verification on
+		// epochs whose proof is already cached — it never downloads anything
+		// a second time to check our own arithmetic.
+		//
+		// ShadowEvery samples it: 1 (or 0) shadows everything, 10 shadows one
+		// epoch in ten.
+		ShadowVerify *bool `json:"shadow_verify"`
+		ShadowEvery  int   `json:"shadow_every"`
+
 		// ReserveCores is how many cores to leave free for everything else. The
 		// backlog sweep's budget is derived from the machine: it drives total
 		// usage toward (cores - reserve). Defaults to 1 when pacing is on.
@@ -604,7 +616,14 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		if workers < 1 {
 			workers = audit.DefaultWorkers()
 		}
-		sidecar := audit.NewPool(cfg.Audit.SidecarPath, workers)
+		pool := audit.NewPool(cfg.Audit.SidecarPath, workers)
+		var sidecar audit.Verifier = pool
+		if cfg.Audit.ShadowVerify == nil || *cfg.Audit.ShadowVerify {
+			sidecar = &audit.Shadow{Primary: pool, Log: log, Every: cfg.Audit.ShadowEvery}
+			log.Info("shadow verification enabled",
+				"note", "the Rust reference decides; the Go verifier is only observed",
+				"every", max(1, cfg.Audit.ShadowEvery))
+		}
 		defer sidecar.Close()
 		// Pace the backlog against measured CPU rather than a fixed budget. A
 		// constant is wrong the moment the hardware or the proof sizes change:
@@ -650,12 +669,12 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		}
 		log.Info("tier B auditing enabled", "sidecar", cfg.Audit.SidecarPath,
 			"sample_rate", rate, "logs", len(resolvers), "interval", auditInterval.String(),
-			"workers", sidecar.Size(),
-			"threads_each", sidecar.Threads(),
-			"threads_total", sidecar.Size()*sidecar.Threads(),
+			"workers", pool.Size(),
+			"threads_each", pool.Threads(),
+			"threads_total", pool.Size()*pool.Threads(),
 			"machine_cores", runtime.NumCPU(),
 			"workers_derived", cfg.Audit.SidecarWorkers < 1,
-			"peak_memory_estimate_gb", float64(sidecar.Size())*3.7)
+			"peak_memory_estimate_gb", float64(pool.Size())*3.7)
 	}
 
 	peers, err := cosig.NewVerifier(cfg.PeerWitnesses)
