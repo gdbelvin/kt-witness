@@ -92,7 +92,16 @@ func (s *Shadow) VerifyCached(ctx context.Context, logDirectory string, epoch in
 		}()
 	}
 	if read == "" {
-		metrics.Inc("kt_witness_shadow_skipped_total", map[string]string{"reason": "no proof to read"})
+		// Say which of the two ways this happened, because they have different
+		// fixes and "no proof to read" covered both: a primary that was handed
+		// a cached file and then had nothing to retain, versus one that
+		// downloaded and did not keep it. Guessing between them from a single
+		// counter wasted a round trip.
+		reason := "sidecar kept nothing"
+		if !res.OK {
+			reason = "primary rejected, nothing retained"
+		}
+		metrics.Inc("kt_witness_shadow_skipped_total", map[string]string{"reason": reason})
 		return res, err
 	}
 	if !res.OK && res.Kind != "verify" {
