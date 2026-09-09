@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 
 	"github.com/gdbsecurity/kt-witness/internal/audit"
 	"github.com/gdbsecurity/kt-witness/internal/metrics"
@@ -70,7 +71,20 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 	if err != nil {
 		return nil, err
 	}
-	g := grpc.NewServer()
+	// Match the workers' keepalives, and let a worker probe between
+	// assignments — an idle fleet is still a fleet, and a machine that sleeps
+	// between ranges is the normal case rather than the exception. Without
+	// this the server would treat those probes as abuse and close the session.
+	g := grpc.NewServer(
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			Time:    30 * time.Second,
+			Timeout: 10 * time.Second,
+		}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
+	)
 	srv.Register(g)
 	go func() {
 		<-ctx.Done()

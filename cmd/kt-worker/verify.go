@@ -50,6 +50,11 @@ type verifier interface {
 type akdVerifier struct {
 	bin string
 	src map[string]*akd.Source // by origin
+	// threads caps the sidecar's runtime. Without it the sidecar sizes itself
+	// from the machine's core count and ignores this worker's budget entirely
+	// — one epoch took 3.7 cores on a laptop that had promised to use eight in
+	// total across four of them.
+	threads int
 }
 
 func (v akdVerifier) verify(ctx context.Context, origin string, epoch int64) (string, string, error) {
@@ -70,6 +75,9 @@ func (v akdVerifier) verify(ctx context.Context, origin string, epoch int64) (st
 	})
 	cmd := exec.CommandContext(ctx, v.bin)
 	cmd.Stdin = strings.NewReader(string(req))
+	if v.threads > 0 {
+		cmd.Env = append(os.Environ(), fmt.Sprintf("KT_AKD_THREADS=%d", v.threads))
+	}
 	out, err := cmd.Output()
 	if err != nil {
 		return "", "", fmt.Errorf("%s: %w", v.bin, err)

@@ -37,6 +37,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 
 	"github.com/gdbsecurity/kt-witness/internal/pace"
@@ -82,12 +83,12 @@ func main() {
 		os.Exit(2)
 	}
 
-	mode, err := background()
+	mode, budget, err := background()
 	if err != nil {
 		// Not fatal. A worker that cannot lower its own priority is merely
 		// rude, and refusing to run would trade a real contribution for a
 		// preference.
-		log.Warn("could not enter background scheduling; continuing at normal priority", "err", err)
+		log.Warn("could not lower this process's priority; continuing at normal priority", "err", err)
 		mode = "normal priority"
 	}
 	log.Info("kt-worker", "server", *server, "name", *name, "scheduling", mode)
@@ -95,12 +96,49 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Split the CPU budget into epochs and threads.
+	//
+	// One epoch is not one core. The sidecar runs a multi-threaded runtime and
+	// takes ~3.7 cores on its own for a WhatsApp proof, so counting epochs as
+	// cores would overshoot the budget by nearly four times — the first version
+	// of this would have run four epochs at once on a budget of eight and used
+	// closer to fifteen.
+	//
+	// Fewer, wider processes rather than many narrow ones: a proof is held in
+	// memory while it is checked (40 MB for WhatsApp, gigabytes for Meta), so
+	// concurrency costs memory in a way threads inside one process do not, and
+	// finishing an epoch sooner also returns it to the queue sooner.
+	epochThreads := 4
+	if epochThreads > budget {
+		epochThreads = budget
+	}
+	// A thread cap is a ceiling, not an average. Measured on this laptop with
+	// the cap at four: one WhatsApp epoch takes 7.9 s of CPU over 3.5 s of wall
+	// clock — 2.3 cores, about 57% of what it was allowed, because a proof
+	// spends real time arriving over the network before there is anything to
+	// hash. Dividing the budget by the cap would therefore have used half the
+	// machine the operator offered.
+	//
+	// So the divisor is what an epoch actually costs. It is a measurement and
+	// will drift with proof sizes and links; being wrong here overshoots the
+	// budget rather than the machine, which nice and the two reserved cores
+	// absorb.
+	const observedShareOfCap = 0.6
+	parallel := int(float64(budget) / (float64(epochThreads) * observedShareOfCap))
+	if parallel < 1 {
+		parallel = 1
+	}
+	log.Info("cpu budget", "logical_cpus", budget, "epochs_at_once", parallel,
+		"threads_per_epoch", epochThreads)
+
 	w := &worker{
-		server: *server,
-		name:   *name,
-		token:  token,
-		dry:    *dry,
-		log:    log,
+		parallel:     parallel,
+		epochThreads: epochThreads,
+		server:       *server,
+		name:         *name,
+		token:        token,
+		dry:          *dry,
+		log:          log,
 	}
 	w.verifiers = map[string]verifier{}
 	if *akdBin != "" {
@@ -121,7 +159,7 @@ func main() {
 				log.Error("no proof directory for this origin", "origin", o, "config", *akdConfig)
 				os.Exit(2)
 			}
-			w.verifiers[o] = akdVerifier{bin: *akdBin, src: src}
+			w.verifiers[o] = akdVerifier{bin: *akdBin, src: src, threads: epochThreads}
 		}
 	}
 	if *protonBin != "" && *protonDir != "" {
@@ -165,6 +203,8 @@ func main() {
 
 type worker struct {
 	server, name, token string
+	parallel            int
+	epochThreads        int
 	origins             []string
 	dry                 bool
 	log                 *slog.Logger
@@ -183,17 +223,34 @@ type worker struct {
 // and reports a verdict, and whether those cross a network or a function call
 // is the only difference between this worker and the ones inside the witness.
 func (w *worker) run(ctx context.Context) error {
-	// Parallelism is N-2: use the machine, and leave two.
-	//
-	// N here is GOMAXPROCS, which on a Mac is already the efficiency-core count
-	// — so this is two spare of the cores this worker is allowed at all, not
-	// two of the whole laptop. On a four-E-core machine that is two epochs at a
-	// time, which is the intent: visible progress, invisible to whoever is
-	// using the laptop.
-	par := work.DefaultParallel()
+	// How many epochs at once, decided in main from this machine's CPU budget:
+	// every efficiency core plus two performance cores, split into processes
+	// wide enough that one epoch actually uses the threads it is given.
+	par := w.parallel
 
 	creds := insecure.NewCredentials() // the channel is confined to this LAN
-	conn, err := grpc.NewClient(w.server, grpc.WithTransportCredentials(creds))
+
+	// Keepalives, because a dead session and a quiet one look identical.
+	//
+	// This worker reconnects on any failure — a lid closing, a network
+	// changing, the witness restarting — but only once it LEARNS the session
+	// is gone. Without keepalives it does not: a half-open connection leaves
+	// Recv blocked forever, and that is not hypothetical. This laptop sat in a
+	// session it believed was open across two restarts of the witness, doing
+	// nothing, reporting nothing, and logging nothing, while its reconnect loop
+	// waited for an error that was never going to arrive.
+	//
+	// PermitWithoutStream keeps the probe running between assignments, which is
+	// most of the time on an idle fleet and exactly when a machine is most
+	// likely to sleep.
+	ka := keepalive.ClientParameters{
+		Time:                30 * time.Second,
+		Timeout:             10 * time.Second,
+		PermitWithoutStream: true,
+	}
+	conn, err := grpc.NewClient(w.server,
+		grpc.WithTransportCredentials(creds),
+		grpc.WithKeepaliveParams(ka))
 	if err != nil {
 		return err
 	}
@@ -295,6 +352,7 @@ func (w *worker) run(ctx context.Context) error {
 					Parallel: int32(par), Cpus: int32(runtime.GOMAXPROCS(0)),
 					LoadCores: load, BudgetCores: budget,
 				}}}); err != nil {
+				w.log.Debug("capacity report failed; the session is going away", "err", err)
 				return
 			}
 			select {

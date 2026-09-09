@@ -214,8 +214,36 @@ fn write_line(out: &mut std::io::StdoutLock, v: &serde_json::Value) {
     let _ = out.flush();
 }
 
+/// How many worker threads the runtime may use.
+///
+/// The default is one per logical CPU, which ignores whatever budget the caller
+/// is holding itself to — and this process is the part that actually burns the
+/// CPU, so that default silently overrides the caller's whole plan. Measured on
+/// a laptop: one epoch took 3.7 cores while the worker driving it had promised
+/// to use eight across four concurrent epochs.
+///
+/// KT_AKD_THREADS lets the caller say what it meant. Unset or unparseable falls
+/// back to the previous behaviour, because a worker that cannot read an
+/// environment variable should still verify.
+fn worker_threads() -> Option<usize> {
+    std::env::var("KT_AKD_THREADS")
+        .ok()?
+        .parse::<usize>()
+        .ok()
+        .filter(|n| *n > 0)
+}
+
 fn main() {
-    let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.enable_all();
+    if let Some(n) = worker_threads() {
+        builder.worker_threads(n);
+        // Blocking work (proof decode, hashing) runs on a separate pool that is
+        // 512 threads by default. Left alone it would walk straight past the
+        // cap above, which is the whole point of setting one.
+        builder.max_blocking_threads(n);
+    }
+    let rt = match builder.build() {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("failed to build tokio runtime: {e}");
