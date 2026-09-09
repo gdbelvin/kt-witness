@@ -207,9 +207,16 @@ somebody else's tree math; a bug here would libel Signal irreversibly.
 Withholding costs Signal nothing and gets a human's attention. Promotion is in
 [TODO.md](../TODO.md), after a production record.
 
-**Known limit: the ledger is in memory.** A restart loses it, so
-between-snapshot coverage is per-process — and deployment restarts containers.
-It belongs in the store; also in TODO.
+**It is durable.** The ledger loads from the store on first use and persists
+after every verified search, so the comparison covers the whole time this
+witness has been watching rather than the current process lifetime. Measured on
+the deployment: **61,179 entries cross-checked**, across many restarts.
+
+This paragraph previously said the opposite — "known limit: the ledger is in
+memory, a restart loses it" — and it was wrong. The durable path had been built
+and the note never updated. It is recorded here because a stale limitation in a
+document is worse than an unrecorded one: it argues against work that is already
+finished, and a reader has no way to tell the difference without going to look.
 
 ## Monitor proofs: not reachable by a witness
 
@@ -277,19 +284,36 @@ Coverage still comes from Signal's auditor feed, not from per-label monitoring.
 
 ## Why the tier stays A
 
-Signal's proofs are **per-label**. They answer questions about identifiers the
-asker can already name, and the VRF exists precisely so a third party cannot
-enumerate the rest.
+Not because the proofs are thin. What every fetch verifies above is a complete
+chain, and the search opens a label's whole **version history** — 31 log entries
+to reach version 3,645 — with the path recomputed from version counters rather
+than taken from the server, and monotonicity enforced along it. For any label
+this witness can name, it verifies not the current value but every value that
+label has ever held.
 
-So verifying every proof obtainable still examines a vanishing fraction of the
-directory — unlike Proton, where the entire leaf set is published and the whole
-tree can be rebuilt. Calling this tier B would claim coverage that does not
-exist, and the beacon-sampling argument that works for Meta does not transfer:
-sampling epochs is not sampling labels.
+That is the design working as intended. The per-label history exists so a client
+can check its own key once, cheaply, instead of at every epoch — which means
+covering the label space was never the auditor's job in the first place. An
+earlier version of this section argued the tier from label coverage: "verifying
+every proof obtainable still examines a vanishing fraction of the directory."
+That answered a question nobody asked. Sampling labels is not what an auditor of
+this design does.
 
-**Full coverage needs Signal's auditor feed**, which is bilateral. That is a
-conversation, not code — and it is the sort of conversation that goes better
-with an operating record behind it.
+**The auditor's job is the label-independent structural properties**: that the
+log is append-only, and that each update legally transformed the prefix tree.
+The first is verified here, continuously, and is what tier A means. The second
+is not, and cannot be — verifying that updates were legal requires seeing them,
+Signal's updates are per-label, and the VRF exists precisely so a third party
+cannot enumerate them.
+
+So the honest sentence is: **this witness verifies the shape of the log, and the
+complete history of every label it can name; it cannot verify that updates it
+cannot see were legal.** The gap is the update stream, not the label space.
+
+That stream is the auditor plane — `audit.kt.signal.org`, batched updates,
+`SetAuditorHead` — which needs a Signal-issued client certificate. Three
+auditors have it. Closing this gap is a conversation rather than code, and the
+sort that goes better with an operating record behind it.
 
 ## Operational notes
 
