@@ -51,7 +51,7 @@ import (
 	"slices"
 	"sort"
 
-	"lukechampine.com/blake3"
+	"github.com/zeebo/blake3"
 )
 
 // Digest is one hash. BLAKE3, not SHA-256: the configuration these logs use is
@@ -69,6 +69,19 @@ type Element struct {
 	Len   uint32
 	Value Digest
 }
+
+// The hash implementation is zeebo/blake3 rather than lukechampine's, measured
+// rather than assumed — and the measurement was the opposite of the guess.
+//
+// Both ship assembly for amd64 and fall back to portable Go on arm64, so the
+// expectation was that the x86 witness would be the quick one. It is not: a
+// 64-byte hash costs 89 ns on an M4 in portable Go and 266 ns on the witness's
+// 2.3 GHz Xeon with AVX2. The laptop is three times faster per hash than the
+// server, which is worth remembering whenever a figure from one is quoted at
+// the other.
+//
+// Between the two libraries, zeebo is 15% quicker on the laptop and 45% quicker
+// on the Xeon — and the Xeon is where nearly all of this runs.
 
 // hash is one-shot and allocation-free.
 //

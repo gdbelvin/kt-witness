@@ -2,6 +2,9 @@ package akdtree
 
 import (
 	"testing"
+
+	zblake3 "github.com/zeebo/blake3"
+	lblake3 "lukechampine.com/blake3"
 )
 
 // These are structural tests. The real correctness evidence is cmd/kt-akd-diff
@@ -230,3 +233,24 @@ var errRootMismatch = errString("root did not match the one computed alone")
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+// The two Go blake3 implementations must agree, byte for byte.
+//
+// Checked because this package switched between them for speed, and a hash
+// function that differs anywhere would not be a performance regression — it
+// would be a verifier that disagrees with Meta about every root, or worse,
+// agrees about most and differs on some input nobody thought to try.
+func TestBlake3ImplementationsAgree(t *testing.T) {
+	buf := make([]byte, 0, 512)
+	for n := 0; n < 200; n++ {
+		buf = buf[:0]
+		for i := 0; i < n; i++ {
+			buf = append(buf, byte(i*7+n))
+		}
+		a := lblake3.Sum256(buf)
+		b := zblake3.Sum256(buf)
+		if a != b {
+			t.Fatalf("implementations differ at length %d", n)
+		}
+	}
+}
