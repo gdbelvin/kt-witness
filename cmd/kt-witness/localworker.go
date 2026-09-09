@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os/exec"
-	"strings"
 	"time"
 
+	"github.com/gdbsecurity/kt-witness/internal/audit"
 	"github.com/gdbsecurity/kt-witness/internal/pace"
 	"github.com/gdbsecurity/kt-witness/internal/store"
 	"github.com/gdbsecurity/kt-witness/internal/work"
@@ -27,15 +25,27 @@ import (
 // actually bounds this machine, and N-2 cores would be an OOM kill dressed up
 // as parallelism. That is the one place the witness differs from a laptop, and
 // it differs in the parameter rather than in the pattern.
-func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *work.Queue, g *pace.Governor, n int, log *slog.Logger) {
+func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *work.Queue,
+	g *pace.Governor, sidecar audit.Verifier, resolvers []audit.Resolver, timeout time.Duration,
+	n int, log *slog.Logger) {
 	if n < 1 {
 		n = 1
 	}
-	bin := cfg.Audit.SidecarPath
+	byOrigin := map[string]audit.Resolver{}
+	for _, r := range resolvers {
+		byOrigin[r.Origin()] = r
+	}
+	if len(byOrigin) == 0 || sidecar == nil {
+		log.Warn("no local worker: nothing here can verify an epoch",
+			"resolvers", len(byOrigin), "sidecar", sidecar != nil)
+		return
+	}
+
 	name := "witness"
 	r := &work.Runner{
-		Name: name,
-		Log:  log.With("worker", name),
+		Name:         name,
+		Log:          log.With("worker", name),
+		EpochTimeout: timeout,
 		// How much of this box to use, asked fresh for each range.
 		//
 		// Spare, not Permits: the backwards sweep draws on the same allowance
@@ -63,15 +73,15 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 			}
 			return p
 		},
-		Next: func(ctx context.Context) (work.Assignment, error) {
-			return q.Lease(name, nil)
-		},
-		Verify: func(ctx context.Context, origin string, epoch int64) (string, string, error) {
-			return akdVerify(ctx, bin, origin, epoch)
-		},
 		// No request gate here, deliberately: the width above is this host's
 		// yielding, and a second brake that can never release would be one
 		// silent stall waiting to happen.
+		Next: func(ctx context.Context) (work.Assignment, error) {
+			return q.Lease(name, originsOf(byOrigin))
+		},
+		Verify: func(ctx context.Context, origin string, epoch int64) (string, string, error) {
+			return verifyEpochHere(ctx, byOrigin[origin], sidecar, origin, epoch, timeout)
+		},
 		Report: func(ctx context.Context, res work.Result) error {
 			if err := q.Accept(res); err != nil {
 				return err
@@ -84,35 +94,57 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 			log.Error("local worker stopped", "name", name, "err", err)
 		}
 	}()
-	log.Info("local worker leasing from the shared queue", "parallel", n)
+	log.Info("local worker leasing from the shared queue", "parallel", n,
+		"origins", originsOf(byOrigin))
 }
 
-// akdVerify replays one audit proof with the Rust sidecar.
+func originsOf(m map[string]audit.Resolver) []string {
+	out := make([]string, 0, len(m))
+	for o := range m {
+		out = append(out, o)
+	}
+	return out
+}
+
+// verifyEpochHere resolves one epoch and replays its proof through the shared
+// sidecar pool.
 //
-// Identical in shape to the verifier a remote worker uses, deliberately: if the
-// two diverged, the witness would be checking something subtly different from
-// what it asks other machines to check.
-func akdVerify(ctx context.Context, bin, origin string, epoch int64) (string, string, error) {
-	req, _ := json.Marshal(map[string]any{"origin": origin, "epoch": epoch})
-	cmd := exec.CommandContext(ctx, bin)
-	cmd.Stdin = strings.NewReader(string(req))
-	out, err := cmd.Output()
+// Two things here are load-bearing, and the first version of this file got both
+// wrong by spawning the sidecar binary directly.
+//
+// An epoch cannot be verified from its number alone. The sidecar needs the log
+// directory and the two roots the operator published, and those come from the
+// object key in the operator's own listing — which is the point: the proof is
+// checked against the roots the log published, not against anything we derived.
+// A request without them is refused as malformed, and the worker would have
+// reported every epoch "unavailable", writing a real epoch down as unverified.
+//
+// And it goes through the POOL rather than a fresh process. The pool is what
+// bounds concurrent replays against the container's memory limit; a second
+// spawner beside it means the bound is the sum of two numbers nobody wrote
+// down, and being wrong is an OOM kill of the whole witness rather than a
+// slowdown.
+func verifyEpochHere(ctx context.Context, r audit.Resolver, sidecar audit.Verifier,
+	origin string, epoch int64, timeout time.Duration) (string, string, error) {
+	if r == nil {
+		return "", "", fmt.Errorf("no resolver for %s", origin)
+	}
+	ref, err := r.ResolveEpoch(ctx, epoch)
 	if err != nil {
-		return "", "", fmt.Errorf("%s: %w", bin, err)
+		return "", "", fmt.Errorf("resolving %s epoch %d: %w", origin, epoch, err)
 	}
-	var r struct {
-		OK     bool   `json:"ok"`
-		Root   string `json:"root"`
-		Signed string `json:"signed_root"`
-		Error  string `json:"error"`
+	res, err := sidecar.VerifyCached(ctx, ref.LogDirectory, epoch, ref.PrevRoot, ref.CurrRoot, "", timeout)
+	if err != nil {
+		return "", "", err
 	}
-	if err := json.Unmarshal(out, &r); err != nil {
-		return "", "", fmt.Errorf("sidecar output was not JSON: %s", strings.TrimSpace(string(out)))
+	if !res.OK {
+		if res.Error != "" {
+			return "", "", fmt.Errorf("%s", res.Error)
+		}
+		// The proof did not reconstruct the published root. Reported as a
+		// disagreement — computed root empty against a non-empty published one
+		// — never as a finding: what that means is the witness's to decide.
+		return "", ref.CurrRoot, nil
 	}
-	if !r.OK && r.Error != "" {
-		return "", "", fmt.Errorf("%s", r.Error)
-	}
-	return r.Root, r.Signed, nil
+	return ref.CurrRoot, ref.CurrRoot, nil
 }
-
-var _ = time.Second

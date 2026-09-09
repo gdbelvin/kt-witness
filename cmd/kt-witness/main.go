@@ -695,7 +695,22 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 	}
 	var workers func() map[string]time.Time
 	if cfg.Work.Listen != "" {
-		w, err := startWorkChannel(ctx, cfg, db, governorFor(auditor), log)
+		// The work channel needs what the sweep needs: something that can turn
+		// an epoch into the roots the operator published, and the one pool that
+		// bounds concurrent replays. Passing them rather than letting the local
+		// worker build its own is what keeps the memory bound a single number.
+		var (
+			wSidecar   audit.Verifier
+			wResolvers []audit.Resolver
+			wTimeout   = 5 * time.Minute
+		)
+		if auditor != nil {
+			wSidecar, wResolvers = auditor.Sidecar, resolvers
+			if auditor.Timeout > 0 {
+				wTimeout = auditor.Timeout
+			}
+		}
+		w, err := startWorkChannel(ctx, cfg, db, governorFor(auditor), wSidecar, wResolvers, wTimeout, log)
 		if err != nil {
 			// Refusing to start is the point. A work channel that silently did
 			// not come up would leave the witness looking healthy while the

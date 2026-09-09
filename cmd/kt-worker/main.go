@@ -60,6 +60,7 @@ func main() {
 		tokenEnv   = flag.String("token-env", "KT_WORK_TOKEN", "environment variable holding the shared token")
 		dry        = flag.Bool("dry-run", false, "take assignments and report them unverified, to exercise the channel")
 		akdBin     = flag.String("akd-bin", "", "path to kt-akd-verify")
+		akdConfig  = flag.String("config", "deploy/witness.json", "witness config, read for each AKD log's public proof directory")
 		akdOrigins = flag.String("akd-origins", "meta.messenger.kt/v1,whatsapp.kt/v2", "origins the AKD sidecar can verify")
 		protonBin  = flag.String("proton-bin", "", "path to kt-proton-gpu")
 		protonDir  = flag.String("proton-dir", "", "directory holding the retained Proton tree and manifest")
@@ -103,10 +104,24 @@ func main() {
 	}
 	w.verifiers = map[string]verifier{}
 	if *akdBin != "" {
+		// An epoch cannot be verified from its number: the sidecar needs the
+		// proof directory and the two roots the operator published, and this
+		// worker looks those up itself from the operator's listing.
+		src, err := akdSourcesFromConfig(*akdConfig)
+		if err != nil {
+			log.Error("cannot read the AKD logs to verify", "config", *akdConfig, "err", err)
+			os.Exit(2)
+		}
 		for _, o := range strings.Split(*akdOrigins, ",") {
-			if o = strings.TrimSpace(o); o != "" {
-				w.verifiers[o] = akdVerifier{bin: *akdBin}
+			o = strings.TrimSpace(o)
+			if o == "" {
+				continue
 			}
+			if src[o] == nil {
+				log.Error("no proof directory for this origin", "origin", o, "config", *akdConfig)
+				os.Exit(2)
+			}
+			w.verifiers[o] = akdVerifier{bin: *akdBin, src: src}
 		}
 	}
 	if *protonBin != "" && *protonDir != "" {

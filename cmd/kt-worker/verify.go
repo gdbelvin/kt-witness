@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
-	"time"
+
+	"github.com/gdbsecurity/kt-witness/internal/source/akd"
 )
 
 // A verifier turns one epoch into a verdict, on whatever hardware this worker
@@ -29,11 +31,43 @@ type verifier interface {
 //
 // Stateless: any worker can verify any epoch, in any order, without holding
 // anything from a previous one. That is what makes AKD work well here — a
-// laptop can be handed epochs 400,000 to 400,100 and needs nothing else.
-type akdVerifier struct{ bin string }
+// laptop can be handed epochs 400,000 to 400,100 and needs nothing else from
+// the witness but the numbers.
+//
+// # It resolves the epoch itself
+//
+// The sidecar cannot verify an epoch from its number. It needs the log
+// directory and the two roots the transition runs between, and those come from
+// the operator's own object listing — the roots are in the object key. The
+// first version of this sent {origin, epoch} and would have had every
+// assignment refused as malformed.
+//
+// The worker does that lookup itself rather than being told the answer, which
+// is also the more honest arrangement: it checks the proof against roots it
+// fetched from the operator, not against roots the witness asserted. The
+// witness is asking for a second opinion, and an opinion formed from the
+// asker's own evidence is worth less.
+type akdVerifier struct {
+	bin string
+	src map[string]*akd.Source // by origin
+}
 
 func (v akdVerifier) verify(ctx context.Context, origin string, epoch int64) (string, string, error) {
-	req, _ := json.Marshal(map[string]any{"origin": origin, "epoch": epoch})
+	s := v.src[origin]
+	if s == nil {
+		return "", "", fmt.Errorf("no log directory configured for %s", origin)
+	}
+	ref, err := s.ResolveEpoch(ctx, epoch)
+	if err != nil {
+		return "", "", fmt.Errorf("resolving %s epoch %d: %w", origin, epoch, err)
+	}
+
+	req, _ := json.Marshal(map[string]any{
+		"log_directory": ref.LogDirectory,
+		"epoch":         epoch,
+		"prev_root":     ref.PrevRoot,
+		"curr_root":     ref.CurrRoot,
+	})
 	cmd := exec.CommandContext(ctx, v.bin)
 	cmd.Stdin = strings.NewReader(string(req))
 	out, err := cmd.Output()
@@ -41,18 +75,61 @@ func (v akdVerifier) verify(ctx context.Context, origin string, epoch int64) (st
 		return "", "", fmt.Errorf("%s: %w", v.bin, err)
 	}
 	var r struct {
-		OK     bool   `json:"ok"`
-		Root   string `json:"root"`
-		Signed string `json:"signed_root"`
-		Error  string `json:"error"`
+		OK    bool   `json:"ok"`
+		Error string `json:"error"`
 	}
 	if err := json.Unmarshal(out, &r); err != nil {
 		return "", "", fmt.Errorf("sidecar output was not JSON: %s", strings.TrimSpace(string(out)))
 	}
-	if !r.OK && r.Error != "" {
-		return "", "", fmt.Errorf("%s", r.Error)
+	if !r.OK {
+		if r.Error != "" {
+			return "", "", fmt.Errorf("%s", r.Error)
+		}
+		// The proof did not rebuild the root the operator published. Reported
+		// as a disagreement, never as a finding: an empty computed root against
+		// a published one. What that means is the witness's to decide, and this
+		// worker does not get to accuse anybody.
+		return "", ref.CurrRoot, nil
 	}
-	return r.Root, r.Signed, nil
+	return ref.CurrRoot, ref.CurrRoot, nil
+}
+
+// akdSourcesFromConfig builds a resolver per AKD log named in the witness's
+// config file.
+//
+// The same file the witness runs from, so a worker cannot be checking a
+// different log directory than the one it is reporting about — the failure that
+// would produce is a confident verdict on the wrong data.
+func akdSourcesFromConfig(path string) (map[string]*akd.Source, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var cfg struct {
+		Logs []struct {
+			Type         string `json:"type"`
+			Origin       string `json:"origin"`
+			LogDirectory string `json:"log_directory"`
+		} `json:"logs"`
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	out := map[string]*akd.Source{}
+	for _, l := range cfg.Logs {
+		if l.Type != "akd" || l.LogDirectory == "" {
+			continue
+		}
+		s, err := akd.New(akd.Config{Origin: l.Origin, LogDirectory: l.LogDirectory})
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", l.Origin, err)
+		}
+		out[l.Origin] = s
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%s names no akd logs", path)
+	}
+	return out, nil
 }
 
 // protonGPUVerifier rebuilds a Proton tree on the GPU.
@@ -80,43 +157,11 @@ func (v protonGPUVerifier) verify(ctx context.Context, origin string, epoch int6
 		return "", "", fmt.Errorf("%s: %w", v.bin, err)
 	}
 	var r struct {
-		Root string `json:"root"`
+		Root   string `json:"root"`
+		Signed string `json:"signed_root"`
 	}
 	if err := json.Unmarshal(out, &r); err != nil {
-		return "", "", fmt.Errorf("rebuild output was not JSON: %s", strings.TrimSpace(string(out)))
+		return "", "", fmt.Errorf("%s output was not JSON: %s", v.bin, strings.TrimSpace(string(out)))
 	}
-	signed, err := protonSignedRoot(ctx, v.dir, epoch)
-	if err != nil {
-		return r.Root, "", err
-	}
-	return r.Root, signed, nil
+	return r.Root, r.Signed, nil
 }
-
-// protonSignedRoot reads the operator's signed tree hash from the manifest the
-// fetch step wrote. Read locally rather than fetched, so a worker cannot be
-// steered by whatever a network answers at the moment it asks.
-func protonSignedRoot(_ context.Context, dir string, epoch int64) (string, error) {
-	f, err := openManifest(dir)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	dec := json.NewDecoder(f)
-	for {
-		var m struct {
-			Epoch    int64  `json:"epoch"`
-			TreeHash string `json:"tree_hash"`
-		}
-		if err := dec.Decode(&m); err != nil {
-			return "", fmt.Errorf("epoch %d is not in the manifest", epoch)
-		}
-		if m.Epoch == epoch {
-			return m.TreeHash, nil
-		}
-	}
-}
-
-// timeout bounds one epoch. A rebuild is about a minute on the GPU and a proof
-// replay tens of seconds; anything far past that has gone wrong in a way that
-// waiting will not fix, and the lease is expiring meanwhile.
-const epochTimeout = 15 * time.Minute

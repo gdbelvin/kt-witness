@@ -19,7 +19,9 @@ import (
 )
 
 // startWorkChannel serves verification work to machines on this network.
-func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pace.Governor, log *slog.Logger) (func() map[string]time.Time, error) {
+func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pace.Governor,
+	sidecar audit.Verifier, resolvers []audit.Resolver, timeout time.Duration,
+	log *slog.Logger) (func() map[string]time.Time, error) {
 	note, err := workrpc.CheckListenAddr(cfg.Work.Listen)
 	if err != nil {
 		return nil, err
@@ -99,7 +101,7 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 	if local < 1 {
 		local = audit.DefaultWorkers()
 	}
-	startLocalWorkers(ctx, cfg, db, q, gov, local, log)
+	startLocalWorkers(ctx, cfg, db, q, gov, sidecar, resolvers, timeout, local, log)
 
 	log.Info("work channel listening", "addr", cfg.Work.Listen, "lease", lease.String(),
 		"origins", origins,
