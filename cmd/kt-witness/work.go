@@ -106,6 +106,7 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 		}
 	}
 	startWorkFeed(ctx, db, q, origins, log)
+	publishQueueDepth(ctx, q)
 
 	// The witness's own verification, as ordinary participants on the same
 	// queue. Nothing here is privileged and nothing bypasses the lease: local
@@ -227,4 +228,53 @@ func recordCapacity(worker string, c work.Capacity) {
 	metrics.Set("kt_witness_worker_load_cores", l, c.LoadCores)
 	metrics.Set("kt_witness_worker_budget_cores", l, c.BudgetCores)
 	metrics.Set("kt_witness_worker_capacity_reported_unix", l, float64(time.Now().Unix()))
+}
+
+// publishQueueDepth exports what the queue holds, per origin.
+//
+// A worker that is idle because the queue is empty and one that is idle
+// because it is broken look identical from every other angle, and the fleet
+// graph shows only what workers claim they could do — not whether they were
+// offered anything.
+func publishQueueDepth(ctx context.Context, q *work.Queue) {
+	metrics.Describe("kt_witness_work_queue_pending", metrics.Gauge,
+		"Ranges waiting to be handed out, by log")
+	metrics.Describe("kt_witness_work_queue_leased", metrics.Gauge,
+		"Ranges currently held by a worker, by log")
+	go func() {
+		t := time.NewTicker(15 * time.Second)
+		defer t.Stop()
+		for {
+			pending, leased := q.Depth()
+			// Report a zero for an origin that has drained, rather than
+			// leaving its last non-zero value standing: a stale gauge here
+			// would say the queue is full when it is empty, which is the exact
+			// misreading this exists to prevent.
+			for _, o := range knownOrigins(pending, leased) {
+				l := map[string]string{"origin": o}
+				metrics.Set("kt_witness_work_queue_pending", l, float64(pending[o]))
+				metrics.Set("kt_witness_work_queue_leased", l, float64(leased[o]))
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
+}
+
+var seenQueueOrigins = map[string]bool{}
+
+func knownOrigins(maps ...map[string]int) []string {
+	for _, m := range maps {
+		for o := range m {
+			seenQueueOrigins[o] = true
+		}
+	}
+	out := make([]string, 0, len(seenQueueOrigins))
+	for o := range seenQueueOrigins {
+		out = append(out, o)
+	}
+	return out
 }

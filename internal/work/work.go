@@ -338,6 +338,32 @@ func (q *Queue) Done(id string) {
 
 // Stats reports queue depth, for the metrics that say whether workers are
 // keeping up or starving.
+// Depth reports what is waiting and what is out, per origin.
+//
+// Added after a worker sat idle for forty-nine minutes, connected and
+// reporting capacity, while nothing could say whether the queue had run dry or
+// was full of work it could not do. Every other part of this system publishes
+// what it is doing; the queue in the middle of it published nothing, so the one
+// question that mattered — "is this worker starved or broken?" — had no answer
+// from outside the box.
+func (q *Queue) Depth() (pendingByOrigin, leasedByOrigin map[string]int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.reclaimLocked()
+	now := q.now()
+	pendingByOrigin = map[string]int{}
+	leasedByOrigin = map[string]int{}
+	for _, a := range q.pending {
+		if a.notBefore.IsZero() || !now.Before(a.notBefore) {
+			pendingByOrigin[a.Origin]++
+		}
+	}
+	for _, a := range q.leased {
+		leasedByOrigin[a.Origin]++
+	}
+	return pendingByOrigin, leasedByOrigin
+}
+
 // Pending counts only what a worker could be given right now.
 //
 // A retry serving its backoff is queued but not available, and counting it as
