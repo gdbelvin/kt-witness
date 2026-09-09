@@ -180,6 +180,12 @@ func recordWorkerResult(db *store.Store, q *work.Queue, r work.Result, log *slog
 	if _, err := hex.DecodeString(r.Root); r.Root != "" && err != nil {
 		return fmt.Errorf("root is not hex")
 	}
+	if r.Verified {
+		// Counted against the machine that did it, so a graph can answer
+		// "did adding that box help" — which by origin alone it cannot.
+		metrics.Inc(audit.MetricByWorker,
+			map[string]string{"worker": r.Worker, "origin": r.Origin})
+	}
 	return db.RecordAudit(&store.Audit{
 		Origin: r.Origin, Epoch: r.Epoch, Sampled: true, Rate: 1,
 		Strategy: "worker:" + r.Worker, Verified: r.Verified, Attempts: 1,
@@ -210,6 +216,8 @@ func recordCapacity(worker string, c work.Capacity) {
 			"Cores in use across the worker's whole machine, as the worker measures it")
 		metrics.Describe("kt_witness_worker_budget_cores", metrics.Gauge,
 			"Cores the worker is holding itself to")
+		metrics.Describe(audit.MetricByWorker, metrics.Counter,
+			"Epochs verified, by the machine that verified them")
 		metrics.Describe("kt_witness_worker_capacity_reported_unix", metrics.Gauge,
 			"When this worker last reported its capacity; a stale value is a worker that stopped talking")
 	})

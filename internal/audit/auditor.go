@@ -13,6 +13,13 @@ import (
 	"github.com/gdbsecurity/kt-witness/internal/store"
 )
 
+// MetricByWorker counts verified epochs against the machine that verified them.
+//
+// Separate from kt_witness_audit_verified_total rather than a label on it: that
+// counter is grouped by origin and aggregated with max in several panels, and
+// splitting it into more series would silently change what those panels report.
+const MetricByWorker = "kt_witness_epochs_verified_by_worker_total"
+
 // EpochRef locates one epoch's construction proof.
 type EpochRef struct {
 	LogDirectory string
@@ -236,6 +243,12 @@ func (a *Auditor) Run(ctx context.Context, r Resolver) error {
 
 		lbl := map[string]string{"origin": origin}
 		metrics.Inc("kt_witness_audit_verified_total", lbl)
+		// The same epoch, counted against the machine that did it. Without
+		// this, "did adding a machine help" cannot be answered from the graphs
+		// at all: every series is by origin, so a fleet of four looks exactly
+		// like one very fast witness, and a worker that quietly stopped
+		// contributing looks like a log that got slower.
+		metrics.Inc(MetricByWorker, map[string]string{"worker": "witness-live", "origin": origin})
 		metrics.Add("kt_witness_audit_bytes_total", lbl, float64(ar.Bytes))
 		// The sidecar fetches proofs over its own HTTP stack, outside any
 		// transport we wrap, so without this the single largest consumer of

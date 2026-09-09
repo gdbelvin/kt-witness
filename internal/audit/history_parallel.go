@@ -181,6 +181,7 @@ func (a *Auditor) verifyResolved(ctx context.Context, origin string, epoch int64
 		metrics.Add("kt_witness_audit_verify_seconds_sum", lbl, float64(res.VerifyMS)/1000)
 		metrics.Add("kt_witness_audit_download_seconds_sum", lbl, float64(res.DownloadMS)/1000)
 		metrics.Inc("kt_witness_audit_verified_total", lbl)
+		metrics.Inc(MetricByWorker, map[string]string{"worker": "witness-sweep", "origin": origin})
 		// The same verification, counted again on its own. The shared counter
 		// is incremented by both the live path and this one, so its rate
 		// answers "is auditing happening" but not "is the BACKLOG moving" —
