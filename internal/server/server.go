@@ -10,11 +10,14 @@
 package server
 
 import (
+	"log/slog"
+
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/gdbsecurity/kt-witness/internal/work"
 	"net/http"
 	"strconv"
 	"strings"
@@ -36,6 +39,17 @@ type Server struct {
 	// documented path, which is deliberately visible rather than blank.
 	Commit string
 	Built  string
+
+	// Work hands verification out to other machines, and OnResult records what
+	// they report. Both nil means the channel is closed — which is the default,
+	// because a witness that accepts work results from anywhere is a witness
+	// whose coverage figure anyone can inflate.
+	Work     *work.Queue
+	OnResult func(work.Result) error
+	// WorkToken authenticates workers. Empty closes the channel outright rather
+	// than opening it: a missing secret must never read as "no secret needed".
+	WorkToken string
+	Log       *slog.Logger
 
 	// Tiers maps an origin to the assurance tier it is witnessed at. Published
 	// because it is the single thing a reader must not misjudge: a tier-A
@@ -114,6 +128,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/gossip", s.gossip)
 	mux.HandleFunc("/graph", s.graphPage)
 	mux.HandleFunc("/events", s.events)
+	mux.HandleFunc("/work/stream", s.workStream)
+	mux.HandleFunc("/work/results", s.workResults)
 	return mux
 }
 
