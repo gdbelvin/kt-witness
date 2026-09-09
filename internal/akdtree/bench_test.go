@@ -3,6 +3,7 @@ package akdtree
 import (
 	"testing"
 
+	zblake3 "github.com/zeebo/blake3"
 	"lukechampine.com/blake3"
 )
 
@@ -29,4 +30,21 @@ func BenchmarkNodeHashes(b *testing.B) {
 		ll = labelValue(label, 42)
 	}
 	_ = lv
+}
+
+// BenchmarkHash64Zeebo compares the other maintained Go blake3.
+//
+// Asked because neither library ships arm64 assembly: both accelerate amd64
+// and fall back to portable Go on Apple silicon. That inverts the usual
+// assumption about which machine is fast — the laptop hashes in plain Go while
+// the witness's x86 box uses AVX2, so a floor measured here understates what
+// the server can do, and every ns/node figure taken on this laptop is the
+// pessimistic one.
+func BenchmarkHash64Zeebo(b *testing.B) {
+	var buf [64]byte
+	b.SetBytes(64)
+	for i := 0; i < b.N; i++ {
+		d := zblake3.Sum256(buf[:])
+		copy(buf[:32], d[:])
+	}
 }

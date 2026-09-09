@@ -165,3 +165,68 @@ func TestPrefixZeroesTheTail(t *testing.T) {
 		}
 	}
 }
+
+// A Verifier holds scratch space, so several of them must be able to run at
+// once without touching each other's.
+//
+// This is the shape the shadow verifier uses in production: eight concurrent
+// checks, each taking a Verifier from a pool. A scratch buffer shared by
+// accident would corrupt a root hash under load and nowhere else — a
+// disagreement that appears only when busy, which is the hardest kind of bug to
+// believe and the easiest to blame on the log.
+func TestConcurrentVerifiersDoNotShareScratch(t *testing.T) {
+	// Two different node sets, so a crossed buffer changes an answer rather
+	// than coincidentally producing the same one.
+	setA := []Element{elem(0x00, 8, 1), elem(0x40, 8, 2), elem(0x80, 8, 3)}
+	setB := []Element{elem(0x20, 8, 9), elem(0x60, 8, 8), elem(0xa0, 8, 7), elem(0xe0, 8, 6)}
+	Sort(setA)
+	Sort(setB)
+	wantA, err := Root(setA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantB, err := Root(setB)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const goroutines = 8
+	const rounds = 200
+	errs := make(chan error, goroutines)
+	for g := 0; g < goroutines; g++ {
+		set, want := setA, wantA
+		if g%2 == 1 {
+			set, want = setB, wantB
+		}
+		go func() {
+			var v Verifier
+			for i := 0; i < rounds; i++ {
+				// Each round gets its own copies: VerifyAppendOnly sorts in
+				// place and commits values, so shared inputs would be a
+				// different bug from the one under test.
+				unchanged := append([]Element(nil), set...)
+				ok, err := v.VerifyAppendOnly(unchanged, nil, want, want, 1)
+				if err != nil {
+					errs <- err
+					return
+				}
+				if !ok {
+					errs <- errRootMismatch
+					return
+				}
+			}
+			errs <- nil
+		}()
+	}
+	for g := 0; g < goroutines; g++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent verification disagreed with itself: %v", err)
+		}
+	}
+}
+
+var errRootMismatch = errString("root did not match the one computed alone")
+
+type errString string
+
+func (e errString) Error() string { return string(e) }
