@@ -42,6 +42,11 @@ func main() {
 		n          = flag.Int("n", 10, "how many consecutive epochs to check")
 		mutate     = flag.Bool("mutate", false, "also corrupt each proof and require rejection")
 		cpuprofile = flag.String("cpuprofile", "", "write a CPU profile here")
+
+		acceptance = flag.Bool("acceptance", false, "run the acceptance test: half the trials corrupted, all must be judged correctly")
+		trials     = flag.Int("trials", 1000, "acceptance trials; 128 corrupted gives 2^-128 against a verifier that ignores the proof")
+		corpusN    = flag.Int("proofs", 8, "how many distinct proofs to test against")
+		parallel   = flag.Int("parallel", 0, "trials at once (default N-2)")
 	)
 	flag.Parse()
 
@@ -67,6 +72,17 @@ func main() {
 	if src == nil {
 		fmt.Fprintf(os.Stderr, "no akd log named %q in %s\n", *origin, *configPath)
 		os.Exit(2)
+	}
+
+	if *acceptance {
+		p := *parallel
+		if p <= 0 {
+			p = defaultParallel()
+		}
+		if !runAcceptance(resolverFor(src), *from, *corpusN, *trials, p) {
+			os.Exit(1)
+		}
+		return
 	}
 
 	start := *from
@@ -206,3 +222,25 @@ func hexDigest(s string) (akdtree.Digest, error) {
 func loadSources(path string) (map[string]*akd.Source, error) {
 	return akdSourcesFromConfig(path)
 }
+
+// epochSource is the little the acceptance harness needs from a log.
+type epochSource interface {
+	ResolveEpoch(epoch int64) (*epochRef, error)
+}
+
+type epochRef struct {
+	LogDirectory       string
+	PrevRoot, CurrRoot string
+}
+
+type akdResolver struct{ s *akd.Source }
+
+func (r akdResolver) ResolveEpoch(epoch int64) (*epochRef, error) {
+	ref, err := r.s.ResolveEpoch(context.Background(), epoch)
+	if err != nil {
+		return nil, err
+	}
+	return &epochRef{LogDirectory: ref.LogDirectory, PrevRoot: ref.PrevRoot, CurrRoot: ref.CurrRoot}, nil
+}
+
+func resolverFor(s *akd.Source) epochSource { return akdResolver{s} }
