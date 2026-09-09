@@ -31,3 +31,6 @@ rust/**/target/
 # Offline audit results, mirrored in from the GPU host. Data, not source.
 /import/
 .backfill-mirror/
+
+# Worktrees for parallel sessions are not part of the repository.
+.claude/worktrees/
