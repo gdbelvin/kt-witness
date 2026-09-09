@@ -38,21 +38,26 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 		Log:  log.With("worker", name),
 		// How much of this box to use, asked fresh for each range.
 		//
-		// The governor's permits are exactly this quantity — how many
-		// verifications the machine can currently afford — so the sweep runs
-		// one at a time when live witnessing has the box and up to n when it
-		// does not. A fixed n gated on "wait until there is room for n" was the
-		// tempting alternative and would have starved silently: live witnessing
-		// does not consult this governor and can hold the machine indefinitely,
-		// so permits sit at their floor and the gate would never open.
+		// Spare, not Permits: the backwards sweep draws on the same allowance
+		// and takes permits as it goes, so what is free is the allowance less
+		// what it holds. Reading Permits would have both size themselves for
+		// the whole budget — two full-width sweeps, sixteen proof replays at
+		// 3.7 GB each against a 44 GB limit, which is an OOM kill of the
+		// witness rather than a slowdown. It would also have looked fine until
+		// the box went quiet enough for both to widen at once.
+		//
+		// A fixed n gated on "wait until there is room for n" was the tempting
+		// alternative and would have starved silently: live witnessing does not
+		// consult this governor and can hold the machine indefinitely, so
+		// permits sit at their floor and the gate would never open.
 		Parallel: func() int {
 			if g == nil {
 				return n
 			}
-			p := int(g.Permits())
+			p := int(g.Spare())
 			switch {
 			case p < 1:
-				return 1
+				return 1 // always some progress; one replay is 3.7 GB of 44
 			case p > n:
 				return n
 			}

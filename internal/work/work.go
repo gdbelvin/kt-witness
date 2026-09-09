@@ -317,11 +317,23 @@ func (q *Queue) Done(id string) {
 
 // Stats reports queue depth, for the metrics that say whether workers are
 // keeping up or starving.
+// Pending counts only what a worker could be given right now.
+//
+// A retry serving its backoff is queued but not available, and counting it as
+// depth would be a small lie with a real effect: the feeder stops topping up
+// when the queue looks full, so a burst of unavailable epochs would park the
+// feeder and leave every worker asking for work that is not there.
 func (q *Queue) Stats() (pending, leased int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.reclaimLocked()
-	return len(q.pending), len(q.leased)
+	now := q.now()
+	for _, a := range q.pending {
+		if a.notBefore.IsZero() || !now.Before(a.notBefore) {
+			pending++
+		}
+	}
+	return pending, len(q.leased)
 }
 
 func (q *Queue) reclaimLocked() {

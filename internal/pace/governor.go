@@ -320,6 +320,25 @@ func (g *Governor) Release() {
 	g.mu.Unlock()
 }
 
+// Spare reports how much of the allowance nobody is using: permits less what
+// Acquire currently holds.
+//
+// It exists because this machine has two consumers of the same budget and only
+// one of them takes permits. The backwards sweep Acquires per epoch; the queue
+// worker sizes a whole assignment at once and holds nothing. Reading Permits
+// alone, each would size itself for the full allowance and the box would run
+// two full-width sweeps — sixteen proof replays at 3.7 GB against a 44 GB
+// limit, which is an OOM kill of the whole witness, equivocation detection
+// included.
+func (g *Governor) Spare() float64 {
+	if g == nil {
+		return 0
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.permits - float64(g.inFlight)
+}
+
 // Permits reports the current allowance, for logging and tests.
 func (g *Governor) Permits() float64 {
 	g.mu.Lock()

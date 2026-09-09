@@ -230,3 +230,23 @@ func TestRetriesTerminateAlongTheRealResultPath(t *testing.T) {
 		t.Error("an epoch the queue gave up on came back around anyway")
 	}
 }
+
+// A retry serving its backoff is not queue depth.
+//
+// The feeder stops topping up when the queue looks full, so counting held-back
+// retries would park it: a burst of unavailable epochs would leave every worker
+// asking for work that exists but cannot be handed out yet.
+func TestABackingOffRetryIsNotCountedAsAvailableWork(t *testing.T) {
+	q := NewQueue(time.Minute)
+	now := time.Now()
+	q.now = func() time.Time { return now }
+
+	q.Reschedule("m/kt", 5)
+	if pending, _ := q.Stats(); pending != 0 {
+		t.Errorf("pending=%d while the only entry is serving a backoff, want 0", pending)
+	}
+	now = now.Add(2 * retryBase)
+	if pending, _ := q.Stats(); pending != 1 {
+		t.Errorf("pending=%d once the backoff elapsed, want 1", pending)
+	}
+}
