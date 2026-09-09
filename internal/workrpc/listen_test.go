@@ -72,3 +72,28 @@ func TestAnUnspecifiedBindIsAllowedInAContainerAndSaysSo(t *testing.T) {
 		}
 	}
 }
+
+// A worker's target is checked before its token is sent.
+//
+// The failure this prevents is not a connection error — it is a credential
+// disclosure that happens on the way to one. The old default was the witness's
+// public HTTPS URL, which cannot serve gRPC at all, so the connection would
+// have failed; the token would already have left the machine.
+func TestAWorkerRefusesToDialOffThisNetwork(t *testing.T) {
+	for _, a := range []string{"192.168.0.10:18090", "127.0.0.1:8090", "100.100.100.100:8090"} {
+		if err := CheckDialAddr(a); err != nil {
+			t.Errorf("%s is on this network and should be allowed: %v", a, err)
+		}
+	}
+	bad := map[string]string{
+		"https://witness.gdbsecurity.com": "a URL, and a public one — the old default",
+		"104.21.6.56:18090":               "a public address",
+		"8.8.8.8:443":                     "a public address",
+		"192.168.0.10":                   "no port",
+	}
+	for a, why := range bad {
+		if err := CheckDialAddr(a); err == nil {
+			t.Errorf("%s should be refused (%s)", a, why)
+		}
+	}
+}

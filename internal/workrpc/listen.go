@@ -87,6 +87,53 @@ func checkListenAddr(addr string, contained bool) (note string, err error) {
 	return "", nil
 }
 
+// CheckDialAddr refuses a worker target that is not on this network.
+//
+// The same rule from the other end, and it exists for a different reason. A
+// worker sends a bearer token on its first message; pointed at a public address
+// it would hand that token to whoever answers, and the token is what lets a
+// machine submit results that move a published coverage figure. The default
+// used to be the witness's public HTTPS URL, which is not even a gRPC endpoint
+// — it would have failed, but only after the credential had gone out.
+//
+// A hostname is allowed here, unlike on the listening side, and then resolved:
+// every address it resolves to must be local. A name is how people actually
+// refer to machines on their own network, and refusing them would push the
+// operator toward pasting addresses in from elsewhere.
+func CheckDialAddr(addr string) error {
+	if i := strings.Index(addr, "://"); i >= 0 {
+		return fmt.Errorf("workrpc: %q is a URL; the work channel is gRPC on host:port", addr)
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("workrpc: %q is not host:port: %w", addr, err)
+	}
+	if port == "" {
+		return fmt.Errorf("workrpc: %q has no port", addr)
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if !isLocal(ip) {
+			return fmt.Errorf("workrpc: %s is not on this network; a worker sends its "+
+				"token to whatever answers, so it only talks to the LAN", ip)
+		}
+		return nil
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return fmt.Errorf("workrpc: cannot resolve %q: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return fmt.Errorf("workrpc: %q resolves to nothing", host)
+	}
+	for _, ip := range ips {
+		if !isLocal(ip) {
+			return fmt.Errorf("workrpc: %s resolves to %s, which is not on this network; "+
+				"a worker sends its token to whatever answers", host, ip)
+		}
+	}
+	return nil
+}
+
 // inContainer reports whether this process has its own network namespace, by
 // the markers the runtimes leave behind. Conservative: anything it cannot
 // recognise is treated as a host, where the strict rule applies.

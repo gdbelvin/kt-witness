@@ -42,6 +42,7 @@ import (
 	"github.com/gdbsecurity/kt-witness/internal/pace"
 	"github.com/gdbsecurity/kt-witness/internal/work"
 	pb "github.com/gdbsecurity/kt-witness/internal/workpb"
+	"github.com/gdbsecurity/kt-witness/internal/workrpc"
 )
 
 // version is stamped for the Hello message, so the witness's log says which
@@ -50,7 +51,10 @@ const version = "0.1.0"
 
 func main() {
 	var (
-		server     = flag.String("server", "https://witness.gdbsecurity.com", "the witness to work for")
+		// The LAN address the witness publishes the work channel on, not its
+		// public name: this is a gRPC channel confined to this network, and the
+		// public site does not speak it.
+		server     = flag.String("server", "192.168.0.10:18090", "the witness to work for, host:port on this LAN")
 		name       = flag.String("name", hostname(), "how this worker identifies itself")
 		origins    = flag.String("origins", "", "comma-separated origins this worker can verify (default: whatever it is offered)")
 		tokenEnv   = flag.String("token-env", "KT_WORK_TOKEN", "environment variable holding the shared token")
@@ -63,6 +67,12 @@ func main() {
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	// Check where this is pointed before the token goes anywhere near it.
+	if err := workrpc.CheckDialAddr(*server); err != nil {
+		log.Error("refusing to connect", "server", *server, "err", err)
+		os.Exit(2)
+	}
 
 	token := os.Getenv(*tokenEnv)
 	if token == "" {

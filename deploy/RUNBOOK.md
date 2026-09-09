@@ -376,3 +376,81 @@ The signing key is a file on disk. That is fine for a first run, and not fine
 once others list the key in a trust policy — the ecosystem norm is hardware
 (TKey or Armored-Witness class). Publishing the verifier key is what invites
 people to depend on it, so do that step deliberately.
+
+## The work channel: lending other machines to the witness
+
+Verification is the constraint — the witness saturates 31 of its 32 cores while
+its link runs at 40% — so the cheapest CPU available is whatever else you own.
+The work channel hands ranges of epochs to other machines on your network over
+gRPC. Every participant, including the witness's own worker, leases from one
+queue; the lease is what stops two machines doing the same epoch.
+
+### The boundary
+
+**The channel is LAN-only, and the thing that enforces it is the port publish
+in `compose.yaml`:**
+
+```yaml
+ports:
+  - "192.168.0.10:18090:8090"    # host_ip is the security boundary
+```
+
+The witness binds `0.0.0.0:8090` *inside its container*, because the host's LAN
+address does not exist in that namespace — configured with it, the witness
+fails to start rather than serving the LAN. So reachability is decided by that
+line and nowhere else. It is never routed through the Cloudflare tunnel: a
+result submitted by a worker moves a coverage figure this witness publishes.
+
+The witness logs a WARN at startup saying exactly this, because it is the one
+property of the channel the process cannot verify for itself. Workers check the
+other end: `kt-worker` refuses to dial anything that is not a local address,
+since it sends a bearer token to whatever answers.
+
+Outside port is 18090 because something else on this host already holds 8090.
+
+### The token
+
+```sh
+# on the laptop, once
+mkdir -p secrets && umask 077
+printf 'KT_WORK_TOKEN=%s\n' "$(openssl rand -hex 32)" > secrets/work.env
+```
+
+`deploy/ship.sh` carries `secrets/` to the server; compose reads it via
+`env_file`. **A missing token closes the channel rather than opening it** — an
+unset variable fails safe, and the witness refuses to start the channel at all.
+
+### Running a worker
+
+```sh
+go build ./cmd/kt-worker
+export KT_WORK_TOKEN=...           # same value as secrets/work.env
+./kt-worker -server 192.168.0.10:18090 \
+            -akd-bin ./kt-akd-verify \
+            -akd-origins meta.messenger.kt/v1,whatsapp.kt/v2
+```
+
+On a Mac it puts itself in the background QoS class, which schedules it onto
+the efficiency cores, and caps `GOMAXPROCS` to the E-core count. It then works
+**N-2 of those** epochs at a time — two on a four-E-core laptop — and its
+governor decides only *when to ask for more work*, measured against the whole
+machine. A laptop somebody starts using stops taking on new ranges and finishes
+the one it holds.
+
+### What to expect in the logs
+
+| Line | Meaning |
+|---|---|
+| `work channel listening` | The channel is up; the address should be a LAN one |
+| `work channel confinement is enforced outside this process` | Expected in a container. Check the publish rule still has its `host_ip` |
+| `local worker leasing from the shared queue` | The witness is an ordinary participant |
+| `epoch unavailable ... rescheduled=true` | A worker could not fetch it; the queue will hand it to someone else |
+| `epoch unavailable ... rescheduled=false` | Three attempts; the data is gone, and that is a finding, not an error |
+| `A WORKER REPORTS A CONSTRUCTION MISMATCH` | Recorded unverified. **This witness must re-run the epoch itself before any finding is made** |
+
+### What a worker is trusted with, which is almost nothing
+
+A worker that did no work can report the operator's public signed root and be
+believed, because a result is only checked against itself. **Spot-checking is
+not built yet.** Until it is, give the token only to machines you control —
+which is also why the listener refuses a public address.
