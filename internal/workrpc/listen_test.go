@@ -18,23 +18,57 @@ func TestOnlyLocalAddressesAreAccepted(t *testing.T) {
 		"[::1]:8090",
 	}
 	for _, a := range ok {
-		if err := CheckListenAddr(a); err != nil {
-			t.Errorf("%s should be allowed: %v", a, err)
+		for _, contained := range []bool{false, true} {
+			note, err := checkListenAddr(a, contained)
+			if err != nil {
+				t.Errorf("%s should be allowed (contained=%v): %v", a, contained, err)
+			}
+			if note != "" {
+				t.Errorf("%s named a LAN address; it needs no caveat, got %q", a, note)
+			}
 		}
 	}
 
 	bad := map[string]string{
-		":8090":            "a bare port binds everything",
-		"0.0.0.0:8090":     "unspecified binds everything",
-		"[::]:8090":        "unspecified v6 binds everything",
-		"104.21.6.56:8090": "a public address",
-		"8.8.8.8:8090":     "a public address",
+		"104.21.6.56:8090":             "a public address",
+		"8.8.8.8:8090":                 "a public address",
 		"witness.gdbsecurity.com:8090": "a hostname can resolve anywhere, and can change later",
-		"192.168.0.10":    "no port",
+		"192.168.0.10":                "no port",
 	}
 	for a, why := range bad {
-		if err := CheckListenAddr(a); err == nil {
-			t.Errorf("%s should be refused (%s)", a, why)
+		for _, contained := range []bool{false, true} {
+			if _, err := checkListenAddr(a, contained); err == nil {
+				t.Errorf("%s should be refused (%s), contained=%v", a, why, contained)
+			}
+		}
+	}
+}
+
+// On a host, binding everything is refused: the machine has a LAN address and
+// nothing stands between that port and the network.
+func TestAnUnspecifiedBindIsRefusedOnAHost(t *testing.T) {
+	for _, a := range []string{":8090", "0.0.0.0:8090", "[::]:8090"} {
+		if _, err := checkListenAddr(a, false); err == nil {
+			t.Errorf("%s should be refused on a host", a)
+		}
+	}
+}
+
+// Inside a container it is allowed, and says so.
+//
+// The namespace is the confinement: the host's LAN address does not exist in
+// there, so naming it would not restrict the listener, it would stop the
+// witness from starting at all. What can reach the port is decided by the
+// publish rule — which must carry a host_ip, and which this process cannot
+// read. Hence the note: the caller is required to log what it cannot check.
+func TestAnUnspecifiedBindIsAllowedInAContainerAndSaysSo(t *testing.T) {
+	for _, a := range []string{":8090", "0.0.0.0:8090", "[::]:8090"} {
+		note, err := checkListenAddr(a, true)
+		if err != nil {
+			t.Errorf("%s should be allowed in a container: %v", a, err)
+		}
+		if note == "" {
+			t.Errorf("%s was allowed silently; confinement it cannot verify must be stated", a)
 		}
 	}
 }

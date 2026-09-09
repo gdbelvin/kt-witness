@@ -27,7 +27,12 @@ RUN touch src/main.rs && cargo build --release
 
 
 # Go cross-compiles cheaply, so this stage runs natively and targets TARGETARCH.
-FROM --platform=$BUILDPLATFORM golang:1.24-bookworm AS go-builder
+#
+# The tag must keep up with go.mod: the toolchain in these images is pinned
+# (GOTOOLCHAIN=local), so a go.mod that asks for more fails the build outright
+# rather than downloading it. Adding gRPC raised the requirement to 1.25, and
+# this line is the other half of that change.
+FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS go-builder
 ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./

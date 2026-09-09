@@ -513,7 +513,7 @@
     }
   ],
   "work": {
-    "listen": "192.168.0.10:8090",
+    "listen": "0.0.0.0:8090",
     "token_env": "KT_WORK_TOKEN",
     "lease": "20m"
   }

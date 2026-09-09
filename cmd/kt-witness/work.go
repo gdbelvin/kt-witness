@@ -20,8 +20,15 @@ import (
 
 // startWorkChannel serves verification work to machines on this network.
 func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pace.Governor, log *slog.Logger) (func() map[string]time.Time, error) {
-	if err := workrpc.CheckListenAddr(cfg.Work.Listen); err != nil {
+	note, err := workrpc.CheckListenAddr(cfg.Work.Listen)
+	if err != nil {
 		return nil, err
+	}
+	if note != "" {
+		// WARN because it is the one thing about this channel this process
+		// cannot verify for itself, and a quiet line is how that gets lost.
+		log.Warn("work channel confinement is enforced outside this process",
+			"listen", cfg.Work.Listen, "note", note)
 	}
 	env := cfg.Work.TokenEnv
 	if env == "" {

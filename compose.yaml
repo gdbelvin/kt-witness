@@ -62,12 +62,22 @@ services:
     # first host this was deployed to, hashtopolis already held it. The
     # container port stays 8080; only the outside changes.
     #
-    # The work channel is bound to ONE LAN address rather than published
-    # broadly, and is deliberately not routed through the tunnel: nothing
-    # outside this network has any business submitting verification results.
+    # THIS LINE IS THE WORK CHANNEL'S SECURITY BOUNDARY. Do not drop the
+    # host_ip from it.
+    #
+    # The witness binds 0.0.0.0:8090 inside its own network namespace, because
+    # the host's LAN address does not exist in there — configured with it, the
+    # witness fails to start rather than serving the LAN. So what can reach the
+    # channel is decided here and nowhere else: published on one LAN address,
+    # never through the tunnel. Nothing outside this network has any business
+    # submitting verification results, and a worker's result moves a coverage
+    # figure this witness publishes.
+    #
+    # 18090 on the outside because something else on this host already holds
+    # 8090; the container port stays 8090.
     ports:
       - "${KT_WITNESS_PORT:-8080}:8080"
-      - "192.168.0.10:8090:8090"
+      - "192.168.0.10:18090:8090"
 
     # One AKD verification peaks around 3.7 GB RSS. The limit is above that with
     # headroom, and deliberately not far above: exceeding it should kill the
