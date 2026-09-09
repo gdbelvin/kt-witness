@@ -24,7 +24,19 @@ import (
 // (origin, epoch), and re-recording one overwrites it with the same verdict.
 // The lease saves the effort, not the correctness.
 const (
-	feedChunk    = 200 // epochs per assignment
+	// feedChunk is sized so the slowest participant finishes inside its lease.
+	//
+	// A lease starts running when the range is handed out, and results arriving
+	// after it are refused — so a chunk too large for the machine holding it is
+	// work done and thrown away. The witness verifies ~8 epochs at a time at
+	// ~37 s each and would clear 200 in a quarter of an hour; a laptop working
+	// two at a time would need over an hour against a twenty-minute lease, and
+	// would lose everything past epoch sixty.
+	//
+	// Twenty-five is the slow machine's number: ~8 minutes at laptop speed,
+	// ~2 on the witness. The cost of small chunks is queue churn, which is a
+	// few map operations; the cost of large ones is other people's electricity.
+	feedChunk    = 25
 	feedInterval = 30 * time.Second
 	feedDepth    = 40 // assignments to keep queued ahead of the workers
 )

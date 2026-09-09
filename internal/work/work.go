@@ -297,6 +297,17 @@ func epochKey(origin string, epoch int64) string {
 	return fmt.Sprintf("%s@%d", origin, epoch)
 }
 
+// Finished reports whether an assignment is no longer held — because every
+// epoch came back, or because its lease lapsed and the range returned to the
+// queue. It is what lets a dispatcher hand a worker its next range only when
+// the last one is actually settled.
+func (q *Queue) Finished(id string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	_, held := q.leased[id]
+	return !held
+}
+
 // Done releases an assignment once its whole range has been reported.
 func (q *Queue) Done(id string) {
 	q.mu.Lock()

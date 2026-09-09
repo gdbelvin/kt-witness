@@ -166,3 +166,81 @@ func TestTheChannelIsClosedWithoutATokenAndRefusesAWrongOne(t *testing.T) {
 		t.Error("a wrong token was accepted")
 	}
 }
+
+// A worker is given one range at a time.
+//
+// The dispatcher used to lease and send in a tight loop, which handed the whole
+// queue to whichever worker connected first: every range counting down its own
+// lease inside one stream's buffer, unworkable, while every other machine was
+// told there was no work. Nothing would have looked broken — the coverage rate
+// would simply have been a fraction of the hardware, with no error to explain it.
+func TestAWorkerIsGivenOneRangeAtATime(t *testing.T) {
+	q := work.NewQueue(time.Minute)
+	for i := 0; i < 5; i++ {
+		q.Add("m/kt", int64(10*i), int64(10*i))
+	}
+
+	s := &Server{Queue: q, Token: "s3cret", Idle: 10 * time.Millisecond,
+		OnResult: func(work.Result) error { return nil }}
+
+	ctx, cancel := context.WithTimeout(authed(context.Background(), "s3cret"), 5*time.Second)
+	defer cancel()
+	stream, err := dial(t, s).Session(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Hello{
+		Hello: &pb.Hello{Name: "laptop", Origins: []string{"m/kt"}}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := stream.Recv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := first.GetAssignment()
+	if a == nil {
+		t.Fatalf("expected an assignment, got %+v", first)
+	}
+
+	// Nothing more arrives while the first range is still out.
+	quiet := make(chan *pb.WitnessMessage, 1)
+	go func() {
+		m, err := stream.Recv()
+		if err == nil {
+			quiet <- m
+		}
+	}()
+	select {
+	case m := <-quiet:
+		if b := m.GetAssignment(); b != nil {
+			t.Fatalf("a second range (%s) was pushed while %s was still out", b.Id, a.Id)
+		}
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	if _, leased := q.Stats(); leased != 1 {
+		t.Errorf("%d ranges are leased; a worker should hold one", leased)
+	}
+
+	// Finish it, and the next one follows.
+	if err := stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Result{Result: &pb.Result{
+		AssignmentId: a.Id, Nonce: a.Nonce, Origin: a.Origin, Epoch: a.From,
+		Verified: true, Root: "aa", SignedRoot: "aa"}}}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		m, err := stream.Recv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b := m.GetAssignment(); b != nil {
+			if b.Id == a.Id {
+				t.Fatalf("the same range was handed out twice: %s", b.Id)
+			}
+			return
+		}
+	}
+	t.Error("no further range after the first was completed")
+}

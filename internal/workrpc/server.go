@@ -120,6 +120,18 @@ func (s *Server) dispatch(ctx context.Context, stream pb.Work_SessionServer, hel
 			if err := stream.Send(send); err != nil {
 				return err
 			}
+			// One range at a time, because a lease starts running the moment it
+			// is handed out.
+			//
+			// This loop used to lease and send without pausing, which drained
+			// the whole queue to whichever worker connected first: forty ranges
+			// sitting in one stream's buffer, every one of them counting down a
+			// twenty-minute deadline it could not possibly be worked inside,
+			// while every other machine on the network was told there was no
+			// work. The worker itself takes one at a time — this now matches it.
+			if err := s.awaitSettled(ctx, a); err != nil {
+				return err
+			}
 			continue
 		}
 		if !errors.Is(err, work.ErrNoWork) {
@@ -132,6 +144,28 @@ func (s *Server) dispatch(ctx context.Context, stream pb.Work_SessionServer, hel
 			}
 		}
 		t.Reset(idle)
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-t.C:
+		}
+	}
+}
+
+// awaitSettled blocks until an assignment has come back in full or its lease
+// has lapsed. Polling rather than signalling: the two ways a range settles are
+// a result arriving and a deadline passing, and one clock covers both without a
+// second piece of state to keep consistent with the queue.
+func (s *Server) awaitSettled(ctx context.Context, a work.Assignment) error {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		if s.Queue.Finished(a.ID) {
+			return nil
+		}
+		if !a.Deadline.IsZero() && time.Now().After(a.Deadline) {
+			return nil // the queue will reclaim it on the next lease
+		}
 		select {
 		case <-ctx.Done():
 			return nil
