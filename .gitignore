@@ -31,3 +31,12 @@ rust/**/target/
 # Offline audit results, mirrored in from the GPU host. Data, not source.
 /import/
 .backfill-mirror/
+
+# Compiled binaries. `/kt-witness` above was anchored for the witness itself,
+# but the worker and the diff harness were missed and 43 MB of Mach-O went in
+# — carrying /Users/<operator>/dev/kt-witness/... source paths from the build
+# machine, which is not a credential but is not ours to publish either. Every
+# one of these is reproducible from deploy/RUNBOOK.md.
+/bin/
+/kt-worker
+/kt-akd-diff
