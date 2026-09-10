@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -150,6 +151,59 @@ func (g *GoVerifier) VerifyCached(ctx context.Context, logDirectory string, epoc
 	}
 	res.OK = true
 	return res, nil
+}
+
+// ComputeRoots rebuilds both roots from the proof and reports them, without
+// being told what to expect.
+//
+// This is what the distributed audit runs on, and the witness's own local
+// worker needs it for the same reason every remote worker does: a machine that
+// is handed the published roots and answers yes or no has been told the answer.
+// The local worker used to call the sidecar — whose whole API is that yes/no —
+// and then report the PUBLISHED current root as both of its computed roots. Its
+// every success therefore came back as a mismatch against the published
+// previous root, was recorded unverified, and was re-queued.
+//
+// prevRoot and currRoot are still taken, but only to build the fetch URL when
+// there is no cached proof: the operator's directory is addressed by them. They
+// have no part in the answer.
+func (g *GoVerifier) ComputeRoots(ctx context.Context, logDirectory string, epoch int64, prevRoot, currRoot, proofPath string, timeout time.Duration) (computedPrev, computedCurr string, err error) {
+	g.init()
+
+	select {
+	case g.sem <- struct{}{}:
+		defer func() { <-g.sem }()
+	case <-ctx.Done():
+		return "", "", ctx.Err()
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var data []byte
+	if proofPath != "" {
+		data, err = os.ReadFile(proofPath)
+		if err != nil {
+			return "", "", fmt.Errorf("read cached proof %s: %w", proofPath, err)
+		}
+	} else {
+		url := fmt.Sprintf("%s/%d/%s/%s", strings.TrimSuffix(logDirectory, "/"), epoch, prevRoot, currRoot)
+		data, err = g.fetch(ctx, url)
+		if err != nil {
+			return "", "", err
+		}
+	}
+
+	inserted, unchanged, err := akdtree.Decode(data)
+	if err != nil {
+		return "", "", fmt.Errorf("decoding the proof: %w", err)
+	}
+	var v akdtree.Verifier
+	prev, curr, err := v.Roots(unchanged, inserted, uint64(epoch))
+	if err != nil {
+		return "", "", err
+	}
+	return hex.EncodeToString(prev[:]), hex.EncodeToString(curr[:]), nil
 }
 
 // fetchFailure marks a result as "we could not check", never as "the log

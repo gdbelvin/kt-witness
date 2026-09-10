@@ -331,13 +331,39 @@ type Verifier struct {
 // not reach a verdict, which is not the same as a proof being bad and must
 // never be reported as one.
 func (v *Verifier) VerifyAppendOnly(unchanged, inserted []Element, prevRoot, currRoot Digest, endEpoch uint64) (bool, error) {
-	Sort(unchanged)
-	got, err := Root(unchanged)
+	prev, curr, err := v.Roots(unchanged, inserted, endEpoch)
 	if err != nil {
-		return false, fmt.Errorf("rebuilding the previous root: %w", err)
+		return false, err
 	}
-	if got != prevRoot {
-		return false, nil
+	return prev == prevRoot && curr == currRoot, nil
+}
+
+// Roots rebuilds both roots the proof asserts, and reports them rather than a
+// verdict.
+//
+// This is the shape the distributed audit needs and VerifyAppendOnly is not.
+// A machine that is handed the published roots and answers yes or no has been
+// told the answer; a machine that reports what it computed has not, and cannot
+// produce a credible result without doing the work. Every remote worker already
+// works this way. The witness's own local worker did not — it called
+// VerifyAppendOnly and then reported the PUBLISHED current root as both of its
+// computed roots, so every epoch it verified successfully came back as a
+// mismatch against the published previous root, was recorded unverified, and
+// was re-queued. Days of the witness's own Meta verification produced nothing
+// but false negatives, at the cost of the bandwidth that is the scarce resource
+// here.
+//
+// prev is the root of the unchanged nodes alone; curr is the root of those plus
+// the inserted nodes with each value committed to endEpoch. That pair IS the
+// append-only assertion, and comparing it to what the operator published is the
+// caller's job — which is the point.
+//
+// inserted is modified in place: its values are replaced by their commitments.
+func (v *Verifier) Roots(unchanged, inserted []Element, endEpoch uint64) (prev, curr Digest, err error) {
+	Sort(unchanged)
+	prev, err = Root(unchanged)
+	if err != nil {
+		return Digest{}, Digest{}, fmt.Errorf("rebuilding the previous root: %w", err)
 	}
 
 	// Commit each inserted value to the epoch, then MERGE rather than
@@ -356,11 +382,11 @@ func (v *Verifier) VerifyAppendOnly(unchanged, inserted []Element, prevRoot, cur
 	both := v.scratch[:n]
 	merge(both, unchanged, inserted)
 
-	got, err = Root(both)
+	curr, err = Root(both)
 	if err != nil {
-		return false, fmt.Errorf("rebuilding the current root: %w", err)
+		return Digest{}, Digest{}, fmt.Errorf("rebuilding the current root: %w", err)
 	}
-	return got == currRoot, nil
+	return prev, curr, nil
 }
 
 // VerifyAppendOnly is the one-shot form, for callers that verify a single

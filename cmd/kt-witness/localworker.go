@@ -168,18 +168,33 @@ func verifyEpochHere(ctx context.Context, r audit.Resolver, sidecar audit.Verifi
 	if err != nil {
 		return "", "", fmt.Errorf("resolving %s epoch %d: %w", origin, epoch, err)
 	}
-	res, err := sidecar.VerifyCached(ctx, ref.LogDirectory, epoch, ref.PrevRoot, ref.CurrRoot, "", timeout)
-	if err != nil {
-		return "", "", err
+	// The roots are computed, not echoed.
+	//
+	// This used to call the sidecar, whose API is "here are two roots, do they
+	// hold" — and then, on success, return the PUBLISHED current root as BOTH
+	// computed roots. The caller compares computed against published, so every
+	// successful verification came back as a mismatch on the previous root: the
+	// epoch was recorded unverified, re-queued, verified again, and recorded
+	// unverified again. The witness's own Meta auditing produced nothing but
+	// false negatives, and spent the bandwidth that is the actual scarce
+	// resource doing it.
+	//
+	// It also broke the property the whole design rests on. A machine handed
+	// the published roots and answering yes or no has been told the answer;
+	// this local worker is held to the same standard as the borrowed ones, and
+	// so it computes.
+	//
+	// ref.PrevRoot and ref.CurrRoot still go in, and only to address the
+	// operator's directory — that is how the proof URL is formed. They take no
+	// part in what comes out.
+	if g, ok := sidecar.(*audit.GoVerifier); ok {
+		return g.ComputeRoots(ctx, ref.LogDirectory, epoch, ref.PrevRoot, ref.CurrRoot, "", timeout)
 	}
-	if !res.OK {
-		if res.Error != "" {
-			return "", "", fmt.Errorf("%s", res.Error)
-		}
-		// The proof did not reconstruct the published root. Reported as a
-		// disagreement — computed root empty against a non-empty published one
-		// — never as a finding: what that means is the witness's to decide.
-		return "", ref.CurrRoot, nil
-	}
-	return ref.CurrRoot, ref.CurrRoot, nil
+	// The Rust sidecar cannot answer this question — it compares and reports a
+	// verdict, and there is no computed root to get out of it. Rather than
+	// inventing one, say so: an assignment reported with an error is retried and
+	// eventually verified by the sweep, which is honest, where a fabricated root
+	// is a false negative recorded as fact.
+	return "", "", fmt.Errorf("this worker has no verifier that reports computed roots; " +
+		"the reference sidecar answers yes or no and cannot be asked what it built")
 }
