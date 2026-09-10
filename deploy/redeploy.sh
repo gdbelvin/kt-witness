@@ -48,7 +48,7 @@ if [ "$WHAT" = all ] || [ "$WHAT" = workers ] || [ "$WHAT" = mac ]; then
     nohup ./bin/kt-worker \
       -server "${KT_WORK_SERVER:-$MAC_SERVER}" \
       -akd-origins "${KT_MAC_ORIGINS:-whatsapp.kt/v2}" \
-      -name "$(hostname -s)" > worker.log 2>&1 < /dev/null & )
+      -name "${KT_MAC_NAME:-$(hostname -s)}" > worker.log 2>&1 < /dev/null & )
 fi
 
 if [ "$WHAT" = all ] || [ "$WHAT" = workers ] || [ "$WHAT" = gpu ]; then
