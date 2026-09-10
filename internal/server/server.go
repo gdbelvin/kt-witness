@@ -115,6 +115,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/status.json", s.statusJSON)
 	mux.HandleFunc("/metrics", s.metricsHandler)
 	mux.HandleFunc("/.well-known/tlog-witness-key", s.key)
+	mux.HandleFunc("/funding.json", s.funding)
+	mux.HandleFunc("/.well-known/funding-manifest-urls", s.fundingManifestURLs)
 	mux.HandleFunc("/forks", s.forks)
 	mux.HandleFunc("/audits", s.audits)
 	mux.HandleFunc("/history", s.history)
