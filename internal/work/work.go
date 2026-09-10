@@ -132,7 +132,21 @@ type Capacity struct {
 //
 // 2: workers report the roots they computed instead of a verdict, and fetch
 // proofs from the witness rather than the operator.
-const ProtocolVersion = 2
+//
+// 3: the channel is pull. A worker asks for work with Want and is given
+// contiguous ranges; Assignment.step and .block are gone.
+//
+// This one needs the check more than either of the others, because a stale
+// worker does not fail here — it succeeds quietly and does almost nothing. It
+// never sends a Want, so after the opening request implied by its Hello it sits
+// idle with a live session, reporting capacity, indistinguishable from a fleet
+// whose queue has run dry. And the ranges it does get are contiguous while it
+// still believes they are interleaved, so it verifies every epoch in them
+// twice-over-nothing rather than the evens.
+//
+// Nothing about that looks broken from either end. That is the whole argument
+// for this constant.
+const ProtocolVersion = 3
 
 // Hello is what a worker sends when it connects.
 type Hello struct {
