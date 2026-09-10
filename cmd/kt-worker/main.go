@@ -223,6 +223,26 @@ type worker struct {
 	verifiers map[string]verifier
 
 	verified atomic.Int64
+
+	// gov paces this host. Built in run, read by width, which both the Runner
+	// and the capacity report consult.
+	gov pacer
+}
+
+// pacer is what this worker needs from the governor, which is only ever
+// questions. An interface so a test can put the controller in a state — no
+// room at all, or nothing measured yet — that takes eighty samples and a
+// simulated busy machine to reach for real, without reaching into
+// internal/pace to do it.
+type pacer interface {
+	// Measured reports whether a usable sample exists yet.
+	Measured() bool
+	// Spare is how many more epochs this machine can currently afford.
+	Spare() float64
+	// Ready reports whether there is room for want concurrent verifications.
+	Ready(want float64) bool
+	// Observed is the last measured load and the ceiling, for saying so.
+	Observed() (load, budget float64)
 }
 
 // epochsAtOnce splits a CPU budget into concurrent verifications, asking the
@@ -315,6 +335,39 @@ func (w *worker) parallelNow(origin string) int {
 // bidirectional RPC; work.Runner does not know that. It asks for an assignment
 // and reports a verdict, and whether those cross a network or a function call
 // is the only difference between this worker and the ones inside the witness.
+// width is what this worker will actually run for one assignment: the static
+// figure narrowed by what the governor currently says the machine can afford.
+//
+// A method rather than a closure because two callers need the same answer. The
+// capacity report used the static figure while the Runner used this one, so the
+// graph the operator watches would have said eight while the machine ran four —
+// a monitoring surface disagreeing with the thing it monitors, which is worse
+// than no graph.
+//
+// The floor is one, not zero. By the time this is asked the range is already
+// leased; declining to work it strands the lease without freeing anything,
+// and one epoch at a time still makes progress. Refusing to take a range at all
+// is a decision made earlier, in BeforeNext, while it is still free to make.
+func (w *worker) width(origin string) int {
+	n := w.parallelNow(origin)
+	if !w.gov.Measured() {
+		// Nothing seen yet — a cpuload sample needs an interval to exist. The
+		// static figure is what the operator said this machine may use, and
+		// narrowing below it is a claim that needs evidence.
+		return n
+	}
+	spare := int(w.gov.Spare())
+	if spare >= n {
+		return n
+	}
+	if spare < 1 {
+		spare = 1
+	}
+	w.log.Info("the machine is busy; narrowing rather than stopping",
+		"origin", origin, "would_run", n, "will_run", spare)
+	return spare
+}
+
 func (w *worker) run(ctx context.Context) error {
 	// How many epochs at once, decided in main from this machine's CPU budget:
 	// every efficiency core plus two performance cores, split into processes
@@ -446,6 +499,7 @@ func (w *worker) run(ctx context.Context) error {
 		MinPermits:    1,
 		Log:           w.log,
 	}
+	w.gov = gov
 	go gov.Run(ctx)
 
 	// Say what this machine can currently do, unprompted, every half minute.
@@ -461,10 +515,12 @@ func (w *worker) run(ctx context.Context) error {
 		t := time.NewTicker(30 * time.Second)
 		defer t.Stop()
 		for {
-			load, budget := gov.Observed()
+			load, budget := w.gov.Observed()
 			if err := stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Capacity{
 				Capacity: &pb.Capacity{
-					Parallel: int32(w.parallelNow("")), Cpus: int32(runtime.GOMAXPROCS(0)),
+					// The same answer the Runner gets, so the graph and the
+					// machine agree.
+					Parallel: int32(w.width("")), Cpus: int32(runtime.GOMAXPROCS(0)),
 					LoadCores: load, BudgetCores: budget,
 				}}}); err != nil {
 				w.log.Debug("capacity report failed; the session is going away", "err", err)
@@ -497,30 +553,15 @@ func (w *worker) run(ctx context.Context) error {
 		// epochs instead of eight, not to stop. Stopping altogether is reserved
 		// for the machine genuinely belonging to someone else, which is what
 		// permits falling to zero means and what the gate below now tests.
-		Parallel: func(origin string) int {
-			n := w.parallelNow(origin)
-			if !gov.Measured() {
-				// Nothing seen yet — the first sample needs an interval to
-				// exist. The static figure is what the operator said this
-				// machine may use, and narrowing below it is a claim that
-				// needs evidence.
-				return n
-			}
-			if spare := int(gov.Spare()); spare > 0 && spare < n {
-				w.log.Info("the machine is busy; narrowing rather than stopping",
-					"origin", origin, "would_run", n, "will_run", spare)
-				return spare
-			}
-			return n
-		},
+		Parallel: w.width,
 		// So the gate is now only the extreme case: is there room for anything
 		// at all. Permits reach zero when everything else on the box already
 		// exceeds this worker's whole budget — the owner is using their laptop
 		// — and then the right thing is to take no new range, while finishing
 		// the one in hand, because abandoning that strands a lease for no gain.
 		BeforeNext: func(ctx context.Context) error {
-			if !gov.Ready(1) {
-				load, budget := gov.Observed()
+			if !w.gov.Ready(1) {
+				load, budget := w.gov.Observed()
 				return fmt.Errorf("machine is using %.1f of %.1f cores allowed", load, budget)
 			}
 			return nil

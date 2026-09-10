@@ -131,3 +131,61 @@ func TestARealisticFootprintLeavesRealisticRoom(t *testing.T) {
 			float64(free)/(1<<30), got)
 	}
 }
+
+// stubPacer puts the controller in a stated condition directly.
+type stubPacer struct {
+	measured bool
+	spare    float64
+}
+
+func (p stubPacer) Measured() bool               { return p.measured }
+func (p stubPacer) Spare() float64               { return p.spare }
+func (p stubPacer) Ready(want float64) bool      { return p.spare >= want }
+func (p stubPacer) Observed() (float64, float64) { return 0, 0 }
+
+// TestWidthNeverReachesZeroOnceARangeIsLeased pins the one case the guard used
+// to miss.
+//
+// The gate and the width are asked at different moments. BeforeNext passes
+// while there is room, then Next blocks on the assignment channel — for minutes
+// on a quiet queue, watched happening — and by the time an assignment arrives
+// the machine may have filled up. The earlier version tested "spare > 0" and
+// fell through to the full width when spare was zero, which is precisely the
+// case it was written for: it would have run eight epochs on a machine the
+// controller had just said had no room at all.
+//
+// One rather than zero because by this point the range is leased. Declining to
+// work it frees nothing and strands the lease until it expires; the decision
+// not to take a range at all belongs in BeforeNext, where it is still free to
+// be made.
+func TestWidthNeverReachesZeroOnceARangeIsLeased(t *testing.T) {
+	newWorker := func(p pacer) *worker {
+		return &worker{
+			parallel:  8,
+			log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+			verifiers: map[string]verifier{"wa": stubVerifier{w: 1, mem: map[string]uint64{}}},
+			gov:       p,
+		}
+	}
+
+	for _, c := range []struct {
+		name string
+		p    stubPacer
+		want int
+	}{
+		// Before any measurement the operator's figure stands: narrowing is a
+		// claim, and there is no evidence for it yet. The controller holds at
+		// one permit while blind, which read as a width would be an eighth of
+		// the machine for a whole twenty-minute lease.
+		{"nothing measured yet", stubPacer{measured: false, spare: 1}, 8},
+		{"measured and idle", stubPacer{measured: true, spare: 8}, 8},
+		{"more room than we can use", stubPacer{measured: true, spare: 20}, 8},
+		{"the owner is compiling", stubPacer{measured: true, spare: 3}, 3},
+		{"no room at all", stubPacer{measured: true, spare: 0}, 1},
+		{"less than none", stubPacer{measured: true, spare: -2}, 1},
+	} {
+		if got := newWorker(c.p).width("wa"); got != c.want {
+			t.Errorf("%s: width %d, want %d", c.name, got, c.want)
+		}
+	}
+}
