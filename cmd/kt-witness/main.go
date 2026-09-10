@@ -27,6 +27,7 @@ import (
 	"github.com/gdbsecurity/kt-witness/internal/audit"
 	"github.com/gdbsecurity/kt-witness/internal/cosig"
 	"github.com/gdbsecurity/kt-witness/internal/export"
+	"github.com/gdbsecurity/kt-witness/internal/hostmem"
 	"github.com/gdbsecurity/kt-witness/internal/metrics"
 	"github.com/gdbsecurity/kt-witness/internal/server"
 	"github.com/gdbsecurity/kt-witness/internal/source"
@@ -656,6 +657,37 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		}
 		pool := audit.NewPool(cfg.Audit.SidecarPath, workers)
 		var sidecar audit.Verifier = pool
+
+		// Check the scratch space against the pool that was just built.
+		//
+		// The sidecar writes each proof to a temporary file before replaying
+		// it — ~284 MB for Meta — and in the container that is a tmpfs sized in
+		// the compose file. That number was chosen when one verification ran at
+		// a time and did not move when the pool widened to eight, so the
+		// witness spent days reporting "unverifiable (fetch): No space left on
+		// device" on a host with 568 GB free, re-queueing each epoch it had
+		// just failed to fetch. Coverage fell and nothing named the cause.
+		//
+		// This cannot fix it — a process cannot resize its own tmpfs — so it
+		// says the true thing once, at startup, where somebody is reading,
+		// rather than an errno per epoch forever. A warning rather than a
+		// refusal: a witness that verifies some epochs is worth more than one
+		// that will not start, and WhatsApp proofs are small enough to fit
+		// regardless.
+		if free, ok := hostmem.Scratch(os.TempDir()); ok {
+			const largestProof = 300 << 20 // Meta, and it grows
+			need := uint64(workers) * largestProof
+			if free < need {
+				log.Warn("scratch space is smaller than the sidecar pool needs",
+					"dir", os.TempDir(),
+					"free_gb", float64(free)/(1<<30),
+					"need_gb", float64(need)/(1<<30),
+					"pool", workers,
+					"note", "each verification writes a proof here before replaying it; "+
+						"short of this the symptom is per-epoch fetch errors and re-queued "+
+						"work, not anything that mentions disk. Raise KT_TMPFS_SIZE.")
+			}
+		}
 
 		// The Go verifier in the hot path, with the reference kept for the
 		// shadow and the canary.
