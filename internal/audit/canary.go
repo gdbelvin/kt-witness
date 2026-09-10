@@ -63,11 +63,19 @@ type Canary struct {
 	// proves nothing when it does.
 	OnProof func(logDirectory string, epoch int64, prevRoot, currRoot, proofPath string)
 
-	mu   sync.Mutex
-	seen int
+	mu        sync.Mutex
+	seen      int
+	quietOnce sync.Once
 }
 
 const defaultCanaryEvery = 100
+
+// bytesVerifier is a verifier that can be handed a proof directly, rather than
+// a path to read it from. Everything in this process can; only the sidecar
+// cannot, and that is the whole reason the scratch filesystem existed.
+type bytesVerifier interface {
+	VerifyBytes(ctx context.Context, epoch int64, prevRoot, currRoot string, proof []byte) (*Result, error)
+}
 
 func (c *Canary) Verify(ctx context.Context, logDirectory string, epoch int64, prevRoot, currRoot string, timeout time.Duration) (*Result, error) {
 	return c.VerifyCached(ctx, logDirectory, epoch, prevRoot, currRoot, "", timeout)
@@ -81,22 +89,68 @@ func (c *Canary) VerifyCached(ctx context.Context, logDirectory string, epoch in
 		return res, err
 	}
 
+	if !c.due() {
+		return res, err
+	}
+
+	// The bytes, from wherever the verifier left them.
+	//
+	// In memory is the ordinary case now: an in-process verifier already has
+	// the proof and hands it straight over. A path is the sidecar's way of
+	// saying the same thing, and it is what required a scratch filesystem, a
+	// retention flag, and something to delete the file afterwards — three
+	// things that only existed because a verdict had to cross a pipe.
+	var data []byte
 	src := proofPath
 	if src == "" {
 		src = res.ProofPath
 	}
-	if src == "" || !c.due() {
+	switch {
+	case len(res.Proof) > 0:
+		data = res.Proof
+	case src != "":
+		b, rErr := os.ReadFile(src)
+		if rErr != nil {
+			if c.Log != nil {
+				c.Log.Warn("canary could not be run; no conclusion either way",
+					"epoch", epoch, "err", rErr)
+			}
+			metrics.Inc("kt_witness_canary_error_total", nil)
+			return res, err
+		}
+		data = b
+	default:
+		// Nothing to corrupt. Said out loud rather than skipped silently: a
+		// canary that stops firing looks exactly like a canary that keeps
+		// passing, and the whole point of this is to be the one check that
+		// cannot be satisfied by doing nothing.
+		c.quiet(epoch)
 		return res, err
 	}
 
-	if c.OnProof != nil {
+	if c.OnProof != nil && src != "" {
 		c.OnProof(logDirectory, epoch, prevRoot, currRoot, src)
 	}
-	if cErr := c.run(ctx, logDirectory, epoch, prevRoot, currRoot, src, timeout); cErr != nil && c.Log != nil {
+	if cErr := c.run(ctx, logDirectory, epoch, prevRoot, currRoot, data, timeout); cErr != nil && c.Log != nil {
 		c.Log.Warn("canary could not be run; no conclusion either way", "epoch", epoch, "err", cErr)
 		metrics.Inc("kt_witness_canary_error_total", nil)
 	}
 	return res, err
+}
+
+// quiet reports a canary that had nothing to work with, once, loudly enough to
+// be noticed and not so often as to be filtered out.
+func (c *Canary) quiet(epoch int64) {
+	metrics.Inc("kt_witness_canary_no_proof_total", nil)
+	c.quietOnce.Do(func() {
+		if c.Log != nil {
+			c.Log.Error("THE CANARY HAS NOTHING TO CORRUPT and is therefore not testing "+
+				"anything. The verifier in the hot path is not handing back the proof it "+
+				"verified — call KeepProofs on it — and until it does, a verifier that "+
+				"accepted everything would look exactly like this one",
+				"epoch", epoch)
+		}
+	})
 }
 
 func (c *Canary) due() bool {
@@ -112,14 +166,14 @@ func (c *Canary) due() bool {
 
 // run flips one bit of a proof that just verified and requires both verifiers
 // to reject it.
-func (c *Canary) run(ctx context.Context, logDirectory string, epoch int64, prevRoot, currRoot, src string, timeout time.Duration) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	if len(data) == 0 {
+func (c *Canary) run(ctx context.Context, logDirectory string, epoch int64, prevRoot, currRoot string, proof []byte, timeout time.Duration) error {
+	if len(proof) == 0 {
 		return fmt.Errorf("proof is empty")
 	}
+	// A copy, because the corruption is destructive and these bytes may be the
+	// verifier's own buffer.
+	data := make([]byte, len(proof))
+	copy(data, proof)
 
 	// Anywhere in the file, uniformly. Not a chosen field: the point is to
 	// catch a verifier that checks the parts somebody thought to test.
@@ -135,25 +189,35 @@ func (c *Canary) run(ctx context.Context, logDirectory string, epoch int64, prev
 	mask := byte(1) << uint(bitAt.Int64())
 	data[i] ^= mask
 
-	tmp, err := os.CreateTemp("", "kt-canary-*.bin")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-
 	where := fmt.Sprintf("byte %d of %d, bit %d", i, len(data), bitAt.Int64())
 
-	// The reference, on the corrupted file. A decode failure counts as a
-	// rejection: a proof that cannot be parsed has not been accepted, which is
-	// the property under test.
-	ref, refErr := c.Primary.VerifyCached(ctx, logDirectory, epoch, prevRoot, currRoot, tmp.Name(), timeout)
+	// The verifier in the hot path, on the corrupted bytes. A decode failure
+	// counts as a rejection: a proof that cannot be parsed has not been
+	// accepted, which is the property under test.
+	//
+	// A temp file only if the verifier cannot be handed bytes. That is the
+	// sidecar, which takes a path because a verdict has to cross a pipe — and
+	// writing a 284 MB corrupted copy is what filled the witness's scratch
+	// filesystem. An in-process verifier gets the slice.
+	var ref *Result
+	var refErr error
+	if bv, ok := c.Primary.(bytesVerifier); ok {
+		ref, refErr = bv.VerifyBytes(ctx, epoch, prevRoot, currRoot, data)
+	} else {
+		tmp, tErr := os.CreateTemp("", "kt-canary-*.bin")
+		if tErr != nil {
+			return tErr
+		}
+		defer os.Remove(tmp.Name())
+		if _, wErr := tmp.Write(data); wErr != nil {
+			tmp.Close()
+			return wErr
+		}
+		if cErr := tmp.Close(); cErr != nil {
+			return cErr
+		}
+		ref, refErr = c.Primary.VerifyCached(ctx, logDirectory, epoch, prevRoot, currRoot, tmp.Name(), timeout)
+	}
 	refAccepted := refErr == nil && ref != nil && ref.OK
 
 	// The Go verifier, on the same bytes.

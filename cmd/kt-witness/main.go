@@ -658,7 +658,35 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		pool := audit.NewPool(cfg.Audit.SidecarPath, workers)
 		var sidecar audit.Verifier = pool
 
-		// Check the scratch space against the pool that was just built.
+		// The Go verifier in the hot path, with the reference kept for the
+		// shadow and the canary.
+		//
+		// The sidecar pool is capped at eight because one Rust verification
+		// peaks near 3.7 GB, and that cap — not this machine's thirty-two
+		// cores — has been what bounds throughput. A verification in Go holds
+		// the proof and a flat array of nodes, so the ceiling moves off memory
+		// and onto cores.
+		// usesSidecarFiles records whether anything in this chain leaves a proof
+		// on disk. Only the Rust sidecar does, and only it needs the scratch
+		// filesystem, the retention flag and the thing that deletes the file.
+		usesSidecarFiles := !strings.EqualFold(cfg.Audit.Verifier, "go")
+
+		var goVerifier *audit.GoVerifier
+		if strings.EqualFold(cfg.Audit.Verifier, "go") {
+			goVerifier = &audit.GoVerifier{Concurrent: cfg.Audit.GoConcurrent}
+			sidecar = goVerifier
+			log.Info("verifying in-process with the Go implementation",
+				"concurrent", goVerifier.Size(),
+				"shadow", cfg.Audit.ShadowVerify == nil || *cfg.Audit.ShadowVerify)
+		}
+
+		// Check the scratch space, but only if anything is going to use it.
+		//
+		// Nothing does when the Go verifier is in the hot path: it holds the
+		// proof in memory and hands the bytes straight to the canary, so there
+		// is no download to a file, no retention, and nothing to delete. This
+		// check applies to the sidecar, which is the only thing here that needs
+		// a filesystem to do arithmetic.
 		//
 		// The sidecar writes each proof to a temporary file before replaying
 		// it — ~284 MB for Meta — and in the container that is a tmpfs sized in
@@ -674,7 +702,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		// refusal: a witness that verifies some epochs is worth more than one
 		// that will not start, and WhatsApp proofs are small enough to fit
 		// regardless.
-		if free, ok := hostmem.Scratch(os.TempDir()); ok {
+		if free, ok := hostmem.Scratch(os.TempDir()); ok && usesSidecarFiles {
 			const largestProof = 300 << 20 // Meta, and it grows
 			need := uint64(workers) * largestProof
 			if free < need {
@@ -689,41 +717,41 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 			}
 		}
 
-		// The Go verifier in the hot path, with the reference kept for the
-		// shadow and the canary.
-		//
-		// The sidecar pool is capped at eight because one Rust verification
-		// peaks near 3.7 GB, and that cap — not this machine's thirty-two
-		// cores — has been what bounds throughput. A verification in Go holds
-		// the proof and a flat array of nodes, so the ceiling moves off memory
-		// and onto cores.
-		var goVerifier *audit.GoVerifier
-		if strings.EqualFold(cfg.Audit.Verifier, "go") {
-			goVerifier = &audit.GoVerifier{Concurrent: cfg.Audit.GoConcurrent}
-			sidecar = goVerifier
-			log.Info("verifying in-process with the Go implementation",
-				"concurrent", goVerifier.Size(),
-				"shadow", cfg.Audit.ShadowVerify == nil || *cfg.Audit.ShadowVerify)
-		}
-
-		// A corrupted proof, one epoch in a hundred, that both verifiers must
+		// A corrupted proof, one epoch in a hundred, that the verifier must
 		// reject. This is the only check here that can tell a verifier from a
 		// rubber stamp: everything else asks it to agree with a valid proof,
 		// which a verifier that always says yes does perfectly.
 		//
-		// Inside the shadow rather than outside it, so the canary sees the
-		// retained proof before the shadow deletes it.
+		// Primary is whatever is ACTUALLY in the hot path, which is the line
+		// that was wrong. It used to be the pool, unconditionally — so enabling
+		// canaries silently put the Rust sidecar back in front of the Go
+		// verifier that the line above had just installed, and the witness has
+		// been running the reference implementation ever since. The Go verifier
+		// was still built, still logged at startup as "verifying in-process",
+		// and was only ever reached from inside this canary. Visible in the
+		// timings: a 54 MB WhatsApp proof took 9.4 seconds when the Go verifier
+		// does one in about two, and in the errno — "download body: No space
+		// left on device" is Rust's, from a verifier that writes its download
+		// to a file.
+		//
+		// KeepProofs is asked of the hot-path verifier rather than the pool,
+		// and for the Go one that means it hands back the slice it already has
+		// instead of leaving a 284 MB file somewhere to be deleted later.
 		keepingProofs := false
 		if cfg.Audit.CanaryEvery >= 0 {
-			pool.KeepProofs()
-			keepingProofs = true
-			canaryV = &audit.Canary{Primary: pool, Log: log, Every: cfg.Audit.CanaryEvery}
+			if k, ok := sidecar.(interface{ KeepProofs() }); ok {
+				k.KeepProofs()
+				keepingProofs = true
+			}
+			canaryV = &audit.Canary{Primary: sidecar, Log: log, Every: cfg.Audit.CanaryEvery}
 			sidecar = canaryV
 			log.Info("canary verification enabled",
 				"every", canaryEvery(cfg.Audit.CanaryEvery),
+				"verifier", map[bool]string{true: "the Rust reference sidecar",
+					false: "the Go implementation, in this process"}[usesSidecarFiles],
 				"note", "a corrupted proof that verifies means every verdict from that verifier is worthless")
 		}
-		if cfg.Audit.ShadowVerify == nil || *cfg.Audit.ShadowVerify {
+		if cfg.Audit.ShadowVerify != nil && *cfg.Audit.ShadowVerify {
 			// Ask the sidecar to keep what it downloads, so the shadow checks
 			// the same bytes rather than fetching them again. Without this it
 			// could only see epochs that happened to be in the prefetch cache,
@@ -731,15 +759,15 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 			pool.KeepProofs()
 			keepingProofs = true
 			sidecar = &audit.Shadow{Primary: sidecar, Log: log, Every: cfg.Audit.ShadowEvery}
+			usesSidecarFiles = true
 			log.Info("shadow verification enabled",
 				"note", "the Rust reference decides; the Go verifier is only observed",
 				"every", max(1, cfg.Audit.ShadowEvery))
 		}
-		// Outermost, and only when something asked the sidecar to retain its
-		// downloads. Whoever turns KeepProofs on owns the files; this is that
-		// ownership made explicit rather than left to whichever wrapper happens
-		// to be last, which is how it was lost when the shadow was switched off.
-		if keepingProofs {
+		// Outermost, and only when a verifier was asked to leave a FILE behind.
+		// The Go verifier hands back a slice the garbage collector reclaims, so
+		// there is nothing to reap and this layer is not installed at all.
+		if keepingProofs && usesSidecarFiles {
 			sidecar = &audit.Reaper{Primary: sidecar, Log: log}
 		}
 		defer sidecar.Close()

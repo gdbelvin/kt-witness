@@ -75,6 +75,13 @@ type Result struct {
 	// ProofPath is where the sidecar left the proof, when asked to keep it.
 	// The caller owns the file from here.
 	ProofPath string `json:"proof_path"`
+
+	// Proof is the bytes that were verified, when an in-process verifier was
+	// asked to keep them. Never set by the sidecar, which speaks JSON over a
+	// pipe and could not carry 284 MB through it — that is what ProofPath is
+	// for, and the difference between the two fields is the difference between
+	// a verifier that needs a scratch filesystem and one that does not.
+	Proof []byte `json:"-"`
 }
 
 // VerificationFailed reports whether this result is evidence the log built its
