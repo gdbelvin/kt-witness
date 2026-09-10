@@ -56,7 +56,10 @@ func main() {
 		// The LAN address the witness publishes the work channel on, not its
 		// public name: this is a gRPC channel confined to this network, and the
 		// public site does not speak it.
-		server     = flag.String("server", "192.168.0.10:18090", "the witness to work for, host:port on this LAN")
+		// No default: the only correct value is one machine on one private
+		// network, so a baked-in default is right for exactly one operator and
+		// wrong — confusingly, at connect time — for everyone else.
+		server     = flag.String("server", "", "the witness to work for, host:port on this LAN (required)")
 		name       = flag.String("name", hostname(), "how this worker identifies itself")
 		origins    = flag.String("origins", "", "comma-separated origins this worker can verify (default: whatever it is offered)")
 		tokenEnv   = flag.String("token-env", "KT_WORK_TOKEN", "environment variable holding the shared token")
@@ -72,6 +75,12 @@ func main() {
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	if *server == "" {
+		log.Error("no witness to work for", "flag", "-server",
+			"note", "give the LAN host:port of the witness's work channel, e.g. -server 192.168.0.10:18090")
+		os.Exit(2)
+	}
 
 	// Check where this is pointed before the token goes anywhere near it.
 	if err := workrpc.CheckDialAddr(*server); err != nil {

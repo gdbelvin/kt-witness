@@ -180,7 +180,10 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	var (
-		listen = flag.String("listen", "192.168.0.11:8099", "address to serve on; a LAN address, not 0.0.0.0")
+		// No default, and deliberately not ":8099" as a convenience: a default
+		// that binds every interface is the failure this flag's help text warns
+		// about, and one operator's LAN address is wrong for everyone else.
+		listen = flag.String("listen", "", "address to serve on; a LAN address, not 0.0.0.0 (required)")
 		root   = flag.String("root", "/srv/kt-witness", "directory holding the trees, mounted read-only")
 		bin    = flag.String("bin", "/usr/local/bin/kt-proton-gpu", "the rebuild binary")
 	)
@@ -190,6 +193,13 @@ func main() {
 	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	if *listen == "" {
+		log.Error("no listen address", "flag", "-listen",
+			"note", "give a LAN address, e.g. -listen 192.168.0.11:8099; binding every interface would expose the rebuild endpoint")
+		os.Exit(2)
+	}
+
 	s := &server{root: *root, bin: *bin, log: log}
 
 	mux := http.NewServeMux()

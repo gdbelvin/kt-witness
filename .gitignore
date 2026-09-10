@@ -40,3 +40,10 @@ rust/**/target/
 /bin/
 /kt-worker
 /kt-akd-diff
+
+# The operator's own network: which host holds the witness, which holds the
+# GPU, which tailnet they are on. Not credentials — RFC1918 and CGNAT addresses
+# are not routable from outside — but topology is nobody else's business, and it
+# was scattered through compose files, flag defaults, tests and runbooks before
+# this. Template and rationale in deploy/infra.example.env.
+/.env

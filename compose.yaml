@@ -77,7 +77,11 @@ services:
     # 8090; the container port stays 8090.
     ports:
       - "${KT_WITNESS_PORT:-8080}:8080"
-      - "192.168.0.10:18090:8090"
+      # The host_ip half is the security boundary, and the `:?` is not
+      # decoration: an unset variable would render this as "18090:8090", which
+      # publishes the work channel on every interface instead of one LAN
+      # address. Compose must refuse to start rather than do that quietly.
+      - "${KT_WITNESS_LAN_IP:?set KT_WITNESS_LAN_IP in .env — see deploy/infra.example.env}:18090:8090"
 
     # One AKD verification peaks around 3.7 GB RSS. The limit is above that with
     # headroom, and deliberately not far above: exceeding it should kill the

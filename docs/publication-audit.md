@@ -64,37 +64,74 @@ over a published merge, which is a worse trade than 43 MB of dead weight: no
 file exceeds GitHub's limits, and nothing in them is sensitive. If the repository
 is ever rewritten for another reason, drop them then.
 
-## Disclosed, and judged acceptable
+## Private network topology: removed
 
-### Private network topology
-
-`192.168.0.10` (the witness host), `192.168.0.11` (the GPU host),
-`100.100.100.100` (the witness's Tailscale address), and `example-tailnet.ts.net`
-appear in `compose.yaml`, `deploy/RUNBOOK.md`, `deploy/gpu/README.md`,
+The witness host, the GPU host, the witness's Tailscale address and the tailnet
+name appeared across `compose.yaml`, `deploy/gpu/compose.yaml`,
+`deploy/RUNBOOK.md`, `deploy/gpu/README.md`, `deploy/grafana/README.md`,
 `deploy/caddy/witness.caddy`, two flag defaults, and the `internal/workrpc`
 tests.
 
-Left in place. These are RFC1918 and CGNAT addresses: they are not routable from
-the internet and mean nothing to anyone not already inside the network. The
-tailnet name is already public, since the witness served on
-`kt-witness.example-tailnet.ts.net` before the custom domain existed. Replacing them
-with documentation-range placeholders would make the runbook materially worse at
-the only job it has, which is telling the operator which host is which during an
-incident.
+An earlier draft of this document argued for leaving them: RFC1918 and CGNAT
+addresses are not routable, they mean nothing to anyone not already on the
+network, and placeholders make a runbook worse at the one job it has. The
+operator overruled that, and the operator is right about the part that argument
+missed — the question is not whether the addresses are exploitable but whether
+they are anyone else's business, and they are not. Topology is not a secret and
+is still not public information.
 
-One consequence is worth knowing rather than fixing here: `cmd/kt-worker` and
-`cmd/kt-gpu-rootd` carry LAN addresses as **flag defaults**, so a stranger who
-clones this gets defaults pointing at machines they do not own. That is a
-usability wart in a public repo, not a security problem, and changing a running
-deployment's defaults during a publication audit is the wrong moment.
+So they now live in `.env`, which is gitignored, with the template and the
+reasoning in `deploy/infra.example.env`:
+
+| Variable | What it names |
+|---|---|
+| `KT_WITNESS_LAN_IP` | the LAN address the work channel binds |
+| `KT_GPU_LAN_IP` | the GPU host serving Proton rebuilds |
+| `KT_TAILNET` | the tailnet, for docs and dashboard uploads |
+
+**The substitution is fail-closed, and this is the important part.** The host_ip
+half of a Docker port mapping *is* the confinement for the work channel:
+`10.0.0.5:18090:8090` publishes on one interface, `18090:8090` publishes on all
+of them. A plain `${KT_WITNESS_LAN_IP}` would render the second form whenever
+the variable is unset, turning a missing file into an internet-facing
+unauthenticated work queue — a strictly worse outcome than the disclosure this
+change exists to prevent. Both use sites are therefore written
+`${VAR:?message}`, which makes Compose refuse to start. Verified by removing
+`.env`:
+
+```
+error while interpolating services.kt-witness.ports.[]: required variable
+KT_WITNESS_LAN_IP is missing a value: set KT_WITNESS_LAN_IP in .env
+```
+
+The flag defaults in `cmd/kt-worker` (`-server`) and `cmd/kt-gpu-rootd`
+(`-listen`) are now empty and required, each exiting 2 with an explanation.
+Neither was defensible in a public repository: a baked-in default is correct for
+exactly one operator and silently wrong for everyone else, and in
+`kt-gpu-rootd`'s case the tempting convenience default — `:8099` — is precisely
+the bind-everything failure its own help text warns about.
+
+Test fixtures use generic addresses (`192.168.0.10`, `100.100.100.100`) that
+exercise the same RFC1918 and CGNAT branches without naming a real machine.
+`internal/workrpc` tests pass unchanged.
+
+### Deploying this
+
+`.env` is gitignored, so it does not travel with the repository and **must be
+created on each host before `docker compose up`** — the witness host and the GPU
+host both. Compose fails loudly if it is missing, which is the intended
+behaviour and not a regression.
+
+## Disclosed, and judged acceptable
 
 ### Addresses that look public but are not
 
 `5.4.1.1` is a citation of RFC 9381 §5.4.1.1. `104.21.6.56` is a test fixture
 labelled, in the fixture itself, "a public address" — it exists to prove the
-listen-address check *rejects* public addresses. `100.100.100.100` is inside
-`100.64.0.0/10`, so CGNAT rather than public. `1.1.1.1` and `8.8.8.8` are
-resolver examples.
+listen-address check *rejects* public addresses. `1.1.1.1` and `8.8.8.8` are
+resolver examples. `192.168.16.3` in `deploy/tailscale/compose.tailscale.yaml`
+is Docker's own bridge assignment, described to explain a proxy resolution
+quirk, and names no machine of the operator's.
 
 ### Email
 
@@ -121,6 +158,30 @@ a funder's published contact, from research notes.
   host to the tailnet even though nothing about the path suggests it.
 - **`.claude/` was never committed**, and is excluded.
 - **No database, no `data/`, no runtime state** in any commit.
+
+## Still in history — open decision
+
+Everything above removes the addresses from the working tree. **They remain in
+the 191 commits behind it**, and `git log -p` finds them in seconds. If the
+requirement is that the operator's network is not in the repository at all, only
+a history rewrite satisfies it.
+
+This is the right moment to decide, and close to the last one. The repository is
+still private, has never been public, has no forks, and has exactly one merged
+pull request, so a rewrite costs almost nothing today: re-clone the two working
+copies and move on. After publication it costs the ability to rewrite at all —
+every fork and clone keeps the old objects, and the addresses become
+unretractable.
+
+Weighed against: a rewrite changes all 191 commit SHAs, so the commit messages
+this project uses as its engineering record stay intact but every reference to a
+SHA in a document or an issue breaks, and it needs a force-push over the merged
+merge commit.
+
+Recommendation: rewrite, before making the repository public, since the
+disclosure is exactly what the operator asked to prevent and the window closes
+at publication. Not done here — a history rewrite and a force-push are the
+operator's call, not an auditor's.
 
 ## Cleared for publication
 
