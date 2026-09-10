@@ -172,7 +172,7 @@ something wrong being served.
 
 ## Scrape interval and rate windows
 
-Telegraf scrapes `http://192.168.0.10:8088/metrics` every **15s**
+Telegraf scrapes `http://${KT_WITNESS_LAN_IP}:8088/metrics` every **15s**
 (`/home/<user>/monitoring/telegraf.conf`). It was 60s, which was fine when a
 construction audit took a minute and is not now that one completes every few
 seconds.
@@ -392,7 +392,7 @@ in `compose.yaml`:**
 
 ```yaml
 ports:
-  - "192.168.0.10:18090:8090"    # host_ip is the security boundary
+  - "${KT_WITNESS_LAN_IP}:18090:8090"    # host_ip is the security boundary
 ```
 
 The witness binds `0.0.0.0:8090` *inside its container*, because the host's LAN
@@ -427,7 +427,7 @@ go build -o bin/kt-worker ./cmd/kt-worker
 (cd rust/kt-akd-verify && cargo build --release)
 
 set -a; . ./secrets/work.env; set +a          # KT_WORK_TOKEN
-./bin/kt-worker -server 192.168.0.10:18090 \
+./bin/kt-worker -server ${KT_WITNESS_LAN_IP}:18090 \
   -akd-bin ./rust/kt-akd-verify/target/release/kt-akd-verify \
   -akd-origins whatsapp.kt/v2 \
   -name "$(hostname -s)"

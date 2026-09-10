@@ -18,12 +18,12 @@ only from looking at the rendered page.
 # import (creates or overwrites the kt-witness dashboard)
 jq '{dashboard: ., overwrite: true}' deploy/grafana/kt-witness.json \
   | curl -sS -u "$GRAFANA_USER:$GRAFANA_PASS" \
-      -X POST https://grafana.example-tailnet.ts.net/api/dashboards/db \
+      -X POST https://grafana.${KT_TAILNET}.ts.net/api/dashboards/db \
       -H 'Content-Type: application/json' --data-binary @-
 
 # export after editing in the UI, so the file stays the source of truth
 curl -sS -u "$GRAFANA_USER:$GRAFANA_PASS" \
-  https://grafana.example-tailnet.ts.net/api/dashboards/uid/kt-witness \
+  https://grafana.${KT_TAILNET}.ts.net/api/dashboards/uid/kt-witness \
   | jq '.dashboard | del(.id, .version)' > deploy/grafana/kt-witness.json
 ```
 

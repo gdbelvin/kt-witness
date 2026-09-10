@@ -42,24 +42,24 @@ than checking us.
 
 ### You have to run these two — they need root on both machines
 
-On **docker-services** (192.168.0.10), export the witness data read-only to
+On **docker-services** (${KT_WITNESS_LAN_IP}), export the witness data read-only to
 the GPU host and nothing else. Export the whole `data` directory rather than
 just `proton-tree`, so that doing this for the other key-transparency trees
 later needs no second export:
 
 ```sh
-echo '/home/<user>/kt-witness/data 192.168.0.11(ro,sync,no_subtree_check,root_squash)' \
+echo '/home/<user>/kt-witness/data ${KT_GPU_LAN_IP}(ro,sync,no_subtree_check,root_squash)' \
   | sudo tee -a /etc/exports
 sudo exportfs -ra
 ```
 
-On **docker-gpu** (192.168.0.11):
+On **docker-gpu** (${KT_GPU_LAN_IP}):
 
 ```sh
 sudo mkdir -p /mnt/kt-witness
-sudo mount -t nfs 192.168.0.10:/home/<user>/kt-witness/data /mnt/kt-witness
+sudo mount -t nfs ${KT_WITNESS_LAN_IP}:/home/<user>/kt-witness/data /mnt/kt-witness
 # to make it survive a reboot:
-echo '192.168.0.10:/home/<user>/kt-witness/data /mnt/kt-witness nfs ro,soft,timeo=30,_netdev 0 0' \
+echo '${KT_WITNESS_LAN_IP}:/home/<user>/kt-witness/data /mnt/kt-witness nfs ro,soft,timeo=30,_netdev 0 0' \
   | sudo tee -a /etc/fstab
 ```
 
@@ -70,13 +70,13 @@ directory it audits.
 
 ```sh
 docker compose -f deploy/gpu/compose.yaml up -d --build
-curl -s http://192.168.0.11:8099/health
+curl -s http://${KT_GPU_LAN_IP}:8099/health
 ```
 
 ## Use
 
 ```sh
-curl -sS -X POST http://192.168.0.11:8099/root \
+curl -sS -X POST http://${KT_GPU_LAN_IP}:8099/root \
   -H 'content-type: application/json' \
   -d '{"scheme":"proton-sparse-256","path":"proton-tree/epoch_tree_6730.bin"}'
 ```

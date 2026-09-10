@@ -33,7 +33,7 @@
 #     and its cosignatures stop being fetchable — which looks, from outside,
 #     exactly like a witness that has stopped working.
 #
-#  2. Inbound TCP 80 and 443 forwarded to this host (192.168.0.10).
+#  2. Inbound TCP 80 and 443 forwarded to this host (${KT_WITNESS_LAN_IP}).
 #     Port 80 is required for the ACME challenge even though nothing is served
 #     over it; Caddy redirects it to HTTPS once the certificate exists.
 #

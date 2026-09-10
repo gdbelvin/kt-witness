@@ -31,3 +31,19 @@ rust/**/target/
 # Offline audit results, mirrored in from the GPU host. Data, not source.
 /import/
 .backfill-mirror/
+
+# Compiled binaries. `/kt-witness` above was anchored for the witness itself,
+# but the worker and the diff harness were missed and 43 MB of Mach-O went in
+# — carrying /Users/<operator>/dev/kt-witness/... source paths from the build
+# machine, which is not a credential but is not ours to publish either. Every
+# one of these is reproducible from deploy/RUNBOOK.md.
+/bin/
+/kt-worker
+/kt-akd-diff
+
+# The operator's own network: which host holds the witness, which holds the
+# GPU, which tailnet they are on. Not credentials — RFC1918 and CGNAT addresses
+# are not routable from outside — but topology is nobody else's business, and it
+# was scattered through compose files, flag defaults, tests and runbooks before
+# this. Template and rationale in deploy/infra.example.env.
+/.env
