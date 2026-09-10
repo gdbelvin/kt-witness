@@ -713,8 +713,10 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		//
 		// Inside the shadow rather than outside it, so the canary sees the
 		// retained proof before the shadow deletes it.
+		keepingProofs := false
 		if cfg.Audit.CanaryEvery >= 0 {
 			pool.KeepProofs()
+			keepingProofs = true
 			canaryV = &audit.Canary{Primary: pool, Log: log, Every: cfg.Audit.CanaryEvery}
 			sidecar = canaryV
 			log.Info("canary verification enabled",
@@ -727,10 +729,18 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 			// could only see epochs that happened to be in the prefetch cache,
 			// which was two in ten.
 			pool.KeepProofs()
+			keepingProofs = true
 			sidecar = &audit.Shadow{Primary: sidecar, Log: log, Every: cfg.Audit.ShadowEvery}
 			log.Info("shadow verification enabled",
 				"note", "the Rust reference decides; the Go verifier is only observed",
 				"every", max(1, cfg.Audit.ShadowEvery))
+		}
+		// Outermost, and only when something asked the sidecar to retain its
+		// downloads. Whoever turns KeepProofs on owns the files; this is that
+		// ownership made explicit rather than left to whichever wrapper happens
+		// to be last, which is how it was lost when the shadow was switched off.
+		if keepingProofs {
+			sidecar = &audit.Reaper{Primary: sidecar, Log: log}
 		}
 		defer sidecar.Close()
 		// Pace the backlog against measured CPU rather than a fixed budget. A
