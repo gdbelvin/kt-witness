@@ -47,29 +47,9 @@ type GoVerifier struct {
 	// default with a generous timeout: a Meta proof is ~280 MB.
 	Client *http.Client
 
-	// keep makes each result carry the proof bytes it verified.
-	//
-	// The canary needs bytes that have just verified, and it used to get them
-	// by asking the Rust sidecar to leave its download on disk — which is why
-	// the witness had a tmpfs, a retention flag and something to delete it.
-	// Here the bytes are already in memory and are handed straight over, so
-	// none of that exists: no temp file, no scratch filesystem, nothing to
-	// leak. Off by default, because holding a 284 MB slice past the end of a
-	// verification is only worth it when somebody is going to read it.
-	keep bool
-
 	once sync.Once
 	sem  chan struct{}
 }
-
-// KeepProofs makes every result carry the bytes it verified, for a caller that
-// needs to build a canary from a proof that has just passed.
-//
-// Named to match Pool.KeepProofs, so a caller can ask either implementation for
-// the same thing — but the resemblance stops at the name. The pool leaves a
-// file on disk and makes the caller delete it; this hands over a slice that the
-// garbage collector reclaims when the caller is done with it.
-func (g *GoVerifier) KeepProofs() { g.keep = true }
 
 func (g *GoVerifier) init() {
 	g.once.Do(func() {
@@ -170,9 +150,6 @@ func (g *GoVerifier) VerifyCached(ctx context.Context, logDirectory string, epoc
 		return res, nil
 	}
 	res.OK = true
-	if g.keep {
-		res.Proof = data
-	}
 	return res, nil
 }
 
@@ -227,56 +204,6 @@ func (g *GoVerifier) ComputeRoots(ctx context.Context, logDirectory string, epoc
 		return "", "", err
 	}
 	return hex.EncodeToString(prev[:]), hex.EncodeToString(curr[:]), nil
-}
-
-// VerifyBytes verifies a proof already in memory, with no network and no disk.
-//
-// This is what lets the canary work without a scratch filesystem. Corrupting a
-// proof means producing 284 MB of altered bytes and asking the verifier about
-// them, and the only reason that ever involved a file is that the reference
-// implementation is a separate process reached through a pipe.
-func (g *GoVerifier) VerifyBytes(ctx context.Context, epoch int64, prevRoot, currRoot string, proof []byte) (*Result, error) {
-	g.init()
-	select {
-	case g.sem <- struct{}{}:
-		defer func() { <-g.sem }()
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-
-	res := &Result{Epoch: epoch, Bytes: int64(len(proof))}
-	t := time.Now()
-	inserted, unchanged, err := akdtree.Decode(proof)
-	if err != nil {
-		res.OK, res.Kind, res.Error = false, "decode", err.Error()
-		return res, nil
-	}
-	res.DecodeMS = time.Since(t).Milliseconds()
-
-	prev, err := akdtree.ParseDigest(prevRoot)
-	if err != nil {
-		return fetchFailure(res, "prev_root is not a 64-character hex digest"), nil
-	}
-	curr, err := akdtree.ParseDigest(currRoot)
-	if err != nil {
-		return fetchFailure(res, "curr_root is not a 64-character hex digest"), nil
-	}
-
-	t = time.Now()
-	var v akdtree.Verifier
-	ok, err := v.VerifyAppendOnly(unchanged, inserted, prev, curr, uint64(epoch))
-	res.VerifyMS = time.Since(t).Milliseconds()
-	if err != nil {
-		res.OK, res.Kind, res.Error = false, "decode", err.Error()
-		return res, nil
-	}
-	if !ok {
-		res.OK, res.Kind = false, "verify"
-		res.Error = "the proof does not rebuild the roots the operator published"
-		return res, nil
-	}
-	res.OK = true
-	return res, nil
 }
 
 // fetchFailure marks a result as "we could not check", never as "the log

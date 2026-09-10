@@ -5,9 +5,18 @@
 #
 #   witness  the server: ship, rebuild the image, recreate the container
 #   mac      this laptop's worker, rebuilt and restarted in place
-#   gpu      the GPU box's worker, cross-compiled and copied
-#   workers  mac and gpu
-#   all      everything
+#   gpu      the GPU box's worker — NOT part of "all", see below
+#   workers  the workers that are part of "all" (just the mac)
+#   all      the witness and the mac
+#
+# The GPU box is deliberately not in "all". It is a GPU machine and AKD
+# verification does not use a GPU: the ratio test in docs/gpu_notes.md put
+# hashing at 6-7% of a verification's runtime, which caps a perfect GPU port at
+# 1.47x, so there is nothing to move onto the card. Running the worker there
+# spent the box's CPUs on work the witness is not short of — it sat at a load
+# average of 1.5 on 40 cores, bound entirely on downloading Meta's 284 MB
+# proofs, which every machine here shares one connection for. Start it by hand
+# if the witness ever becomes CPU-bound rather than bandwidth-bound.
 #
 # This exists because the loop was five commands typed in order across two
 # hosts, and the two that got skipped under time pressure were always the same
@@ -51,7 +60,7 @@ if [ "$WHAT" = all ] || [ "$WHAT" = workers ] || [ "$WHAT" = mac ]; then
       -name "${KT_MAC_NAME:-$(hostname -s)}" > worker.log 2>&1 < /dev/null & )
 fi
 
-if [ "$WHAT" = all ] || [ "$WHAT" = workers ] || [ "$WHAT" = gpu ]; then
+if [ "$WHAT" = gpu ]; then
   # The GPU box takes a cross-compiled binary rather than an image: it runs one
   # Go program with no Rust in it, so a container round trip buys nothing.
   echo "==> gpu-box: build, copy, restart"

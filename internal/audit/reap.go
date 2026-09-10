@@ -15,8 +15,8 @@ import (
 // and its doc comment says "the caller becomes responsible for deleting them".
 // For a while the caller was Shadow, which read the retained bytes and removed
 // the file when it was done. Then the shadow was switched off, and with it went
-// the only deleter — while KeepProofs stayed on, because the canary needs those
-// bytes too.
+// the only deleter — while KeepProofs stayed on, because something else still
+// wanted those bytes.
 //
 // The witness then filled a 12 GB tmpfs in about forty epochs and reported
 //
@@ -28,9 +28,9 @@ import (
 //
 // So ownership is explicit and it is a layer of its own, installed OUTSIDE
 // every wrapper that wants to read the bytes. Putting the delete inside one of
-// them — the canary, say — makes correctness depend on which happens to be
-// outermost, which is exactly the coupling that broke this the first time: the
-// shadow's deletion was correct until something else was turned off.
+// them makes correctness depend on which happens to be outermost, which is
+// exactly the coupling that broke this the first time: the shadow's deletion
+// was correct right up until something unrelated was turned off.
 type Reaper struct {
 	Primary Verifier
 	Log     *slog.Logger

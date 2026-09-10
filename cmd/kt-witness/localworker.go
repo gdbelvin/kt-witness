@@ -88,9 +88,10 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 		Verify: func(ctx context.Context, origin string, epoch int64, _ string) (string, string, error) {
 			// The proof base is ignored here: this worker shares a process with
 			// the thing that would be serving it, so fetching from ourselves to
-			// test ourselves proves nothing. Its verifier is tested by
-			// audit.Canary instead, which corrupts proofs on the way through
-			// the sidecar pool where they can be checked directly.
+			// test ourselves proves nothing. The verifier it uses is the same
+			// one every remote worker runs, and internal/akdtree's mutation
+			// trials and fuzzing are what establish that it rejects a bad
+			// proof.
 			return verifyEpochHere(ctx, byOrigin[origin], sidecar, origin, epoch, timeout)
 		},
 		Report: func(ctx context.Context, res work.Result) error {
