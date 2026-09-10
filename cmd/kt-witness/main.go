@@ -190,7 +190,9 @@ type config struct {
 		ReserveCores float64 `json:"reserve_cores"`
 
 		// PrefetchDir enables downloading proofs ahead of verification. Empty
-		// disables it, and verification then downloads its own proof as before.
+		// falls back to each verifier fetching its own, which is slow in a
+		// specific way: the download then happens in series with the
+		// verification rather than beside it.
 		PrefetchDir string `json:"prefetch_dir"`
 
 		// PrefetchBytes caps the on-disk cache. Bytes rather than a count
@@ -199,7 +201,22 @@ type config struct {
 		PrefetchBytes int64 `json:"prefetch_bytes"`
 
 		// PrefetchWorkers is how many downloads run at once — this is what
-		// saturates the link.
+		// saturates the link, and since the generator became the fleet's only
+		// downloader it has to cover everybody's appetite, not just this
+		// machine's sweep.
+		//
+		// It was 8, which was right when each verifier also fetched its own
+		// proofs: the fleet then had about nineteen connections open and pulled
+		// 370-480 Mbit/s. Serving workers from the cache removed their
+		// connections and left these eight to do all of it — outbound
+		// connections fell to five and throughput fell with them. Concurrency
+		// that used to be spread across the fleet has to be declared here
+		// instead.
+		//
+		// Not derivable from cores or memory: what it wants to fill is a link,
+		// against CDNs giving about 20-25 Mbit/s per connection, and neither
+		// number is visible from inside this process. So it is measured and
+		// configured — raise it until throughput stops improving.
 		PrefetchWorkers int `json:"prefetch_workers"`
 
 		// PrefetchMinFreeBytes is free space the cache will not consume,
