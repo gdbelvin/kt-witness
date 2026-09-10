@@ -498,48 +498,6 @@ func scanFor(src Source, origin string, at int64, want int) (int64, int64, bool)
 	return from, to, ok
 }
 
-// Upcoming reports the epochs this queue expects to hand out next for an
-// origin, without leasing them.
-//
-// It exists so the witness can download proofs BEFORE a worker asks. Fetching
-// them at lease time is too late: the worker asks, the lease is granted, and
-// then it waits on the same WAN fetch it would have waited on anyway — the only
-// epochs that gain are the ones behind the first in the range. Running ahead of
-// the cursor is what turns a worker's idle time into the witness's pipelining.
-//
-// Deliberately a guess, and cheap to be wrong about. Another worker may take
-// these first, the cursor may be moved by an expiring lease, and the prefetcher
-// may decline for want of room. Every one of those costs a download that is
-// used later or evicted unused, and none of them costs correctness — the cache
-// is a hint, and Fetch is what decides.
-func (q *Queue) Upcoming(origin string, n int) []int64 {
-	if n < 1 || q.Source == nil {
-		return nil
-	}
-	q.mu.Lock()
-	at := q.cursor[origin]
-	src := q.Source
-	q.mu.Unlock()
-
-	from, to, ok := src(origin, at, n)
-	if !ok {
-		if from, to, ok = src(origin, 0, n); !ok {
-			return nil
-		}
-	}
-	out := make([]int64, 0, n)
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	now := q.now()
-	for e := from; e <= to && len(out) < n; e++ {
-		if t, held := q.deferred[epochKey(origin, e)]; held && now.Before(t) {
-			continue
-		}
-		out = append(out, e)
-	}
-	return out
-}
-
 // trimLeasedLocked shortens a run so it does not overlap anything out on a
 // lease, returning the free portion and where to resume looking.
 //
