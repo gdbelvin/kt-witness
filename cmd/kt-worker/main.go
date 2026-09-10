@@ -25,6 +25,9 @@ import (
 	"context"
 	"flag"
 	"log/slog"
+	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"runtime"
@@ -69,6 +72,7 @@ func main() {
 		akdOrigins = flag.String("akd-origins", "meta.messenger.kt/v1,whatsapp.kt/v2", "AKD logs this worker will verify")
 		protonBin  = flag.String("proton-bin", "", "path to kt-proton-gpu")
 		protonDir  = flag.String("proton-dir", "", "directory holding the retained Proton tree and manifest")
+		pprofAddr  = flag.String("pprof", "", "serve pprof on this address, e.g. 127.0.0.1:6060 (loopback only)")
 	)
 	flag.Parse()
 
@@ -112,6 +116,37 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// pprof, when asked for, and on loopback only.
+	//
+	// This worker is mostly WAITING rather than computing — on a proof arriving,
+	// on room in its own pool, on the witness answering a request — and a CPU
+	// profile of a process that is idle says almost nothing. What answers "why
+	// is this machine at one core of eight" is the goroutine dump: it shows
+	// where the pool's goroutines actually are, and whether they are hashing or
+	// blocked on a read.
+	//
+	//	go tool pprof -http=: http://127.0.0.1:6060/debug/pprof/profile?seconds=30
+	//	curl -s 'http://127.0.0.1:6060/debug/pprof/goroutine?debug=1'
+	//
+	// Loopback is checked rather than documented: this endpoint exposes stack
+	// traces and, through /debug/pprof/cmdline, the flags this process was
+	// started with. On a borrowed machine that is somebody else's business.
+	if *pprofAddr != "" {
+		host, _, err := net.SplitHostPort(*pprofAddr)
+		if ip := net.ParseIP(host); err != nil || ip == nil || !ip.IsLoopback() {
+			log.Error("refusing to serve pprof off loopback", "addr", *pprofAddr,
+				"note", "it exposes stack traces and this process's command line")
+			os.Exit(2)
+		}
+		go func() {
+			log.Info("pprof listening", "addr", *pprofAddr)
+			srv := &http.Server{Addr: *pprofAddr, ReadHeaderTimeout: 5 * time.Second}
+			if err := srv.ListenAndServe(); err != nil {
+				log.Warn("pprof server stopped", "err", err)
+			}
+		}()
+	}
 
 	// Split the CPU budget into concurrent epochs.
 	//
