@@ -1,6 +1,6 @@
 # Deploying witness.kt.gdbsecurity.com
 
-Run these on the server. It is amd64, so the Rust stage builds natively and
+Run these on the server. It is amd64, so the build is native and
 quickly — a cross-build from an arm64 laptop works but goes through QEMU and is
 much slower.
 
@@ -31,16 +31,21 @@ git clone ~/kt-witness.git kt-witness && cd kt-witness
 docker build -t kt-witness:latest .
 ```
 
-Confirm the sidecar actually runs — a wrong-architecture or missing-library build
-still starts the witness and fails only tier B, quietly:
+There is no separate verifier binary to check any more. This step used to pipe a
+request into the Rust sidecar to confirm it ran at all, because a
+wrong-architecture or missing-library build still started the witness and failed
+only tier B, quietly. Verification is in the witness binary now, so it cannot be
+missing while the witness runs.
 
-```sh
-echo '{"log_directory":"http://127.0.0.1:1","epoch":1,"prev_root":"aa","curr_root":"bb"}' \
-  | docker run --rm -i --entrypoint /usr/local/bin/kt-akd-verify kt-witness:latest
+What to confirm instead is in the startup log:
+
+```
+verifying append-only proofs in this process  concurrent=30
+tier B auditing enabled  logs=2  concurrent=30
 ```
 
-Expect JSON with `"kind":"fetch"`. Anything else — especially a library error —
-means tier B would be silently dead.
+`logs=0` means no configured source can resolve an epoch to its published roots,
+and tier B has nothing to do.
 
 ## 3. State directory
 
@@ -360,15 +365,19 @@ Measured; the full model is in [docs/cost.md](../docs/cost.md).
 - **Bandwidth**: **~40 GB/day** (~1.2 TB/month), essentially all tier B at
   `sample_rate` 0.1 — ~20 GB Meta, ~17 GB WhatsApp. Raising the rate to 1.0
   means ~372 GB/day; check any cap first. Almost all of it is *ingress*.
-- **CPU**: ~0.27 cores sustained, but bursty. One Meta epoch is ~24 s wall and
-  ~144 s CPU (it parallelises ~6×), so tier B needs real cores; on a single core
-  it would miss the 120 s cadence.
-- **Memory**: one AKD verification peaks ~3.7 GB RSS; the compose limit is 6 GB.
+- **CPU**: ~0.27 cores sustained, but bursty. One Meta epoch was ~24 s wall and
+  ~144 s CPU against the Rust sidecar (it parallelises ~6×); the in-process Go
+  verifier costs about an eighth of that. Tier B still wants real cores — on a
+  single core it would miss the 120 s cadence.
+- **Memory**: one AKD verification peaked ~3.7 GB RSS in the sidecar, and is a
+  fraction of that now; the compose limit is the host's budget, not the
+  verifier's.
 - **Disk**: **~45 GB**, of which ~40 GB is Proton's retained tree once the
   incremental audit is wired (not yet — see TODO). Without it, a few GB. There
   is no tile cache, so the 80 CT logs need no disk. Audit proofs are verified
-  and discarded, never retained. `/tmp` needs ~1 GB for one proof in flight
-  (compose mounts a tmpfs).
+  and discarded, never retained, and nothing writes them down on the way — the
+  verifier holds the proof in memory, so there is no tmpfs and the container
+  needs no writable `/tmp`.
 
 ## Before anyone relies on this
 
@@ -423,12 +432,11 @@ unset variable fails safe, and the witness refuses to start the channel at all.
 ### Running a worker
 
 ```sh
+# Or just: deploy/redeploy.sh mac
 go build -o bin/kt-worker ./cmd/kt-worker
-(cd rust/kt-akd-verify && cargo build --release)
 
-set -a; . ./secrets/work.env; set +a          # KT_WORK_TOKEN
-./bin/kt-worker -server ${KT_WITNESS_LAN_IP}:18090 \
-  -akd-bin ./rust/kt-akd-verify/target/release/kt-akd-verify \
+set -a; . ./secrets/work.env; set +a          # KT_WORK_TOKEN, KT_WORK_SERVER
+./bin/kt-worker -server ${KT_WORK_SERVER} \
   -akd-origins whatsapp.kt/v2 \
   -name "$(hostname -s)"
 ```
@@ -464,7 +472,8 @@ promise about somebody's machine.
 Background QoS is **off** by default. It is the strongest "never make this
 laptop feel slow" macOS offers, but it is a *placement*, not a budget: it pins
 every thread to the efficiency cluster. What replaces it is `nice 10` — which
-children inherit, and the sidecars are what burn the CPU — plus the ceiling.
+now applies to the worker's own verification threads, rather than being
+inherited by the child processes that used to burn the CPU — plus the ceiling.
 
 **Be plain about what that promises.** macOS has no affinity API, so the two
 CPUs held back are a count, not designated cores; the scheduler may still run
@@ -477,12 +486,13 @@ our threads on performance cores, and nice is advisory. Two dials:
                            # only mode where placement is actually guaranteed.
 ```
 
-**One epoch is not one core.** The sidecar builds a runtime sized from the
-machine and took 3.7 cores by itself, so counting epochs as cores overshoots
-nearly fourfold. `KT_AKD_THREADS` caps it, and the worker divides its budget
-into epochs × threads. Measured on WhatsApp epoch 1,000,000: uncapped 10.7 s
-CPU / 3.4 s wall; capped at four, 7.9 s / 3.5 s — same throughput for a
-quarter less CPU.
+**One epoch is not one core.** The Rust sidecar built a runtime sized from the
+machine and took 3.7 cores by itself, so counting epochs as cores overshot
+nearly fourfold. Measured then on WhatsApp epoch 1,000,000: uncapped 10.7 s
+CPU / 3.4 s wall; capped at four threads, 7.9 s / 3.5 s — same throughput for a
+quarter less CPU. That is why the worker still divides its budget into
+epochs × threads rather than into epochs alone, and where `threads_per_epoch`
+in the log above comes from.
 
 The governor then decides only *when to ask for more work*, and says so both
 ways in the log:

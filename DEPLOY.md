@@ -10,9 +10,12 @@
 docker build --platform linux/amd64 -t kt-witness .
 ```
 
-Two builders: Go for the witness core, Rust for AKD proof verification (tier B).
-The Rust stage builds `facebook/akd` and is slow the first time; dependency
-caching means source-only changes rebuild in seconds.
+One builder: Go, cross-compiled to the run platform, into
+`gcr.io/distroless/static-debian12`. It was two — a Rust stage building
+`facebook/akd` for tier B proof verification, slow the first time, on a
+`distroless/cc` base because that binary needed `libgcc_s.so.1` — until
+`internal/akdtree` moved the arithmetic into the witness binary. Nothing in the
+image is dynamically linked now.
 
 ## First run
 
@@ -81,20 +84,24 @@ Watch for:
 - **Tier B bandwidth** scales with `audit.sample_rate`. Meta publishes an epoch
   every 120 s at ~284 MB, so rate 0.1 is ~20 GB/day and rate 1.0 is ~204 GB/day.
   Check this against any ISP cap before raising it.
-- **Memory**: one AKD verification peaks around 3.7 GB RSS. `mem_limit: 6g`
-  leaves headroom without letting the host swap.
-- **CPU**: ~24 s wall for one epoch, but ~144 s of CPU — it parallelises about
-  6x. On a single core it would take ~144 s and miss the 120 s epoch cadence, so
-  tier B needs real cores.
-- **Disk**: `/tmp` needs ~1 GB for one proof in flight. The compose file mounts
-  a tmpfs; on a memory-tight host use a disk-backed mount instead.
+- **Memory**: one AKD verification peaked around 3.7 GB RSS in the Rust sidecar,
+  which is what made the pool size a memory question; the in-process verifier
+  uses a fraction of that. The compose file's `mem_limit` is the host's budget,
+  not the verifier's.
+- **CPU**: ~24 s wall and ~144 s of CPU for one Meta epoch, measured against the
+  Rust verifier — the Go one costs about an eighth. Either way it parallelises,
+  and on a single core it would miss the 120 s epoch cadence, so tier B needs
+  real cores.
+- **Disk**: nothing at all during a verification. The proof is held in memory,
+  verified and discarded, so the container needs no writable `/tmp`.
 
 ## Building on arm64
 
-The Rust stage must target the *run* platform, so cross-building from an arm64
-Mac runs it under emulation and is slow (tens of minutes for the akd tree).
-Building on the amd64 server itself is native and quick. There is no apt-get in
-the image precisely because apt's GPG verification fails under emulation.
+Go cross-compiles, so building on an arm64 Mac for `linux/amd64` is native and
+quick. This used to be the slow step: the Rust stage had to target the *run*
+platform, so the same build ran the akd tree under emulation for tens of
+minutes. There is still no apt-get in the image, and that is still deliberate —
+apt's GPG verification fails under emulation.
 
 To check a built image really targets amd64:
 
@@ -103,9 +110,10 @@ docker run --rm --platform linux/amd64 --entrypoint /usr/local/bin/kt-witness \
   kt-witness:latest -version
 ```
 
-If the sidecar were built for the wrong architecture the witness would still
-start and tiers A/A+ would work — only tier B would fail, quietly. Worth
-confirming rather than assuming.
+The failure this used to guard against is gone. A wrong-architecture sidecar let
+the witness start normally with tiers A/A+ working and only tier B dead, quietly;
+verification is in the witness binary now, so an image that runs at all has it.
+The check is still worth a second rather than an assumption.
 
 ## Operational bar
 

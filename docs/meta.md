@@ -86,11 +86,15 @@ treatment returns. Until then, the honest description of the assertion is "the
 chain of roots I derived from Meta's published proof objects is continuous",
 which is what the tier says.
 
-## Tier B: the AKD sidecar
+## Tier B: AKD proof verification
 
-Proof verification is `facebook/akd` 0.13 (`WhatsAppV1Configuration`,
-`public_auditing` feature), which is Rust. The witness core is Go, so tier B
-runs as a long-lived subprocess with a narrow JSON contract.
+Proof verification is `internal/akdtree`, in this process — the same append-only
+arithmetic as `facebook/akd` 0.13 (`WhatsAppV1Configuration`, `public_auditing`
+feature). It began as a long-lived Rust subprocess around that crate, spoken to
+over a narrow JSON contract, because that is where the reference implementation
+is; the Go one costs about an eighth of the CPU and a fraction of the memory,
+and what justifies trusting it is set out in the tier B section of the
+[README](../README.md).
 
 Results are classified `fetch` / `decode` / `verify`. **Only `verify` can
 accuse** — a failed download or an unparseable blob is absence, not evidence.
@@ -100,9 +104,11 @@ accuse** — a failed download or an unparseable blob is absence, not evidence.
 > Meta names objects by the **target** epoch. `akd`'s `generate_audit_blobs`
 > names by the **source** epoch.
 
-`audit_verify` must be passed `epochs = vec![key_epoch - 1]`. Get it wrong and
-the *start* hash check passes while the *end* hash check fails — which doubles
-as a negative control confirming the verification is genuinely cryptographic.
+So the blob named for `key_epoch` is the step *from* `key_epoch - 1`, which is
+what `akd`'s `audit_verify` wanted as `epochs = vec![key_epoch - 1]`. Get it
+wrong and the *start* hash check passes while the *end* hash check fails — which
+doubles as a negative control confirming the verification is genuinely
+cryptographic.
 
 ### Cost
 
@@ -114,6 +120,10 @@ as a negative control confirming the verification is genuinely cryptographic.
 | peak RSS | ~3.7 GB |
 | sustained ingest for continuous audit | ~204 GB/day, ~6 TB/month |
 | full replay from genesis | ~175 TB — off the table |
+
+The CPU and RSS rows were measured against the Rust reference; the in-process Go
+verifier costs about an eighth of the CPU and a fraction of the memory. The
+bandwidth rows are the proofs themselves and do not move.
 
 Continuous full audit is affordable on real infrastructure and not on a hobby
 VPS. Sampling at 0.1 gives ~20 GB/day. Feasibility depends on multicore: single

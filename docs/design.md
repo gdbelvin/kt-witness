@@ -260,7 +260,7 @@ constraint lives at the other end and has nothing to do with our load:
 | backfill refresh, 6 h | re-walks listing metadata, which is cheap but not free |
 | corpus capture spacing | two responses a second apart describe the same tree |
 
-**Timeouts.** The sidecar's per-verification limit is a deadline, not a pace.
+**Timeouts.** The per-verification limit is a deadline, not a pace.
 
 **Our own throughput.** These must NOT be fixed timers, and every one that was
 has caused a visible fault:
@@ -274,8 +274,10 @@ has caused a visible fault:
   timer rather than the work.
 
 Both are now short pauses whose only job is to yield and to notice cancellation.
-How much runs at once is the sidecar pool's business, sized from memory; how hard
-the machine is driven is the CPU governor's, targeting cores minus a reservation.
+How much runs at once is the verifier's business, sized from cores — it was sized
+from memory while proof replay ran out of process and peaked near 3.7 GB apiece;
+how hard the machine is driven is the CPU governor's, targeting cores minus a
+reservation.
 
 The rule: **if a wait exists to stop us working too hard, it belongs to the
 governor. If it exists because of something outside this process, it stays a

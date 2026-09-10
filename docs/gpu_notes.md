@@ -130,7 +130,7 @@ every core in the house was busy verifying. It is the same shape of work as the
 Proton rebuild that the GPU handles well: a sparse Merkle tree, rebuilt from
 its nodes, checked against a published root.
 
-Phase split first (§1), from the sidecar's own timers, averaged over the
+Phase split first (§1), from the Rust sidecar's own timers, averaged over the
 epochs verified that day:
 
     meta       verify 61.3 s   decode 4.3 s   download 2.2 s     per epoch
@@ -153,14 +153,21 @@ lookups and node objects inside the `akd` crate, not arithmetic.
 
 Two things worth keeping from this.
 
-The tool is `rust/kt-akd-verify/src/bin/ratio.rs`, and it took twenty minutes.
+The tool was `rust/kt-akd-verify/src/bin/ratio.rs`, and it took twenty minutes.
 The GPU verifier it retired would have taken days, and would have been correct,
 fast, and pointed at 7% of the problem — which is the failure mode this whole
-document is about. Note also that it measures the hash rate in its own process
+document is about. Note also that it measured the hash rate in its own process
 on the machine under test rather than quoting a number from anywhere: an
 imported rate is how the earlier 3.6x estimation error happened.
 
-And the answer it gives is directional, not final. If the CPU implementation
+And the answer it gave is directional, not final. If the CPU implementation
 ever stops being the bottleneck — a faster azks construction, or a different
-proof format — the ratio moves and the question is worth asking again. Run the
-tool, do not re-run the reasoning.
+proof format — the ratio moves and the question is worth asking again. Measure
+again, do not re-run the reasoning.
+
+Which has already happened once. The hundred-to-one the ratio found was
+allocation inside the `akd` crate, not arithmetic — and `internal/akdtree` was
+written to remove exactly that, which is why AKD verification is now Go in this
+process and the Rust sidecar, `ratio.rs` with it, is gone. Anyone asking the GPU
+question again has to write the tool's equivalent first, and measure the hash
+rate the same way it did.

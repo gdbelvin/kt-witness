@@ -36,7 +36,7 @@ echo "stamping: $(sed -n 's/^commit=//p' .build-info)"
 # Only directories the repository owns entirely are cleared. data/, import/ and
 # secrets/ hold the witness key, its database, the proof cache and the tokens —
 # they live only on the server and are never touched.
-ssh "$HOST" "cd ~/$DEST && rm -rf cmd internal proto docs deploy cuda rust/kt-akd-verify/src"
+ssh "$HOST" "cd ~/$DEST && rm -rf cmd internal proto docs deploy cuda rust"
 
 # Ship exactly the files git would, plus the stamp.
 #

@@ -115,12 +115,14 @@ existing RFC 6962 implementation. Neither could plausibly pass by accident.
 
 Prepared, not deployed. `deploy/` holds a production config for
 `witness.kt.gdbsecurity.com` and a runbook that generates the signing key on the
-target so the private key never leaves it. The image is distroless, two builders
-(Go core, Rust AKD sidecar), verified cosigning all five ecosystems from inside
-the container.
+target so the private key never leaves it. The image is distroless and a single
+Go build — it was two builders, Go core plus a Rust AKD sidecar, until that
+verification moved into the witness binary — verified cosigning all five
+ecosystems from inside the container.
 
 Measured load: ~20 GB/day at the chosen tier-B sample rate, ~3.7 GB peak RSS per
-verification, ~300 KB/day of database growth.
+verification against the Rust sidecar (a fraction of that since), ~300 KB/day of
+database growth.
 
 ## Next
 

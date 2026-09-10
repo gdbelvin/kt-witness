@@ -44,10 +44,10 @@ Guessing is not an option for a safety limit.
 ## Layout
 
 The on-disk layout **is** the providers' URL layout, and that is the whole
-design. Neither verifier can be handed a slice of bytes: the AKD verifier is a
-separate Rust process that fetches its own proof over HTTP, and Signal's response
-verification is an unexported step inside `Source.Fetch`. Rather than fork either
-— at which point a passing replay would prove nothing about production — replay
+design. Neither verifier can be handed a slice of bytes: the AKD verifier fetches
+its own proof over HTTP, and Signal's response verification is an unexported step
+inside `Source.Fetch`. Rather than fork either — at which point a passing replay
+would prove nothing about production — replay
 starts a loopback HTTP server over the corpus and points the real, unmodified
 code at it.
 
@@ -116,8 +116,8 @@ largest artifact rather than failing to converge.
 
 ```
 kt-corpus -status
-kt-corpus -fetch -sidecar ./kt-akd-verify -akd-epochs 4 -signal-captures 8
-kt-corpus -verify -sidecar ./kt-akd-verify     # -replay is an alias
+kt-corpus -fetch -akd-epochs 4 -signal-captures 8
+kt-corpus -verify                              # -replay is an alias
 kt-corpus -gc
 ```
 
@@ -125,8 +125,11 @@ kt-corpus -gc
 exiting non-zero if anything failed. It does not stop at the first failure: the
 useful output of a regression run is *which* artifacts broke.
 
-AKD capture and replay both need `-sidecar`, the `kt-akd-verify` binary. Without
-it AKD artifacts are reported as skipped rather than quietly counted as passing.
+AKD capture and replay need no external binary. Replay used to take the path to
+the Rust sidecar and did nothing without one, reporting AKD artifacts as skipped;
+the verifier is in this process now, so replay always works — which is what a
+corpus is for: an artifact that can only be checked when an external binary
+happens to be present is one nobody checks.
 
 ## What a full run costs
 

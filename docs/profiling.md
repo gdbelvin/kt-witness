@@ -19,7 +19,7 @@ cores on that basis. Total CPU dropped by 5.8 cores, which corroborated the
 guess — but corroboration is not measurement, and the profile shows the
 attribution was only half right.
 
-30-second profile, 8 sidecar workers, Proton replaying history:
+30-second profile, 8 Rust sidecar workers, Proton replaying history:
 
 ```
 53.25%  internal/runtime/syscall.Syscall6
@@ -42,10 +42,15 @@ The 563% observed earlier was the hashing phase; the profile happened to catch
 the writing one.
 
 The other half of the correction: the whole Go process accounted for ~0.76 cores
-of the 30.2 in use. **Verification does not appear in this profile at all** —
-the AKD replays run in separate `kt-akd-verify` processes, so a Go profile can
-never show them. For those, `ps` and the governor's own metrics remain the
-instruments.
+of the 30.2 in use. **Verification did not appear in that profile at all** — the
+AKD replays ran in separate `kt-akd-verify` processes, so a Go profile could
+never show them, and `ps` and the governor's own metrics were the only
+instruments for that half of the machine.
+
+That blind spot is gone. AKD replay is `internal/akdtree`, in this process, so a
+profile taken now covers verification too — the larger consumer the profiler
+previously could not reach. Read the split above as the record of what the first
+profile corrected, not as the shape of a profile today.
 
 ## Goroutines
 

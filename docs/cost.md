@@ -40,6 +40,11 @@ rewritten around the new ones because they vary per epoch, but real bandwidth is
 likely nearer half of what is stated. Erring high is the right direction for a
 number an operator plans capacity against.
 
+**The CPU column is conservative too, and now doubly so.** The 144 s per Meta
+epoch was measured against the Rust verifier that has since been replaced; the
+in-process Go one costs about an eighth of the CPU. The table has not been
+rewritten around that either, for the same reason as the sizes.
+
 An earlier draft of this table put CT storage at 120 GB, assuming a persistent
 tile cache. There is none — `NewTileFetcher` is used without `PermanentCache`,
 so tiles are fetched, used and discarded. Consistency proofs need only internal
@@ -103,7 +108,7 @@ bytes, because bytes are nearly free and attention is not.
 |---|---:|---:|---|
 | Signal | ~120 h | 25% | ECVRF, prefix tree, RFC 9420 log tree, search proofs, all reimplemented from libsignal |
 | Apple (KT + AT) | ~80 h | 25% | Undocumented protobuf recovered by probing; protos describe more than is deployed; private CA |
-| Meta / AKD | ~80 h | 12% | Rust sidecar, CDN cache traps, backfill of 535k epochs |
+| Meta / AKD | ~80 h | 12% | Rust sidecar, since replaced by an in-process Go verifier; CDN cache traps; backfill of 535k epochs |
 | Proton | ~80 h | 15% | 256-level sparse tree recovered from a C verifier; 200M-leaf rebuild |
 | WhatsApp | ~2 h | 8% | Shares the AKD adapter — configuration only |
 | Static CT (80 logs) | ~16 h | 10% | RFC 6962 note verifier; then configuration |
@@ -244,7 +249,9 @@ can sustain 100% construction auditing of both Meta and WhatsApp inside an
 eight-hour window**, at 103 Mbps or 28% of capacity. Sampling was adopted
 because continuous full audit looked infeasible; on this link, overnight, it is
 not. The binding constraint becomes CPU — 41.6 CPU-hours/day compressed into
-eight hours needs about **5.2 cores sustained** — not bandwidth.
+eight hours needs about **5.2 cores sustained** — not bandwidth. That is an
+upper bound: it carries the Rust-era per-epoch cost of the table above, and the
+verifier that replaced it costs about an eighth of it.
 
 That is worth knowing before buying anything: the upgrade that would raise
 assurance most is cores, not disks and not a faster line.
@@ -257,7 +264,7 @@ otherwise:
 | Need | Size |
 |---|---|
 | Database and published file mirror | <1 GB, growing ~1 GB/yr |
-| Tier-B scratch, one proof in flight | 1–2 GB (currently a tmpfs, so RAM) |
+| Tier-B scratch, one proof in flight | 0 — the verifier holds the proof in memory and never writes it |
 | Proton tree, once the audit is in the loop | ~40 GB |
 | Static CT | ~0 — no tile cache |
 | **Total** | **~45 GB**, comfortably 100 GB with headroom |

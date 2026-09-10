@@ -120,9 +120,9 @@ linkage cannot be checked across one. Results are served at `/history`.
 
 ## Deployment
 
-See [DEPLOY.md](DEPLOY.md). Two builders (Go core, Rust sidecar) into a
-distroless image; state lives in a `/data` volume that must persist, because the
-signing key is the published identity.
+See [DEPLOY.md](DEPLOY.md). One Go build into a distroless image; state lives in
+a `/data` volume that must persist, because the signing key is the published
+identity.
 
 ## Usage
 
@@ -354,10 +354,12 @@ Established by direct measurement, not inference:
 - Audit proofs are **publicly downloadable without credentials or operator
   coordination**, keyed `<epoch>/<prev_root>/<curr_root>`.
 - New epoch every **120 s**; **~284 MB** per proof; download at ~58 MB/s (~5 s).
-- Verification with `akd` 0.13 (`WhatsAppV1Configuration`) takes **~24 s**
+- Verification with `akd` 0.13 (`WhatsAppV1Configuration`) took **~24 s**
   wall-clock (~144 s CPU, parallelising ~6x) and **~3.7 GB** peak RSS for one
   epoch. Against a 120 s budget that is ~5x headroom — **but it depends on
-  multicore**; single-threaded it would miss the budget.
+  multicore**; single-threaded it would miss the budget. The in-process Go
+  verifier that replaced it costs about an eighth of that CPU and far less
+  memory, so the headroom is wider still.
 - Sustained real-time tier B is therefore ~**204 GB/day** of ingest for one
   namespace.
 
@@ -371,11 +373,24 @@ verification, which confirms the check is genuinely cryptographic.
 
 ## Tier B: construction auditing
 
-Enabled by setting `audit.sidecar_path`. AKD proof verification lives in Rust
-(`rust/kt-akd-verify`) because that is where `facebook/akd` is; the Go side
-drives it as a long-running subprocess over one-JSON-per-line.
+Runs whenever a configured log can resolve an epoch to its published roots —
+there is nothing to enable. AKD proof verification is `internal/akdtree`, in
+this process.
 
-The sidecar's `kind` field is load-bearing and mirrors the same standard used
+It began as a Rust sidecar around `facebook/akd`, driven as a subprocess over
+one-JSON-per-line, because that is where the reference implementation is. The Go
+implementation replaced it: an eighth of the CPU, a fraction of the memory, and
+no 284 MB proof crossing a pipe as a temporary file. What justifies trusting it
+is not that it is faster — it is that **every epoch is checked**. A worker
+rebuilds both roots and is never told what they should be; the witness compares
+them against what the operator published. A verifier that was wrong would
+disagree with the operator on the first epoch it touched, which is a stronger
+and more continuous check than a second implementation sampled at 1% ever was.
+
+That, plus 1000 mutation trials and 8.2 million fuzz executions in the test
+suite, both requiring that a single flipped bit is rejected.
+
+The `kind` field is load-bearing and mirrors the same standard used
 everywhere else here: only `kind: "verify"` — the proof provably fails to
 reconstruct the published root — is treated as misbehaviour and poisons the log.
 `fetch` and `decode` mean *we* could not check, and are retried. That failure is
@@ -383,8 +398,8 @@ arithmetic, not observation, which is why it can be conclusive where a missing
 object cannot.
 
 Auditing runs on its own goroutine and deliberately does **not** gate cosigning:
-one verification takes ~24 s, and the witness must stay responsive enough to
-detect equivocation.
+one verification took ~24 s against the Rust verifier and less than that now,
+and the witness must stay responsive enough to detect equivocation.
 
 Results are published at `GET /audits?origin=<origin>`, including the epochs we
 *declined* — a coverage claim nobody can recompute is not a claim.
