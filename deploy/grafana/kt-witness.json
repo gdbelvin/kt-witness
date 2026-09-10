@@ -1,2323 +1,2323 @@
 {
- "description": "Independent witness for Key Transparency, Certificate Transparency and software transparency logs.",
- "editable": true,
- "panels": [
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "Non-zero means a log was caught contradicting itself and is permanently refused. Evidence at /forks is reproducible without trusting this witness.",
-   "fieldConfig": {
-    "defaults": {
-     "decimals": 0,
-     "displayName": " ",
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "green",
-        "value": null
-       },
-       {
-        "color": "red",
-        "value": 1
-       }
-      ]
-     },
-     "unit": "short"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 4,
-    "w": 3,
-    "x": 0,
-    "y": 0
-   },
-   "options": {
-    "colorMode": "background_solid",
-    "graphMode": "none",
-    "justifyMode": "center",
-    "reduceOptions": {
-     "calcs": [
-      "lastNotNull"
-     ]
-    },
-    "textMode": "value",
-    "wideLayout": false
-   },
-   "targets": [
+  "description": "Independent witness for Key Transparency, Certificate Transparency and software transparency logs.",
+  "editable": true,
+  "panels": [
     {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_forks_total\")\n  |> last() |> group() |> max() |> keep(columns: [\"_value\"])",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Forks",
-   "type": "stat"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "Origins currently under attestation.",
-   "fieldConfig": {
-    "defaults": {
-     "decimals": 0,
-     "displayName": " ",
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "blue",
-        "value": null
-       }
-      ]
-     },
-     "unit": "short"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 4,
-    "w": 4,
-    "x": 3,
-    "y": 0
-   },
-   "options": {
-    "colorMode": "background_solid",
-    "graphMode": "none",
-    "justifyMode": "center",
-    "reduceOptions": {
-     "calcs": [
-      "lastNotNull"
-     ]
-    },
-    "textMode": "value",
-    "wideLayout": false
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_logs_total\")\n  |> last() |> group() |> max() |> keep(columns: [\"_value\"])",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Logs",
-   "type": "stat"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "Sum of every witnessed log's size \u2014 records whose append-only shape is currently attested.",
-   "fieldConfig": {
-    "defaults": {
-     "decimals": 0,
-     "displayName": " ",
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "blue",
-        "value": null
-       }
-      ]
-     },
-     "unit": "short"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 4,
-    "w": 5,
-    "x": 7,
-    "y": 0
-   },
-   "options": {
-    "colorMode": "background_solid",
-    "graphMode": "none",
-    "justifyMode": "center",
-    "reduceOptions": {
-     "calcs": [
-      "lastNotNull"
-     ]
-    },
-    "textMode": "value",
-    "wideLayout": false
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_entries_attested\")\n  |> last() |> group() |> max() |> keep(columns: [\"_value\"])",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Entries",
-   "type": "stat"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "Seconds since the least-recently cosigned log was refreshed. The witness refreshes hourly, so a large value means THE WITNESS is stuck, not that a log is quiet.",
-   "fieldConfig": {
-    "defaults": {
-     "decimals": 0,
-     "displayName": " ",
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "green",
-        "value": null
-       },
-       {
-        "color": "orange",
-        "value": 5400
-       },
-       {
-        "color": "red",
-        "value": 7800
-       }
-      ]
-     },
-     "unit": "s"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 4,
-    "w": 4,
-    "x": 12,
-    "y": 0
-   },
-   "options": {
-    "colorMode": "background_solid",
-    "graphMode": "none",
-    "justifyMode": "center",
-    "reduceOptions": {
-     "calcs": [
-      "lastNotNull"
-     ]
-    },
-    "textMode": "value",
-    "wideLayout": false
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_log_staleness_seconds\")\n  |> last() |> group() |> max() |> keep(columns: [\"_value\"])",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Stalest log",
-   "type": "stat"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "Construction proofs replayed. Tier B is the only tier that can see an illegal mutation.",
-   "fieldConfig": {
-    "defaults": {
-     "decimals": 0,
-     "displayName": " ",
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "blue",
-        "value": null
-       }
-      ]
-     },
-     "unit": "short"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 4,
-    "w": 4,
-    "x": 16,
-    "y": 0
-   },
-   "options": {
-    "colorMode": "background_solid",
-    "graphMode": "none",
-    "justifyMode": "center",
-    "reduceOptions": {
-     "calcs": [
-      "lastNotNull"
-     ]
-    },
-    "textMode": "value",
-    "wideLayout": false
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_audit_verified_total\")\n  |> last() |> group() |> sum() |> keep(columns: [\"_value\"])",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Audits",
-   "type": "stat"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "A witness that runs out of disk stops witnessing.",
-   "fieldConfig": {
-    "defaults": {
-     "decimals": 0,
-     "displayName": " ",
-     "thresholds": {
-      "mode": "absolute",
-      "steps": [
-       {
-        "color": "green",
-        "value": null
-       },
-       {
-        "color": "orange",
-        "value": 0.8
-       },
-       {
-        "color": "red",
-        "value": 0.9
-       }
-      ]
-     },
-     "unit": "percentunit"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 4,
-    "w": 4,
-    "x": 20,
-    "y": 0
-   },
-   "options": {
-    "colorMode": "background_solid",
-    "graphMode": "none",
-    "justifyMode": "center",
-    "reduceOptions": {
-     "calcs": [
-      "lastNotNull"
-     ]
-    },
-    "textMode": "value",
-    "wideLayout": false
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_disk_used_ratio\")\n  |> last() |> group() |> max() |> keep(columns: [\"_value\"])",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Disk used",
-   "type": "stat"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "The whole fleet, sortable and filterable. Staleness is coloured because it is the number that reveals a stuck witness.",
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "align": "auto",
-      "cellOptions": {
-       "type": "auto"
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
       },
-      "filterable": true
-     }
-    },
-    "overrides": [
-     {
-      "matcher": {
-       "id": "byName",
-       "options": "stale"
+      "description": "Non-zero means a log was caught contradicting itself and is permanently refused. Evidence at /forks is reproducible without trusting this witness.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "displayName": " ",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
       },
-      "properties": [
-       {
-        "id": "unit",
-        "value": "s"
-       },
-       {
-        "id": "decimals",
-        "value": 0
-       },
-       {
-        "id": "custom.cellOptions",
-        "value": {
-         "mode": "gradient",
-         "type": "color-background"
+      "gridPos": {
+        "h": 4,
+        "w": 3,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "colorMode": "background_solid",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value",
+        "wideLayout": false
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_forks_total\")\n  |> last() |> group() |> max() |> keep(columns: [\"_value\"])",
+          "rawQuery": true,
+          "refId": "A"
         }
-       },
-       {
-        "id": "thresholds",
-        "value": {
-         "mode": "absolute",
-         "steps": [
-          {
-           "color": "green",
-           "value": null
+      ],
+      "title": "Forks",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "Origins currently under attestation.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "displayName": " ",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
           },
-          {
-           "color": "orange",
-           "value": 5400
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 3,
+        "y": 0
+      },
+      "options": {
+        "colorMode": "background_solid",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value",
+        "wideLayout": false
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
           },
-          {
-           "color": "red",
-           "value": 7800
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_logs_total\")\n  |> last() |> group() |> max() |> keep(columns: [\"_value\"])",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Logs",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "Sum of every witnessed log's size \u2014 records whose append-only shape is currently attested.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "displayName": " ",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 5,
+        "x": 7,
+        "y": 0
+      },
+      "options": {
+        "colorMode": "background_solid",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value",
+        "wideLayout": false
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_entries_attested\")\n  |> last() |> group() |> max() |> keep(columns: [\"_value\"])",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Entries",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "Seconds since the least-recently cosigned log was refreshed. The witness refreshes hourly, so a large value means THE WITNESS is stuck, not that a log is quiet.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "displayName": " ",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 5400
+              },
+              {
+                "color": "red",
+                "value": 7800
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "options": {
+        "colorMode": "background_solid",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value",
+        "wideLayout": false
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_log_staleness_seconds\")\n  |> last() |> group() |> max() |> keep(columns: [\"_value\"])",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Stalest log",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "Construction proofs replayed. Tier B is the only tier that can see an illegal mutation.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "displayName": " ",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "options": {
+        "colorMode": "background_solid",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value",
+        "wideLayout": false
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_audit_verified_total\")\n  |> last() |> group() |> sum() |> keep(columns: [\"_value\"])",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Audits",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "A witness that runs out of disk stops witnessing.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "displayName": " ",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 0.8
+              },
+              {
+                "color": "red",
+                "value": 0.9
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "options": {
+        "colorMode": "background_solid",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value",
+        "wideLayout": false
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_disk_used_ratio\")\n  |> last() |> group() |> max() |> keep(columns: [\"_value\"])",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Disk used",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "The whole fleet, sortable and filterable. Staleness is coloured because it is the number that reveals a stuck witness.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true
           }
-         ]
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "stale"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "mode": "gradient",
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 5400
+                    },
+                    {
+                      "color": "red",
+                      "value": 7800
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "kind"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 100
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "tier"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 230
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 11,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "stale"
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_log_staleness_seconds\")\n  |> last() |> group(columns: [\"origin\",\"kind\",\"tier\"]) |> last()\n  |> keep(columns: [\"origin\",\"kind\",\"tier\",\"_value\"])\n  |> rename(columns: {_value: \"stale\"})\n  |> group() |> sort(columns: [\"stale\"], desc: true)",
+          "rawQuery": true,
+          "refId": "A"
         }
-       },
-       {
-        "id": "custom.width",
-        "value": 110
-       }
+      ],
+      "title": "Every log, worst staleness first",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "Grouped by what each log makes transparent. Per-origin would be 77 lines and answer nothing. Sawtooth to ~1h is healthy: that is the hourly refresh.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "axisSoftMin": 0,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "displayName": "${__field.labels.kind}",
+          "noValue": "\u2014",
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 15
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_log_staleness_seconds\")\n  |> group(columns: [\"kind\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: max, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"kind\"])",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Staleness by kind",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "Throughput. One kind dropping to zero while others continue points at that ecosystem's endpoints, not at us.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "axisSoftMin": 0,
+            "fillOpacity": 25,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "displayName": "${__field.labels.kind}",
+          "noValue": "\u2014",
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 15
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "// kt-witness is scraped every 15s. A rate window still needs to span several\n// scrapes \u2014 otherwise the delta is taken across whatever gap happens to fall\n// out \u2014 so floor it at 1m, four scrapes. Longer ranges widen normally.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\n// Differentiate EACH log's counter, then sum by kind. Grouping first merged\n// every origin of a kind into one series \u2014 about 77 of them for CT \u2014 and the\n// derivative of that interleaving is not a rate of anything.\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_cosignatures_total\")\n  |> group(columns: [\"kind\", \"origin\"])\n  |> aggregateWindow(every: w, fn: last, createEmpty: false)\n  |> derivative(unit: 1m, nonNegative: true)\n  |> group(columns: [\"kind\"])\n  |> aggregateWindow(every: w, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"kind\"])",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Cosignatures per minute, by kind",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "Withholding IS the enforcement mechanism, so nonzero is the system working. Sustained above ~20 is not.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "axisSoftMin": 0,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "displayName": "${__field.labels.kind}",
+          "noValue": "\u2014",
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 23
+      },
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_consecutive_withheld\")\n  |> group(columns: [\"kind\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: max, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"kind\"])",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Consecutive withheld (worst per kind)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "Bytes of construction proof downloaded, per second, by log. A subset of total traffic: the network panels also include checkpoint fetches.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "axisSoftMin": 0,
+            "fillOpacity": 25,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "displayName": "${__field.labels.origin}",
+          "noValue": "\u2014",
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 23
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "// kt-witness is scraped every 15s. A rate window still needs to span several\n// scrapes \u2014 otherwise the delta is taken across whatever gap happens to fall\n// out \u2014 so floor it at 1m, four scrapes. Longer ranges widen normally.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_audit_bytes_total\")\n  |> group(columns: [\"origin\"])\n  |> aggregateWindow(every: w, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"origin\"])\n  |> derivative(unit: 1s, nonNegative: true)",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Audit proof download rate, by log",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "Database, published mirror, and free space beneath them. bbolt never returns freed pages, so the database only grows.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "axisSoftMin": 0,
+            "fillOpacity": 10,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true
+          },
+          "displayName": "${__field.labels._field}",
+          "noValue": "\u2014",
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 30
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_database_bytes\")\n  |> group(columns: [\"_field\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])",
+          "rawQuery": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_export_bytes\")\n  |> group(columns: [\"_field\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])",
+          "rawQuery": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_disk_free_bytes\")\n  |> group(columns: [\"_field\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])",
+          "rawQuery": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Storage",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "Epochs of published history verified by backfill, per log.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "axisSoftMin": 0,
+            "fillOpacity": 25,
+            "gradientMode": "opacity",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "displayName": "${__field.labels.origin}",
+          "noValue": "\u2014",
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 30
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_backfill_epochs\")\n  |> group(columns: [\"origin\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"origin\"])",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Backfilled history",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 37
+      },
+      "id": 1,
+      "panels": [],
+      "title": "Network utilisation",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "Bytes fetched per second, summed per ecosystem. Rate is taken per log first, then summed, so a counter reset on restart drops out instead of drawing a cliff.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisSoftMin": 0,
+            "drawStyle": "line",
+            "fillOpacity": 18,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 38
+      },
+      "id": 2,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "// kt-witness is scraped every 15s. A rate window still needs to span several\n// scrapes \u2014 otherwise the delta is taken across whatever gap happens to fall\n// out \u2014 so floor it at 1m, four scrapes. Longer ranges widen normally.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_network_bytes_in_total\")\n  |> group(columns: [\"origin\", \"kind\"])\n  |> aggregateWindow(every: w, fn: max, createEmpty: false)\n  |> derivative(unit: 1s, nonNegative: true)\n  |> group(columns: [\"kind\"])\n  |> aggregateWindow(every: w, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"kind\"])",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Download rate by ecosystem",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "The same measurement per log. Meta and WhatsApp dominate: tier B streams a full proof per audited epoch.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisSoftMin": 0,
+            "drawStyle": "line",
+            "fillOpacity": 25,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 38
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "// kt-witness is scraped every 15s. A rate window still needs to span several\n// scrapes \u2014 otherwise the delta is taken across whatever gap happens to fall\n// out \u2014 so floor it at 1m, four scrapes. Longer ranges widen normally.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_network_bytes_in_total\")\n  |> group(columns: [\"origin\", \"kind\"])\n  |> aggregateWindow(every: w, fn: max, createEmpty: false)\n  |> derivative(unit: 1s, nonNegative: true)\n  |> group(columns: [\"origin\"])\n  |> aggregateWindow(every: w, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"origin\"])",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Download rate by log",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "Request bytes. Small by design \u2014 a witness asks little and reads a lot.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisSoftMin": 0,
+            "drawStyle": "line",
+            "fillOpacity": 18,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 47
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "// kt-witness is scraped every 15s. A rate window still needs to span several\n// scrapes \u2014 otherwise the delta is taken across whatever gap happens to fall\n// out \u2014 so floor it at 1m, four scrapes. Longer ranges widen normally.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_network_bytes_out_total\")\n  |> group(columns: [\"origin\", \"kind\"])\n  |> aggregateWindow(every: w, fn: max, createEmpty: false)\n  |> derivative(unit: 1s, nonNegative: true)\n  |> group(columns: [\"kind\"])\n  |> aggregateWindow(every: w, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"kind\"])",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Upload rate by ecosystem",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "Request rate, which separates 'a lot of bytes' from 'a lot of chatter'.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisSoftMin": 0,
+            "drawStyle": "line",
+            "fillOpacity": 18,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 47
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "// kt-witness is scraped every 15s. A rate window still needs to span several\n// scrapes \u2014 otherwise the delta is taken across whatever gap happens to fall\n// out \u2014 so floor it at 1m, four scrapes. Longer ranges widen normally.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_network_requests_total\")\n  |> group(columns: [\"origin\", \"kind\"])\n  |> aggregateWindow(every: w, fn: max, createEmpty: false)\n  |> derivative(unit: 1s, nonNegative: true)\n  |> group(columns: [\"kind\"])\n  |> aggregateWindow(every: w, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"kind\"])",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Requests per second by ecosystem",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "Total link utilisation. Compare against the overnight budget: the home link measured 374 Mbps, and sustained tier B for Meta alone is ~2.4 MB/s.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisSoftMin": 0,
+            "drawStyle": "line",
+            "fillOpacity": 18,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 47
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "calcs": [
+            "mean",
+            "max"
+          ],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "// kt-witness is scraped every 15s. A rate window still needs to span several\n// scrapes \u2014 otherwise the delta is taken across whatever gap happens to fall\n// out \u2014 so floor it at 1m, four scrapes. Longer ranges widen normally.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_network_bytes_in_total\")\n  |> group(columns: [\"origin\", \"kind\"])\n  |> aggregateWindow(every: w, fn: max, createEmpty: false)\n  |> derivative(unit: 1s, nonNegative: true)\n  |> group(columns: [\"stack\"])\n  |> aggregateWindow(every: w, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"stack\"])",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Download rate, all logs",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 55
+      },
+      "id": 7,
+      "panels": [],
+      "title": "Tier B+ validation progress",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "Construction proofs verified per hour, by log, from the kt_witness_audit_verified_total counter.\n\nNamed proofs rather than epochs because the unit differs by log: an epoch for the AKD directories and Proton, a published entry for entry logs. Calling all of them epochs would overstate what an entry log has done.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisSoftMin": 0,
+            "drawStyle": "line",
+            "fillOpacity": 25,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 56
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "// kt-witness is scraped every 15s. A rate window still needs to span several\n// scrapes \u2014 otherwise the delta is taken across whatever gap happens to fall\n// out \u2014 so floor it at 1m, four scrapes. Longer ranges widen normally.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_audit_verified_total\")\n  |> group(columns: [\"origin\"])\n  |> aggregateWindow(every: w, fn: max, createEmpty: false)\n  |> derivative(unit: 1h, nonNegative: true)\n  |> keep(columns: [\"_time\", \"_value\", \"origin\"])",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Construction proofs verified per hour",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "Epochs of published history with a settled construction-audit decision. A coverage level, not throughput \u2014 it only counts work inside the backfilled range.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisSoftMin": 0,
+            "drawStyle": "line",
+            "fillOpacity": 25,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 56
+      },
+      "id": 9,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_history_audited_epochs\")\n  |> group(columns: [\"origin\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"origin\"])",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Published history audited, by log",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "How far there is to go before a log can honestly claim tier B+. Absolute epochs rather than a percentage: a percentage sits near zero for a long time and hides whether anything is happening.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisSoftMin": 0,
+            "drawStyle": "line",
+            "fillOpacity": 25,
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 65
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "mean",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and (r._field == \"kt_witness_history_total_epochs\" or r._field == \"kt_witness_history_audited_epochs\"))\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> group(columns: [\"origin\"])\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({_time: r._time, origin: r.origin, _value: r.kt_witness_history_total_epochs - r.kt_witness_history_audited_epochs}))\n  |> group(columns: [\"origin\"])\n  |> keep(columns: [\"_time\", \"_value\", \"origin\"])",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Published history remaining",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "description": "Current cumulative count per log.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 65
+      },
+      "id": 11,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_history_audited_epochs\")\n  |> group(columns: [\"origin\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"origin\"])",
+          "rawQuery": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Audited now",
+      "type": "stat"
+    },
+    {
+      "id": 19,
+      "type": "row",
+      "title": "Pipeline health & bottlenecks",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 73
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Pipeline bottleneck \u2014 CPU against budget",
+      "description": "The single most useful panel here. cpu_self_cores is what this container actually burns; audit_permits is what the governor is willing to grant the backlog sweep. When CPU sits at the budget and permits fall toward 1, CPU is the binding constraint. When permits are high and in-flight is below them, the sweep is NOT taking what it was offered \u2014 that means it is blocked on something else (bytes, disk, or a barrier), and the bottleneck is downstream.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 74
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and (r._field == \"kt_witness_cpu_self_cores\" or r._field == \"kt_witness_cpu_machine_cores\"))\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\",\"_field\",\"_value\"])",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and (r._field == \"kt_witness_audit_permits\" or r._field == \"kt_witness_audit_in_flight\"))\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\",\"_field\",\"_value\"])",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
       ]
-     },
-     {
-      "matcher": {
-       "id": "byName",
-       "options": "kind"
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Governor allowance actually taken",
+      "description": "in_flight divided by permits. At 1.0 the sweep is using everything the governor grants and more CPU would buy more throughput. Persistently below 1.0 means the CPU allowance is going unused and adding cores would buy nothing \u2014 look at bandwidth, the disk cache, or a barrier in the sweep instead.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
       },
-      "properties": [
-       {
-        "id": "custom.width",
-        "value": 100
-       }
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 83
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "percentunit",
+          "max": 1.2,
+          "min": 0,
+          "displayName": "allowance taken"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and (r._field == \"kt_witness_audit_in_flight\" or r._field == \"kt_witness_audit_permits\"))\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({_time: r._time, _value: if r.kt_witness_audit_permits > 0.0 then r.kt_witness_audit_in_flight / r.kt_witness_audit_permits else 0.0}))\n  |> keep(columns: [\"_time\", \"_value\"])",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
       ]
-     },
-     {
-      "matcher": {
-       "id": "byName",
-       "options": "tier"
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Proof cache \u2014 the buffer between link and CPU",
+      "description": "The disk cache sits between downloading and verifying. FULL means downloads are outrunning verification, so bandwidth has headroom and CPU is the constraint. EMPTY while CPU is idle means the opposite: verification is starved and the link (or the CDN) is the constraint. This is the panel that tells the two apart.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
       },
-      "properties": [
-       {
-        "id": "custom.width",
-        "value": 230
-       }
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 83
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_prefetch_cache_bytes\")\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\",\"_value\"])",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
       ]
-     }
-    ]
-   },
-   "gridPos": {
-    "h": 11,
-    "w": 24,
-    "x": 0,
-    "y": 4
-   },
-   "options": {
-    "cellHeight": "sm",
-    "footer": {
-     "show": false
-    },
-    "showHeader": true,
-    "sortBy": [
-     {
-      "desc": true,
-      "displayName": "stale"
-     }
-    ]
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_log_staleness_seconds\")\n  |> last() |> group(columns: [\"origin\",\"kind\",\"tier\"]) |> last()\n  |> keep(columns: [\"origin\",\"kind\",\"tier\",\"_value\"])\n  |> rename(columns: {_value: \"stale\"})\n  |> group() |> sort(columns: [\"stale\"], desc: true)",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Every log, worst staleness first",
-   "type": "table"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "Grouped by what each log makes transparent. Per-origin would be 77 lines and answer nothing. Sawtooth to ~1h is healthy: that is the hourly refresh.",
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "axisSoftMin": 0,
-      "fillOpacity": 10,
-      "gradientMode": "opacity",
-      "lineInterpolation": "smooth",
-      "lineWidth": 2,
-      "pointSize": 5,
-      "showPoints": "auto",
-      "spanNulls": true,
-      "stacking": {
-       "group": "A",
-       "mode": "none"
-      }
-     },
-     "displayName": "${__field.labels.kind}",
-     "noValue": "\u2014",
-     "unit": "s"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 12,
-    "x": 0,
-    "y": 15
-   },
-   "options": {
-    "legend": {
-     "calcs": [],
-     "displayMode": "list",
-     "placement": "bottom",
-     "showLegend": true
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_log_staleness_seconds\")\n  |> group(columns: [\"kind\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: max, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"kind\"])",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Staleness by kind",
-   "type": "timeseries"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "Throughput. One kind dropping to zero while others continue points at that ecosystem's endpoints, not at us.",
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "axisSoftMin": 0,
-      "fillOpacity": 25,
-      "gradientMode": "opacity",
-      "lineInterpolation": "smooth",
-      "lineWidth": 2,
-      "pointSize": 5,
-      "showPoints": "auto",
-      "spanNulls": true,
-      "stacking": {
-       "group": "A",
-       "mode": "normal"
-      }
-     },
-     "displayName": "${__field.labels.kind}",
-     "noValue": "\u2014",
-     "unit": "short"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 12,
-    "x": 12,
-    "y": 15
-   },
-   "options": {
-    "legend": {
-     "calcs": [],
-     "displayMode": "list",
-     "placement": "bottom",
-     "showLegend": true
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "// kt-witness is scraped every 15s. A rate window still needs to span several\n// scrapes \u2014 otherwise the delta is taken across whatever gap happens to fall\n// out \u2014 so floor it at 1m, four scrapes. Longer ranges widen normally.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_cosignatures_total\")\n  |> group(columns: [\"kind\"])\n  |> aggregateWindow(every: w, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"kind\"])\n  |> derivative(unit: 1m, nonNegative: true)",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Cosignatures per minute, by kind",
-   "type": "timeseries"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "Withholding IS the enforcement mechanism, so nonzero is the system working. Sustained above ~20 is not.",
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "axisSoftMin": 0,
-      "fillOpacity": 10,
-      "gradientMode": "opacity",
-      "lineInterpolation": "smooth",
-      "lineWidth": 2,
-      "pointSize": 5,
-      "showPoints": "auto",
-      "spanNulls": true,
-      "stacking": {
-       "group": "A",
-       "mode": "none"
-      }
-     },
-     "displayName": "${__field.labels.kind}",
-     "noValue": "\u2014",
-     "unit": "short"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 7,
-    "w": 8,
-    "x": 0,
-    "y": 23
-   },
-   "options": {
-    "legend": {
-     "calcs": [],
-     "displayMode": "list",
-     "placement": "bottom",
-     "showLegend": true
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_consecutive_withheld\")\n  |> group(columns: [\"kind\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: max, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"kind\"])",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Consecutive withheld (worst per kind)",
-   "type": "timeseries"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "Bytes of construction proof downloaded, per second, by log. A subset of total traffic: the network panels also include checkpoint fetches.",
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "axisSoftMin": 0,
-      "fillOpacity": 25,
-      "gradientMode": "opacity",
-      "lineInterpolation": "smooth",
-      "lineWidth": 2,
-      "pointSize": 5,
-      "showPoints": "auto",
-      "spanNulls": true,
-      "stacking": {
-       "group": "A",
-       "mode": "normal"
-      }
-     },
-     "displayName": "${__field.labels.origin}",
-     "noValue": "\u2014",
-     "unit": "Bps"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 7,
-    "w": 8,
-    "x": 16,
-    "y": 23
-   },
-   "options": {
-    "legend": {
-     "calcs": [
-      "lastNotNull"
-     ],
-     "displayMode": "table",
-     "placement": "bottom",
-     "showLegend": true
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "// kt-witness is scraped every 15s. A rate window still needs to span several\n// scrapes \u2014 otherwise the delta is taken across whatever gap happens to fall\n// out \u2014 so floor it at 1m, four scrapes. Longer ranges widen normally.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_audit_bytes_total\")\n  |> group(columns: [\"origin\"])\n  |> aggregateWindow(every: w, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"origin\"])\n  |> derivative(unit: 1s, nonNegative: true)",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Audit proof download rate, by log",
-   "type": "timeseries"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "Database, published mirror, and free space beneath them. bbolt never returns freed pages, so the database only grows.",
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "axisSoftMin": 0,
-      "fillOpacity": 10,
-      "gradientMode": "opacity",
-      "lineInterpolation": "smooth",
-      "lineWidth": 2,
-      "pointSize": 5,
-      "showPoints": "auto",
-      "spanNulls": true
-     },
-     "displayName": "${__field.labels._field}",
-     "noValue": "\u2014",
-     "unit": "bytes"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 7,
-    "w": 12,
-    "x": 0,
-    "y": 30
-   },
-   "options": {
-    "legend": {
-     "calcs": [
-      "lastNotNull"
-     ],
-     "displayMode": "table",
-     "placement": "bottom",
-     "showLegend": true
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_database_bytes\")\n  |> group(columns: [\"_field\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])",
-     "rawQuery": true,
-     "refId": "A"
     },
     {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_export_bytes\")\n  |> group(columns: [\"_field\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])",
-     "rawQuery": true,
-     "refId": "B"
-    },
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_disk_free_bytes\")\n  |> group(columns: [\"_field\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])",
-     "rawQuery": true,
-     "refId": "C"
-    }
-   ],
-   "title": "Storage",
-   "type": "timeseries"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "Epochs of published history verified by backfill, per log.",
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "axisSoftMin": 0,
-      "fillOpacity": 25,
-      "gradientMode": "opacity",
-      "lineInterpolation": "smooth",
-      "lineWidth": 2,
-      "pointSize": 5,
-      "showPoints": "auto",
-      "spanNulls": true,
-      "stacking": {
-       "group": "A",
-       "mode": "normal"
-      }
-     },
-     "displayName": "${__field.labels.origin}",
-     "noValue": "\u2014",
-     "unit": "short"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 7,
-    "w": 12,
-    "x": 12,
-    "y": 30
-   },
-   "options": {
-    "legend": {
-     "calcs": [
-      "lastNotNull"
-     ],
-     "displayMode": "table",
-     "placement": "bottom",
-     "showLegend": true
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_backfill_epochs\")\n  |> group(columns: [\"origin\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"origin\"])",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Backfilled history",
-   "type": "timeseries"
-  },
-  {
-   "collapsed": false,
-   "gridPos": {
-    "h": 1,
-    "w": 24,
-    "x": 0,
-    "y": 37
-   },
-   "id": 1,
-   "panels": [],
-   "title": "Network utilisation",
-   "type": "row"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "Bytes fetched per second, summed per ecosystem. Rate is taken per log first, then summed, so a counter reset on restart drops out instead of drawing a cliff.",
-   "fieldConfig": {
-    "defaults": {
-     "color": {
-      "mode": "palette-classic"
-     },
-     "custom": {
-      "axisSoftMin": 0,
-      "drawStyle": "line",
-      "fillOpacity": 18,
-      "lineWidth": 1,
-      "showPoints": "never",
-      "spanNulls": true,
-      "stacking": {
-       "group": "A",
-       "mode": "normal"
-      }
-     },
-     "unit": "Bps"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 9,
-    "w": 12,
-    "x": 0,
-    "y": 38
-   },
-   "id": 2,
-   "options": {
-    "legend": {
-     "calcs": [
-      "mean",
-      "max"
-     ],
-     "displayMode": "list",
-     "placement": "bottom"
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "// kt-witness is scraped every 15s. A rate window still needs to span several\n// scrapes \u2014 otherwise the delta is taken across whatever gap happens to fall\n// out \u2014 so floor it at 1m, four scrapes. Longer ranges widen normally.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_network_bytes_in_total\")\n  |> group(columns: [\"origin\", \"kind\"])\n  |> aggregateWindow(every: w, fn: max, createEmpty: false)\n  |> derivative(unit: 1s, nonNegative: true)\n  |> group(columns: [\"kind\"])\n  |> aggregateWindow(every: w, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"kind\"])",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Download rate by ecosystem",
-   "type": "timeseries"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "The same measurement per log. Meta and WhatsApp dominate: tier B streams a full proof per audited epoch.",
-   "fieldConfig": {
-    "defaults": {
-     "color": {
-      "mode": "palette-classic"
-     },
-     "custom": {
-      "axisSoftMin": 0,
-      "drawStyle": "line",
-      "fillOpacity": 25,
-      "lineWidth": 1,
-      "showPoints": "never",
-      "spanNulls": true,
-      "stacking": {
-       "group": "A",
-       "mode": "normal"
-      }
-     },
-     "unit": "Bps"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 9,
-    "w": 12,
-    "x": 12,
-    "y": 38
-   },
-   "id": 3,
-   "options": {
-    "legend": {
-     "calcs": [
-      "mean",
-      "max"
-     ],
-     "displayMode": "table",
-     "placement": "bottom"
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "// kt-witness is scraped every 15s. A rate window still needs to span several\n// scrapes \u2014 otherwise the delta is taken across whatever gap happens to fall\n// out \u2014 so floor it at 1m, four scrapes. Longer ranges widen normally.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_network_bytes_in_total\")\n  |> group(columns: [\"origin\", \"kind\"])\n  |> aggregateWindow(every: w, fn: max, createEmpty: false)\n  |> derivative(unit: 1s, nonNegative: true)\n  |> group(columns: [\"origin\"])\n  |> aggregateWindow(every: w, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"origin\"])",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Download rate by log",
-   "type": "timeseries"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "Request bytes. Small by design \u2014 a witness asks little and reads a lot.",
-   "fieldConfig": {
-    "defaults": {
-     "color": {
-      "mode": "palette-classic"
-     },
-     "custom": {
-      "axisSoftMin": 0,
-      "drawStyle": "line",
-      "fillOpacity": 18,
-      "lineWidth": 1,
-      "showPoints": "never",
-      "spanNulls": true,
-      "stacking": {
-       "group": "A",
-       "mode": "normal"
-      }
-     },
-     "unit": "Bps"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 8,
-    "x": 0,
-    "y": 47
-   },
-   "id": 4,
-   "options": {
-    "legend": {
-     "calcs": [
-      "mean",
-      "max"
-     ],
-     "displayMode": "list",
-     "placement": "bottom"
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "// kt-witness is scraped every 15s. A rate window still needs to span several\n// scrapes \u2014 otherwise the delta is taken across whatever gap happens to fall\n// out \u2014 so floor it at 1m, four scrapes. Longer ranges widen normally.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_network_bytes_out_total\")\n  |> group(columns: [\"origin\", \"kind\"])\n  |> aggregateWindow(every: w, fn: max, createEmpty: false)\n  |> derivative(unit: 1s, nonNegative: true)\n  |> group(columns: [\"kind\"])\n  |> aggregateWindow(every: w, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"kind\"])",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Upload rate by ecosystem",
-   "type": "timeseries"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "Request rate, which separates 'a lot of bytes' from 'a lot of chatter'.",
-   "fieldConfig": {
-    "defaults": {
-     "color": {
-      "mode": "palette-classic"
-     },
-     "custom": {
-      "axisSoftMin": 0,
-      "drawStyle": "line",
-      "fillOpacity": 18,
-      "lineWidth": 1,
-      "showPoints": "never",
-      "spanNulls": true,
-      "stacking": {
-       "group": "A",
-       "mode": "normal"
-      }
-     },
-     "unit": "reqps"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 8,
-    "x": 8,
-    "y": 47
-   },
-   "id": 5,
-   "options": {
-    "legend": {
-     "calcs": [
-      "mean",
-      "max"
-     ],
-     "displayMode": "list",
-     "placement": "bottom"
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "// kt-witness is scraped every 15s. A rate window still needs to span several\n// scrapes \u2014 otherwise the delta is taken across whatever gap happens to fall\n// out \u2014 so floor it at 1m, four scrapes. Longer ranges widen normally.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_network_requests_total\")\n  |> group(columns: [\"origin\", \"kind\"])\n  |> aggregateWindow(every: w, fn: max, createEmpty: false)\n  |> derivative(unit: 1s, nonNegative: true)\n  |> group(columns: [\"kind\"])\n  |> aggregateWindow(every: w, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"kind\"])",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Requests per second by ecosystem",
-   "type": "timeseries"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "Total link utilisation. Compare against the overnight budget: the home link measured 374 Mbps, and sustained tier B for Meta alone is ~2.4 MB/s.",
-   "fieldConfig": {
-    "defaults": {
-     "color": {
-      "mode": "palette-classic"
-     },
-     "custom": {
-      "axisSoftMin": 0,
-      "drawStyle": "line",
-      "fillOpacity": 18,
-      "lineWidth": 1,
-      "showPoints": "never",
-      "spanNulls": true,
-      "stacking": {
-       "group": "A",
-       "mode": "none"
-      }
-     },
-     "unit": "Bps"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 8,
-    "x": 16,
-    "y": 47
-   },
-   "id": 6,
-   "options": {
-    "legend": {
-     "calcs": [
-      "mean",
-      "max"
-     ],
-     "displayMode": "list",
-     "placement": "bottom"
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "// kt-witness is scraped every 15s. A rate window still needs to span several\n// scrapes \u2014 otherwise the delta is taken across whatever gap happens to fall\n// out \u2014 so floor it at 1m, four scrapes. Longer ranges widen normally.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_network_bytes_in_total\")\n  |> group(columns: [\"origin\", \"kind\"])\n  |> aggregateWindow(every: w, fn: max, createEmpty: false)\n  |> derivative(unit: 1s, nonNegative: true)\n  |> group(columns: [\"stack\"])\n  |> aggregateWindow(every: w, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"stack\"])",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Download rate, all logs",
-   "type": "timeseries"
-  },
-  {
-   "collapsed": false,
-   "gridPos": {
-    "h": 1,
-    "w": 24,
-    "x": 0,
-    "y": 55
-   },
-   "id": 7,
-   "panels": [],
-   "title": "Tier B+ validation progress",
-   "type": "row"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "Construction proofs verified per hour, by log, from the kt_witness_audit_verified_total counter.\n\nNamed proofs rather than epochs because the unit differs by log: an epoch for the AKD directories and Proton, a published entry for entry logs. Calling all of them epochs would overstate what an entry log has done.",
-   "fieldConfig": {
-    "defaults": {
-     "color": {
-      "mode": "palette-classic"
-     },
-     "custom": {
-      "axisSoftMin": 0,
-      "drawStyle": "line",
-      "fillOpacity": 25,
-      "lineWidth": 2,
-      "showPoints": "never",
-      "spanNulls": true,
-      "stacking": {
-       "group": "A",
-       "mode": "normal"
-      }
-     },
-     "unit": "short"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 9,
-    "w": 12,
-    "x": 0,
-    "y": 56
-   },
-   "id": 8,
-   "options": {
-    "legend": {
-     "calcs": [
-      "lastNotNull",
-      "mean",
-      "max"
-     ],
-     "displayMode": "table",
-     "placement": "bottom"
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "// kt-witness is scraped every 15s. A rate window still needs to span several\n// scrapes \u2014 otherwise the delta is taken across whatever gap happens to fall\n// out \u2014 so floor it at 1m, four scrapes. Longer ranges widen normally.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_audit_verified_total\")\n  |> group(columns: [\"origin\"])\n  |> aggregateWindow(every: w, fn: max, createEmpty: false)\n  |> derivative(unit: 1h, nonNegative: true)\n  |> keep(columns: [\"_time\", \"_value\", \"origin\"])",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Construction proofs verified per hour",
-   "type": "timeseries"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "Epochs of published history with a settled construction-audit decision. A coverage level, not throughput \u2014 it only counts work inside the backfilled range.",
-   "fieldConfig": {
-    "defaults": {
-     "color": {
-      "mode": "palette-classic"
-     },
-     "custom": {
-      "axisSoftMin": 0,
-      "drawStyle": "line",
-      "fillOpacity": 25,
-      "lineWidth": 2,
-      "showPoints": "never",
-      "spanNulls": true,
-      "stacking": {
-       "group": "A",
-       "mode": "normal"
-      }
-     },
-     "unit": "short"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 9,
-    "w": 12,
-    "x": 12,
-    "y": 56
-   },
-   "id": 9,
-   "options": {
-    "legend": {
-     "calcs": [
-      "lastNotNull",
-      "mean",
-      "max"
-     ],
-     "displayMode": "table",
-     "placement": "bottom"
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_history_audited_epochs\")\n  |> group(columns: [\"origin\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"origin\"])",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Published history audited, by log",
-   "type": "timeseries"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "How far there is to go before a log can honestly claim tier B+. Absolute epochs rather than a percentage: a percentage sits near zero for a long time and hides whether anything is happening.",
-   "fieldConfig": {
-    "defaults": {
-     "color": {
-      "mode": "palette-classic"
-     },
-     "custom": {
-      "axisSoftMin": 0,
-      "drawStyle": "line",
-      "fillOpacity": 25,
-      "lineWidth": 2,
-      "showPoints": "never",
-      "spanNulls": true,
-      "stacking": {
-       "group": "A",
-       "mode": "normal"
-      }
-     },
-     "unit": "short"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 16,
-    "x": 0,
-    "y": 65
-   },
-   "id": 10,
-   "options": {
-    "legend": {
-     "calcs": [
-      "lastNotNull",
-      "mean",
-      "max"
-     ],
-     "displayMode": "table",
-     "placement": "bottom"
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and (r._field == \"kt_witness_history_total_epochs\" or r._field == \"kt_witness_history_audited_epochs\"))\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> group(columns: [\"origin\"])\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({_time: r._time, origin: r.origin, _value: r.kt_witness_history_total_epochs - r.kt_witness_history_audited_epochs}))\n  |> group(columns: [\"origin\"])\n  |> keep(columns: [\"_time\", \"_value\", \"origin\"])",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Published history remaining",
-   "type": "timeseries"
-  },
-  {
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "description": "Current cumulative count per log.",
-   "fieldConfig": {
-    "defaults": {
-     "color": {
-      "mode": "palette-classic"
-     },
-     "custom": {},
-     "unit": "short"
-    },
-    "overrides": []
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 8,
-    "x": 16,
-    "y": 65
-   },
-   "id": 11,
-   "options": {
-    "colorMode": "value",
-    "graphMode": "area",
-    "reduceOptions": {
-     "calcs": [
-      "lastNotNull"
-     ],
-     "fields": "",
-     "values": false
-    },
-    "textMode": "value_and_name"
-   },
-   "targets": [
-    {
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_history_audited_epochs\")\n  |> group(columns: [\"origin\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"origin\"])",
-     "rawQuery": true,
-     "refId": "A"
-    }
-   ],
-   "title": "Audited now",
-   "type": "stat"
-  },
-  {
-   "id": 19,
-   "type": "row",
-   "title": "Pipeline health & bottlenecks",
-   "gridPos": {
-    "h": 1,
-    "w": 24,
-    "x": 0,
-    "y": 73
-   },
-   "collapsed": false,
-   "panels": []
-  },
-  {
-   "id": 20,
-   "type": "timeseries",
-   "title": "Pipeline bottleneck \u2014 CPU against budget",
-   "description": "The single most useful panel here. cpu_self_cores is what this container actually burns; audit_permits is what the governor is willing to grant the backlog sweep. When CPU sits at the budget and permits fall toward 1, CPU is the binding constraint. When permits are high and in-flight is below them, the sweep is NOT taking what it was offered \u2014 that means it is blocked on something else (bytes, disk, or a barrier), and the bottleneck is downstream.",
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "gridPos": {
-    "h": 9,
-    "w": 24,
-    "x": 0,
-    "y": 74
-   },
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "drawStyle": "line",
-      "lineWidth": 2,
-      "fillOpacity": 8,
-      "gradientMode": "none",
-      "showPoints": "never",
-      "spanNulls": true,
-      "axisSoftMin": 0,
-      "scaleDistribution": {
-       "type": "linear"
-      }
-     },
-     "color": {
-      "mode": "palette-classic"
-     },
-     "unit": "none"
-    },
-    "overrides": []
-   },
-   "options": {
-    "legend": {
-     "displayMode": "table",
-     "placement": "bottom",
-     "calcs": [
-      "mean",
-      "max",
-      "lastNotNull"
-     ]
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and (r._field == \"kt_witness_cpu_self_cores\" or r._field == \"kt_witness_cpu_machine_cores\"))\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\",\"_field\",\"_value\"])",
-     "rawQuery": true,
-     "resultFormat": "time_series"
-    },
-    {
-     "refId": "B",
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and (r._field == \"kt_witness_audit_permits\" or r._field == \"kt_witness_audit_in_flight\"))\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\",\"_field\",\"_value\"])",
-     "rawQuery": true,
-     "resultFormat": "time_series"
-    }
-   ]
-  },
-  {
-   "id": 21,
-   "type": "timeseries",
-   "title": "Governor allowance actually taken",
-   "description": "in_flight divided by permits. At 1.0 the sweep is using everything the governor grants and more CPU would buy more throughput. Persistently below 1.0 means the CPU allowance is going unused and adding cores would buy nothing \u2014 look at bandwidth, the disk cache, or a barrier in the sweep instead.",
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 12,
-    "x": 0,
-    "y": 83
-   },
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "drawStyle": "line",
-      "lineWidth": 2,
-      "fillOpacity": 8,
-      "gradientMode": "none",
-      "showPoints": "never",
-      "spanNulls": true,
-      "axisSoftMin": 0,
-      "scaleDistribution": {
-       "type": "linear"
-      }
-     },
-     "color": {
-      "mode": "palette-classic"
-     },
-     "unit": "percentunit",
-     "max": 1.2,
-     "min": 0,
-     "displayName": "allowance taken"
-    },
-    "overrides": []
-   },
-   "options": {
-    "legend": {
-     "displayMode": "table",
-     "placement": "bottom",
-     "calcs": [
-      "mean",
-      "max",
-      "lastNotNull"
-     ]
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and (r._field == \"kt_witness_audit_in_flight\" or r._field == \"kt_witness_audit_permits\"))\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({_time: r._time, _value: if r.kt_witness_audit_permits > 0.0 then r.kt_witness_audit_in_flight / r.kt_witness_audit_permits else 0.0}))\n  |> keep(columns: [\"_time\", \"_value\"])",
-     "rawQuery": true,
-     "resultFormat": "time_series"
-    }
-   ]
-  },
-  {
-   "id": 22,
-   "type": "timeseries",
-   "title": "Proof cache \u2014 the buffer between link and CPU",
-   "description": "The disk cache sits between downloading and verifying. FULL means downloads are outrunning verification, so bandwidth has headroom and CPU is the constraint. EMPTY while CPU is idle means the opposite: verification is starved and the link (or the CDN) is the constraint. This is the panel that tells the two apart.",
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 12,
-    "x": 12,
-    "y": 83
-   },
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "drawStyle": "line",
-      "lineWidth": 2,
-      "fillOpacity": 8,
-      "gradientMode": "none",
-      "showPoints": "never",
-      "spanNulls": true,
-      "axisSoftMin": 0,
-      "scaleDistribution": {
-       "type": "linear"
-      }
-     },
-     "color": {
-      "mode": "palette-classic"
-     },
-     "unit": "bytes"
-    },
-    "overrides": []
-   },
-   "options": {
-    "legend": {
-     "displayMode": "table",
-     "placement": "bottom",
-     "calcs": [
-      "mean",
-      "max",
-      "lastNotNull"
-     ]
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_prefetch_cache_bytes\")\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\",\"_value\"])",
-     "rawQuery": true,
-     "resultFormat": "time_series"
-    }
-   ]
-  },
-  {
-   "id": 23,
-   "type": "timeseries",
-   "title": "Download rate by ecosystem",
-   "description": "Derived from the per-origin byte counters. Compare against the host NIC to see how much of the link the witness is responsible for, and against the proof cache above to see whether the link is the limit or merely keeping up.",
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 12,
-    "x": 0,
-    "y": 91
-   },
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "drawStyle": "line",
-      "lineWidth": 2,
-      "fillOpacity": 18,
-      "gradientMode": "none",
-      "showPoints": "never",
-      "spanNulls": true,
-      "axisSoftMin": 0,
-      "scaleDistribution": {
-       "type": "linear"
+      "id": 23,
+      "type": "timeseries",
+      "title": "Download rate by ecosystem",
+      "description": "Derived from the per-origin byte counters. Compare against the host NIC to see how much of the link the witness is responsible for, and against the proof cache above to see whether the link is the limit or merely keeping up.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
       },
-      "stacking": {
-       "mode": "normal",
-       "group": "A"
-      }
-     },
-     "color": {
-      "mode": "palette-classic"
-     },
-     "unit": "Bps"
-    },
-    "overrides": []
-   },
-   "options": {
-    "legend": {
-     "displayMode": "table",
-     "placement": "bottom",
-     "calcs": [
-      "mean",
-      "max",
-      "lastNotNull"
-     ]
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_network_bytes_in_total\")\n  |> derivative(unit: 1s, nonNegative: true)\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> group(columns: [\"kind\"])\n  |> aggregateWindow(every: 1m, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\",\"kind\",\"_value\"])",
-     "rawQuery": true,
-     "resultFormat": "time_series"
-    }
-   ]
-  },
-  {
-   "id": 24,
-   "type": "timeseries",
-   "title": "Epochs verified per hour, by log",
-   "description": "Verification rate per log, at the resolution you are zoomed to. The counter is maxed within each window before differencing, so a machine joining or leaving the fleet shows as a step rather than being smeared across the window. Compare with 'by machine' below to see which box a change came from.",
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 12,
-    "x": 12,
-    "y": 91
-   },
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "drawStyle": "line",
-      "lineWidth": 2,
-      "fillOpacity": 8,
-      "gradientMode": "none",
-      "showPoints": "never",
-      "spanNulls": true,
-      "axisSoftMin": 0,
-      "scaleDistribution": {
-       "type": "linear"
-      }
-     },
-     "color": {
-      "mode": "palette-classic"
-     },
-     "unit": "none"
-    },
-    "overrides": []
-   },
-   "options": {
-    "legend": {
-     "displayMode": "table",
-     "placement": "bottom",
-     "calcs": [
-      "mean",
-      "max",
-      "lastNotNull"
-     ]
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "// Rate of a counter, at whatever resolution the view is zoomed to.\n//\n// Two things matter here and the first version got both wrong. Take the max\n// WITHIN a window before differencing, not the mean of differences: the mean\n// smears a step change \u2014 a machine joining the fleet \u2014 across the window and\n// makes exactly the event this panel exists to show look like drift. And floor\n// the window at 1m: kt-witness is scraped every 15s, so a shorter window takes\n// a delta across whatever gap happens to fall out of the alignment.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_audit_verified_total\")\n  |> group(columns: [\"origin\"])\n  |> aggregateWindow(every: w, fn: max, createEmpty: false)\n  |> derivative(unit: 1h, nonNegative: true)\n  |> keep(columns: [\"_time\", \"_value\", \"origin\"])",
-     "rawQuery": true,
-     "resultFormat": "time_series"
-    }
-   ],
-   "interval": "1m"
-  },
-  {
-   "id": 25,
-   "type": "timeseries",
-   "title": "Coverage integrity \u2014 holes in the swept range",
-   "description": "Epochs settled without being verified. These are gaps INSIDE the audited range, so they make the audited count overstate what was actually established. Retried on a growing backoff, so a value that keeps climbing means genuinely unfetchable proofs rather than a transient refusal. Non-zero here is why a log can be at B rather than B+.",
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 12,
-    "x": 0,
-    "y": 99
-   },
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "drawStyle": "line",
-      "lineWidth": 2,
-      "fillOpacity": 8,
-      "gradientMode": "none",
-      "showPoints": "never",
-      "spanNulls": true,
-      "axisSoftMin": 0,
-      "scaleDistribution": {
-       "type": "linear"
-      }
-     },
-     "color": {
-      "mode": "palette-classic"
-     },
-     "unit": "none"
-    },
-    "overrides": []
-   },
-   "options": {
-    "legend": {
-     "displayMode": "table",
-     "placement": "bottom",
-     "calcs": [
-      "mean",
-      "max",
-      "lastNotNull"
-     ]
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_history_holes\")\n  |> aggregateWindow(every: 5m, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\",\"origin\",\"_value\"])",
-     "rawQuery": true,
-     "resultFormat": "time_series"
-    }
-   ]
-  },
-  {
-   "id": 26,
-   "type": "timeseries",
-   "title": "Largest unbroken verified run",
-   "description": "The honest form of the coverage claim. An audited COUNT says how much work was done and nothing about whether the result is a solid range or a sieve; only a solid range supports \u201cthis log's history is construction audited\u201d. This line rising is real progress; the audited count rising while this stays flat is not.",
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 12,
-    "x": 12,
-    "y": 99
-   },
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "drawStyle": "line",
-      "lineWidth": 2,
-      "fillOpacity": 8,
-      "gradientMode": "none",
-      "showPoints": "never",
-      "spanNulls": true,
-      "axisSoftMin": 0,
-      "scaleDistribution": {
-       "type": "linear"
-      }
-     },
-     "color": {
-      "mode": "palette-classic"
-     },
-     "unit": "none"
-    },
-    "overrides": []
-   },
-   "options": {
-    "legend": {
-     "displayMode": "table",
-     "placement": "bottom",
-     "calcs": [
-      "mean",
-      "max",
-      "lastNotNull"
-     ]
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_verified_region_epochs\")\n  |> aggregateWindow(every: 5m, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\",\"origin\",\"_value\"])",
-     "rawQuery": true,
-     "resultFormat": "time_series"
-    }
-   ]
-  },
-  {
-   "collapsed": false,
-   "type": "row",
-   "id": 30,
-   "title": "Logs \u2014 what the numbers do not say",
-   "gridPos": {
-    "h": 1,
-    "w": 24,
-    "x": 0,
-    "y": 107
-   },
-   "panels": []
-  },
-  {
-   "id": 31,
-   "type": "logs",
-   "title": "Warnings and errors",
-   "description": "Everything the witness logged above INFO. Normally empty, and that is the point: a withheld cosignature or a failed audit round appears here without anyone grepping a container that may since have been recreated.\n\n`err` is structured metadata, so it is searchable \u2014 it used to render as `{}` in the events feed, which dropped the one field saying WHY a cosignature was withheld.",
-   "datasource": {
-    "type": "loki",
-    "uid": "loki"
-   },
-   "gridPos": {
-    "h": 9,
-    "w": 24,
-    "x": 0,
-    "y": 108
-   },
-   "options": {
-    "showTime": true,
-    "wrapLogMessage": true,
-    "prettifyLogMessage": false,
-    "enableLogDetails": true,
-    "dedupStrategy": "none",
-    "sortOrder": "Descending"
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "loki",
-      "uid": "loki"
-     },
-     "queryType": "range",
-     "expr": "{compose_project=\"kt-witness\"} | level =~ \"WARN|ERROR\""
-    }
-   ]
-  },
-  {
-   "id": 32,
-   "type": "timeseries",
-   "title": "Construction audits per hour, by log",
-   "description": "Counted from `epoch verified` log lines, grouped by the `origin` structured metadata field. This is the view that makes a starved sweep obvious: when Proton's rebuild was holding sixteen cores, the AKD lines here thinned out while every counter still looked healthy.\n\n`origin` is metadata rather than a label on purpose \u2014 it is absent from most lines, and a label present on only some lines of a stream splits the stream instead of grouping it.",
-   "datasource": {
-    "type": "loki",
-    "uid": "loki"
-   },
-   "gridPos": {
-    "h": 9,
-    "w": 12,
-    "x": 0,
-    "y": 117
-   },
-   "fieldConfig": {
-    "defaults": {
-     "unit": "short",
-     "custom": {
-      "drawStyle": "line",
-      "lineWidth": 2,
-      "fillOpacity": 8,
-      "showPoints": "never",
-      "spanNulls": true
-     },
-     "color": {
-      "mode": "palette-classic"
-     }
-    },
-    "overrides": []
-   },
-   "options": {
-    "legend": {
-     "displayMode": "table",
-     "placement": "right",
-     "calcs": [
-      "lastNotNull",
-      "max"
-     ]
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "loki",
-      "uid": "loki"
-     },
-     "queryType": "range",
-     "legendFormat": "{{origin}}",
-     "expr": "sum by (origin) (count_over_time({compose_project=\"kt-witness\"} |= \"epoch verified\" | logfmt | origin != \"\" [$__auto])) * 3600 / 60"
-    }
-   ]
-  },
-  {
-   "id": 33,
-   "type": "logs",
-   "title": "Proton replay \u2014 tip and history",
-   "description": "Both retained trees report separately, because they make separate progress and reporting them as one hid exactly the case that occurred: the tip advancing while the history replay sat blocked behind it for hours, emitting nothing.\n\nA replay waiting on the rebuild lock now says so before it takes the lock.",
-   "datasource": {
-    "type": "loki",
-    "uid": "loki"
-   },
-   "gridPos": {
-    "h": 9,
-    "w": 12,
-    "x": 12,
-    "y": 117
-   },
-   "options": {
-    "showTime": true,
-    "wrapLogMessage": true,
-    "prettifyLogMessage": false,
-    "enableLogDetails": true,
-    "dedupStrategy": "none",
-    "sortOrder": "Descending"
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "loki",
-      "uid": "loki"
-     },
-     "queryType": "range",
-     "expr": "{compose_project=\"kt-witness\"} |~ \"proton_replay|proton audit|PROTON\""
-    }
-   ]
-  },
-  {
-   "id": 34,
-   "type": "logs",
-   "title": "Directory mutations worth a human",
-   "description": "Removals, in-place overwrites and removals of labels the tree never held. None of these change the root, so a verifier that only compares tree hashes sees none of them \u2014 they are visible only by replaying the diff and reading what it did.\n\nRemovals alone are ordinary: Proton permits deletion within its retention window, and every removal observed so far has been explained by it. `overwritten` or `phantom` above zero is the reading that deserves attention.",
-   "datasource": {
-    "type": "loki",
-    "uid": "loki"
-   },
-   "gridPos": {
-    "h": 8,
-    "w": 24,
-    "x": 0,
-    "y": 126
-   },
-   "options": {
-    "showTime": true,
-    "wrapLogMessage": true,
-    "prettifyLogMessage": false,
-    "enableLogDetails": true,
-    "dedupStrategy": "none",
-    "sortOrder": "Descending"
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "loki",
-      "uid": "loki"
-     },
-     "queryType": "range",
-     "expr": "{compose_project=\"kt-witness\"} |= \"append-only map should not\""
-    }
-   ]
-  },
-  {
-   "id": 35,
-   "type": "row",
-   "title": "The fleet \u2014 who is verifying, and how much they can spare",
-   "collapsed": false,
-   "gridPos": {
-    "h": 1,
-    "w": 24,
-    "x": 0,
-    "y": 134
-   },
-   "panels": []
-  },
-  {
-   "id": 36,
-   "type": "timeseries",
-   "title": "Verification capacity offered, by machine",
-   "description": "Epochs each worker is currently willing to run at once, as the worker itself reports it \u2014 stacked, so the height is the fleet's total width. A line falling in the evening and rising overnight is the governor doing its job on somebody's laptop, not a fault. A line that stops is a worker that went away; a line at 1 is a machine that is busy with its owner's work and yielding, which is the intended behaviour and not a problem to fix.",
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "gridPos": {
-    "h": 9,
-    "w": 12,
-    "x": 0,
-    "y": 135
-   },
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "drawStyle": "line",
-      "lineWidth": 2,
-      "fillOpacity": 25,
-      "showPoints": "never",
-      "spanNulls": true,
-      "axisSoftMin": 0,
-      "stacking": {
-       "mode": "normal",
-       "group": "A"
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 91
       },
-      "scaleDistribution": {
-       "type": "linear"
-      }
-     },
-     "color": {
-      "mode": "palette-classic"
-     },
-     "unit": "short",
-     "min": 0
-    },
-    "overrides": []
-   },
-   "options": {
-    "legend": {
-     "displayMode": "table",
-     "placement": "bottom",
-     "calcs": [
-      "mean",
-      "max",
-      "lastNotNull"
-     ]
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_worker_parallel\")\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> group(columns: [\"worker\"])\n  |> keep(columns: [\"_time\", \"_value\", \"worker\"])"
-    }
-   ]
-  },
-  {
-   "id": 37,
-   "type": "timeseries",
-   "title": "Each machine against its own budget",
-   "description": "Measured load and self-imposed ceiling, in cores, as each worker measures its own host. Two machines will not agree on what a core is worth, so read each pair against itself rather than comparing across: load riding the budget is a worker using everything it is allowed, and load far above the budget is somebody else's work on that machine \u2014 which is exactly when the capacity above should be falling.",
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "gridPos": {
-    "h": 9,
-    "w": 12,
-    "x": 12,
-    "y": 135
-   },
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "drawStyle": "line",
-      "lineWidth": 2,
-      "fillOpacity": 8,
-      "showPoints": "never",
-      "spanNulls": true,
-      "axisSoftMin": 0,
-      "stacking": {
-       "mode": "none",
-       "group": "A"
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 18,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "Bps"
+        },
+        "overrides": []
       },
-      "scaleDistribution": {
-       "type": "linear"
-      }
-     },
-     "color": {
-      "mode": "palette-classic"
-     },
-     "unit": "short",
-     "min": 0
-    },
-    "overrides": []
-   },
-   "options": {
-    "legend": {
-     "displayMode": "table",
-     "placement": "bottom",
-     "calcs": [
-      "mean",
-      "max",
-      "lastNotNull"
-     ]
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
-    {
-     "refId": "A",
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_worker_load_cores\")\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> group(columns: [\"worker\"])\n  |> keep(columns: [\"_time\", \"_value\", \"worker\"])"
-    },
-    {
-     "refId": "B",
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_worker_budget_cores\")\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> group(columns: [\"worker\"])\n  |> keep(columns: [\"_time\", \"_value\", \"worker\"])"
-    }
-   ]
-  },
-  {
-   "id": 38,
-   "type": "timeseries",
-   "title": "Epochs verified per hour, by machine",
-   "description": "Who is actually doing the work, stacked \u2014 so the height is the fleet's total rate and each band is one machine. This is the panel that answers 'did adding that box help', which the by-log view cannot: there, four machines look like one fast witness, and a worker that quietly stopped looks like a log that got slower. witness-live follows the tip, witness-sweep walks history backwards, and the rest lease from the shared queue.",
-   "datasource": {
-    "type": "influxdb",
-    "uid": "efq9ck8t93vnke"
-   },
-   "gridPos": {
-    "h": 9,
-    "w": 24,
-    "x": 0,
-    "y": 144
-   },
-   "interval": "1m",
-   "fieldConfig": {
-    "defaults": {
-     "custom": {
-      "drawStyle": "line",
-      "lineWidth": 1,
-      "fillOpacity": 35,
-      "showPoints": "never",
-      "spanNulls": true,
-      "axisSoftMin": 0,
-      "stacking": {
-       "mode": "normal",
-       "group": "A"
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
-      "scaleDistribution": {
-       "type": "linear"
-      }
-     },
-     "color": {
-      "mode": "palette-classic"
-     },
-     "unit": "short",
-     "min": 0
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_network_bytes_in_total\")\n  |> derivative(unit: 1s, nonNegative: true)\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> group(columns: [\"kind\"])\n  |> aggregateWindow(every: 1m, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\",\"kind\",\"_value\"])",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ]
     },
-    "overrides": []
-   },
-   "options": {
-    "legend": {
-     "displayMode": "table",
-     "placement": "bottom",
-     "calcs": [
-      "mean",
-      "max",
-      "lastNotNull"
-     ]
-    },
-    "tooltip": {
-     "mode": "multi",
-     "sort": "desc"
-    }
-   },
-   "targets": [
     {
-     "refId": "A",
-     "datasource": {
-      "type": "influxdb",
-      "uid": "efq9ck8t93vnke"
-     },
-     "query": "w = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_epochs_verified_by_worker_total\")\n  |> group(columns: [\"worker\"])\n  |> aggregateWindow(every: w, fn: max, createEmpty: false)\n  |> derivative(unit: 1h, nonNegative: true)\n  |> keep(columns: [\"_time\", \"_value\", \"worker\"])"
+      "id": 24,
+      "type": "timeseries",
+      "title": "Epochs verified per hour, by log",
+      "description": "Verification rate per log, at the resolution you are zoomed to. The counter is maxed within each window before differencing, so a machine joining or leaving the fleet shows as a step rather than being smeared across the window. Compare with 'by machine' below to see which box a change came from.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 91
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "// Rate of a counter, at whatever resolution the view is zoomed to.\n//\n// Two things matter here and the first version got both wrong. Take the max\n// WITHIN a window before differencing, not the mean of differences: the mean\n// smears a step change \u2014 a machine joining the fleet \u2014 across the window and\n// makes exactly the event this panel exists to show look like drift. And floor\n// the window at 1m: kt-witness is scraped every 15s, so a shorter window takes\n// a delta across whatever gap happens to fall out of the alignment.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_audit_verified_total\")\n  |> group(columns: [\"origin\"])\n  |> aggregateWindow(every: w, fn: max, createEmpty: false)\n  |> derivative(unit: 1h, nonNegative: true)\n  |> keep(columns: [\"_time\", \"_value\", \"origin\"])",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ],
+      "interval": "1m"
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Coverage integrity \u2014 holes in the swept range",
+      "description": "Epochs settled without being verified. These are gaps INSIDE the audited range, so they make the audited count overstate what was actually established. Retried on a growing backoff, so a value that keeps climbing means genuinely unfetchable proofs rather than a transient refusal. Non-zero here is why a log can be at B rather than B+.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 99
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_history_holes\")\n  |> aggregateWindow(every: 5m, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\",\"origin\",\"_value\"])",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Largest unbroken verified run",
+      "description": "The honest form of the coverage claim. An audited COUNT says how much work was done and nothing about whether the result is a solid range or a sieve; only a solid range supports \u201cthis log's history is construction audited\u201d. This line rising is real progress; the audited count rising while this stays flat is not.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 99
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_verified_region_epochs\")\n  |> aggregateWindow(every: 5m, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\",\"origin\",\"_value\"])",
+          "rawQuery": true,
+          "resultFormat": "time_series"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "type": "row",
+      "id": 30,
+      "title": "Logs \u2014 what the numbers do not say",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 107
+      },
+      "panels": []
+    },
+    {
+      "id": 31,
+      "type": "logs",
+      "title": "Warnings and errors",
+      "description": "Everything the witness logged above INFO. Normally empty, and that is the point: a withheld cosignature or a failed audit round appears here without anyone grepping a container that may since have been recreated.\n\n`err` is structured metadata, so it is searchable \u2014 it used to render as `{}` in the events feed, which dropped the one field saying WHY a cosignature was withheld.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 108
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "range",
+          "expr": "{compose_project=\"kt-witness\"} | level =~ \"WARN|ERROR\""
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "Construction audits per hour, by log",
+      "description": "Counted from `epoch verified` log lines, grouped by the `origin` structured metadata field. This is the view that makes a starved sweep obvious: when Proton's rebuild was holding sixteen cores, the AKD lines here thinned out while every counter still looked healthy.\n\n`origin` is metadata rather than a label on purpose \u2014 it is absent from most lines, and a label present on only some lines of a stream splits the stream instead of grouping it.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 117
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "range",
+          "legendFormat": "{{origin}}",
+          "expr": "sum by (origin) (count_over_time({compose_project=\"kt-witness\"} |= \"epoch verified\" | logfmt | origin != \"\" [$__auto])) * 3600 / 60"
+        }
+      ]
+    },
+    {
+      "id": 33,
+      "type": "logs",
+      "title": "Proton replay \u2014 tip and history",
+      "description": "Both retained trees report separately, because they make separate progress and reporting them as one hid exactly the case that occurred: the tip advancing while the history replay sat blocked behind it for hours, emitting nothing.\n\nA replay waiting on the rebuild lock now says so before it takes the lock.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 117
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "range",
+          "expr": "{compose_project=\"kt-witness\"} |~ \"proton_replay|proton audit|PROTON\""
+        }
+      ]
+    },
+    {
+      "id": 34,
+      "type": "logs",
+      "title": "Directory mutations worth a human",
+      "description": "Removals, in-place overwrites and removals of labels the tree never held. None of these change the root, so a verifier that only compares tree hashes sees none of them \u2014 they are visible only by replaying the diff and reading what it did.\n\nRemovals alone are ordinary: Proton permits deletion within its retention window, and every removal observed so far has been explained by it. `overwritten` or `phantom` above zero is the reading that deserves attention.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 126
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "queryType": "range",
+          "expr": "{compose_project=\"kt-witness\"} |= \"append-only map should not\""
+        }
+      ]
+    },
+    {
+      "id": 35,
+      "type": "row",
+      "title": "The fleet \u2014 who is verifying, and how much they can spare",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 134
+      },
+      "panels": []
+    },
+    {
+      "id": 36,
+      "type": "timeseries",
+      "title": "Verification capacity offered, by machine",
+      "description": "Epochs each worker is currently willing to run at once, as the worker itself reports it \u2014 stacked, so the height is the fleet's total width. A line falling in the evening and rising overnight is the governor doing its job on somebody's laptop, not a fault. A line that stops is a worker that went away; a line at 1 is a machine that is busy with its owner's work and yielding, which is the intended behaviour and not a problem to fix.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 135
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_worker_parallel\")\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> group(columns: [\"worker\"])\n  |> keep(columns: [\"_time\", \"_value\", \"worker\"])"
+        }
+      ]
+    },
+    {
+      "id": 37,
+      "type": "timeseries",
+      "title": "Each machine against its own budget",
+      "description": "Measured load and self-imposed ceiling, in cores, as each worker measures its own host. Two machines will not agree on what a core is worth, so read each pair against itself rather than comparing across: load riding the budget is a worker using everything it is allowed, and load far above the budget is somebody else's work on that machine \u2014 which is exactly when the capacity above should be falling.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 135
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_worker_load_cores\")\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> group(columns: [\"worker\"])\n  |> keep(columns: [\"_time\", \"_value\", \"worker\"])"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_worker_budget_cores\")\n  |> aggregateWindow(every: 1m, fn: mean, createEmpty: false)\n  |> group(columns: [\"worker\"])\n  |> keep(columns: [\"_time\", \"_value\", \"worker\"])"
+        }
+      ]
+    },
+    {
+      "id": 38,
+      "type": "timeseries",
+      "title": "Epochs verified per hour, by machine",
+      "description": "Who is actually doing the work, stacked \u2014 so the height is the fleet's total rate and each band is one machine. This is the panel that answers 'did adding that box help', which the by-log view cannot: there, four machines look like one fast witness, and a worker that quietly stopped looks like a log that got slower. witness-live follows the tip, witness-sweep walks history backwards, and the rest lease from the shared queue.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 144
+      },
+      "interval": "1m",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 35,
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "// kt-witness is scraped every 15s. A rate window still needs to span several\n// scrapes \u2014 otherwise the delta is taken across whatever gap happens to fall\n// out \u2014 so floor it at 1m, four scrapes. Longer ranges widen normally.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\n// Differentiate EACH series, then sum. Grouping first was wrong in a way that\n// looked plausible: this counter is labelled by worker AND origin, so\n// group([\"worker\"]) merged a machine's meta and whatsapp counters into one\n// series, aggregateWindow(max) then picked whichever number happened to be\n// larger, and the derivative followed that one alone. The panel reported 288\n// epochs/hour for a machine doing 717, and dropped to zero whenever the other\n// origin's counter took the lead. A rate is only meaningful per series; the\n// summing has to come after.\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_epochs_verified_by_worker_total\")\n  |> group(columns: [\"worker\", \"origin\"])\n  |> aggregateWindow(every: w, fn: max, createEmpty: false)\n  |> derivative(unit: 1h, nonNegative: true)\n  |> group(columns: [\"worker\"])\n  |> aggregateWindow(every: w, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"worker\"])"
+        }
+      ]
     }
-   ]
-  }
- ],
- "refresh": "1m",
- "schemaVersion": 39,
- "style": "dark",
- "tags": [
-  "kt-witness",
-  "transparency",
-  "security"
- ],
- "time": {
-  "from": "now-6h",
-  "to": "now"
- },
- "timezone": "browser",
- "title": "kt-witness \u2014 transparency log witness",
- "uid": "kt-witness"
+  ],
+  "refresh": "1m",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "kt-witness",
+    "transparency",
+    "security"
+  ],
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "kt-witness \u2014 transparency log witness",
+  "uid": "kt-witness"
 }
