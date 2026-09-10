@@ -207,6 +207,10 @@ type cursors struct {
 	back  int64
 	ready bool
 
+	// at is how far into the current backward window the sweep has reached, so
+	// a window bigger than one batch is finished rather than abandoned.
+	at int64
+
 	// stride is how much history one backward probe covers. Zero means
 	// backStride; a test sets it small so a fixture does not have to be
 	// thousands of epochs long to exercise descending.
@@ -259,7 +263,19 @@ func (c *cursors) forward(db *store.Store, origin string, h *store.History, n in
 	return out
 }
 
-// backward returns up to n unverified epochs below the tip pass, descending.
+// backward returns up to n unverified epochs below the tip pass.
+//
+// It descends a window at a time, and collects a RUN inside each window rather
+// than a single epoch. The first version took one epoch per stride, which built
+// the sparsest cache possible: every cached epoch 512 apart, so Ready could
+// never return a contiguous run and every assignment was one epoch long.
+// Watched it in production — nineteen of twenty assignments were a single
+// epoch and throughput halved.
+//
+// Ascending within the window, descending between them. An unswept region is
+// contiguous unverified epochs, so collecting ascending from the window's floor
+// is what produces dense runs where density exists; a region already picked
+// over yields scattered ones, which is correct because that is what is left.
 func (c *cursors) backward(db *store.Store, origin string, h *store.History, n int) []int64 {
 	if n <= 0 {
 		return nil
@@ -270,6 +286,7 @@ func (c *cursors) backward(db *store.Store, origin string, h *store.History, n i
 			// Bottom reached: start again from the forward pass's floor. One
 			// full sweep per pass, not one per poll.
 			c.back = c.fwd
+			c.at = 0
 			if c.back <= h.From {
 				return out
 			}
@@ -278,14 +295,25 @@ func (c *cursors) backward(db *store.Store, origin string, h *store.History, n i
 		if lo < h.From {
 			lo = h.From
 		}
-		e, ok, err := db.FirstUnverified(origin, lo, c.back-1)
-		if err != nil {
+		if c.at < lo || c.at >= c.back {
+			c.at = lo
+		}
+		for len(out) < n {
+			e, ok, err := db.FirstUnverified(origin, c.at, c.back-1)
+			if err != nil || !ok {
+				break
+			}
+			out = append(out, e)
+			c.at = e + 1
+		}
+		if len(out) == n && c.at < c.back {
+			// Budget spent with the window still unfinished. Stay here so the
+			// rest of it is taken next pass rather than waiting for a full
+			// descent to come round again.
 			return out
 		}
-		if ok {
-			out = append(out, e)
-		}
 		c.back = lo
+		c.at = 0
 	}
 	return out
 }

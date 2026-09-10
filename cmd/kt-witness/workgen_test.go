@@ -147,3 +147,43 @@ func TestCursorsSurviveARestart(t *testing.T) {
 		t.Errorf("backward cursor %d, want the recorded back progress 40000", c.back)
 	}
 }
+
+// TestTheBackwardSweepReturnsRunsNotSinglets.
+//
+// The first version took one epoch per stride, so every cached epoch was 512
+// apart and Ready could never return a contiguous run. Nineteen of twenty
+// assignments in production were a single epoch and throughput halved: the
+// queue hands out what the cache holds, so a scattered cache is scattered work.
+func TestTheBackwardSweepReturnsRunsNotSinglets(t *testing.T) {
+	const o = "m/kt"
+	db := genStore(t, o, 1, 300)
+	h := &store.History{Origin: o, From: 1, To: 300}
+	// Everything verified except a contiguous unswept block.
+	markVerified(t, db, o, 1, 199)
+	markVerified(t, db, o, 220, 300)
+
+	var c cursors
+	c.init(db, o, h)
+	c.fwd, c.back = 300, 300
+	c.stride = 64
+
+	var got []int64
+	for i := 0; i < 8 && len(got) < 8; i++ {
+		got = append(got, c.backward(db, o, h, 8-len(got))...)
+	}
+	if len(got) < 4 {
+		t.Fatalf("the sweep returned %v; the block at 200..219 is unverified", got)
+	}
+	// Consecutive, because the region is: that is what makes a run.
+	runs := 1
+	for i := 1; i < len(got); i++ {
+		if got[i] != got[i-1]+1 {
+			runs++
+		}
+	}
+	if runs > 2 {
+		t.Errorf("got %v — %d separate runs. A contiguous unverified region "+
+			"should come back contiguous, or the queue can only hand out singlets",
+			got, runs)
+	}
+}
