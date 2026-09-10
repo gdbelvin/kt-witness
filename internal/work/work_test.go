@@ -492,3 +492,86 @@ func TestAFailedEpochIsNotHandedStraightBack(t *testing.T) {
 		t.Errorf("the epoch was not offered again after its backoff: %v", err)
 	}
 }
+
+// TestTheSourceIsNotAskedUnderTheLock.
+//
+// FirstUnverified walks the audit records, and on a long verified prefix that
+// is not fast: 353ms across half a million epochs, measured, which is what
+// WhatsApp's history looks like. Asking it with the queue mutex held would put
+// every worker in the fleet behind one bolt scan.
+//
+// The Source here blocks until the test lets it go, and a second goroutine must
+// still be able to reach the queue while it does.
+func TestTheSourceIsNotAskedUnderTheLock(t *testing.T) {
+	q := NewQueue(time.Minute)
+	q.Origins = []string{"m/kt"}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	q.Source = func(o string, after int64, n int) (int64, int64, bool) {
+		select {
+		case <-entered:
+		default:
+			close(entered)
+		}
+		<-release
+		return 1, int64(n), true
+	}
+
+	go func() { _, _ = q.Lease("slow", nil, 5) }()
+	<-entered
+
+	// The queue must still answer while the Source is in flight.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		q.Stats()
+		q.Depth()
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the queue was locked while the Source was being asked; every " +
+			"worker would stall behind one store scan")
+	}
+	close(release)
+}
+
+// TestAFullyAuditedLogIsNotRescannedPerRequest.
+//
+// Once a log is caught up the Source returns nothing, and it has to walk the
+// whole history to find that out. Asking it on every request would mean a
+// half-second scan per request for the state a healthy log spends most of its
+// time in.
+func TestAFullyAuditedLogIsNotRescannedPerRequest(t *testing.T) {
+	q, now := fixedQueue(t, time.Minute)
+	q.Origins = []string{"m/kt"}
+	var scans int
+	q.Source = func(string, int64, int) (int64, int64, bool) {
+		scans++
+		return 0, 0, false
+	}
+
+	for i := 0; i < 20; i++ {
+		if _, err := q.Lease("w", nil, 8); err != ErrNoWork {
+			t.Fatalf("expected no work: %v", err)
+		}
+	}
+	// One. Twenty requests, one walk of the history — which at half a million
+	// audited epochs is 353ms, so the difference between one and twenty is the
+	// difference between a witness that answers and one that does not.
+	if scans != 1 {
+		t.Errorf("the history was scanned %d times for 20 requests, want 1", scans)
+	}
+
+	// And it is asked again once the answer could have changed. A log that is
+	// caught up now is not caught up after the next epoch is published.
+	*now = now.Add(2 * quietFor)
+	if _, err := q.Lease("w", nil, 8); err != ErrNoWork {
+		t.Fatal(err)
+	}
+	if scans != 2 {
+		t.Errorf("scans=%d after the quiet interval elapsed, want 2 — the origin "+
+			"was never re-asked and new epochs would never be found", scans)
+	}
+}

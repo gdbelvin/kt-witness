@@ -198,6 +198,11 @@ type Queue struct {
 	// source of truth, no timer, and no chunk size to get wrong.
 	Source Source
 
+	// quiet is when an origin may be asked about again after answering with
+	// nothing. Without it a fully-audited log is rescanned end to end on every
+	// single request for work.
+	quiet map[string]time.Time
+
 	// cursor is where each origin's scan has reached. Not a record of what is
 	// done — the Source knows that — only a hint so consecutive requests do not
 	// re-scan the same prefix. It wraps.
@@ -288,6 +293,15 @@ const (
 	// itself — but an operator restoring a bucket does happen, and a witness
 	// that stopped looking permanently would never find out.
 	giveUpFor = 24 * time.Hour
+
+	// quietFor is how long an origin that answered "nothing" is left alone.
+	//
+	// Short, because it only has to outlive a burst of requests: new epochs are
+	// published every few minutes, so half a minute of staleness costs nothing
+	// and saves a full history scan per request on a log that is keeping up.
+	// It is the cadence the feeder this replaced ran at, which was never the
+	// part of it that was wrong.
+	quietFor = 30 * time.Second
 )
 
 func NewQueue(minLease time.Duration) *Queue {
@@ -299,6 +313,7 @@ func NewQueue(minLease time.Duration) *Queue {
 		reported: map[string]map[int64]bool{},
 		attempts: map[string]int{},
 		cursor:   map[string]int64{},
+		quiet:    map[string]time.Time{},
 		deferred: map[string]time.Time{},
 		perEpoch: map[string]time.Duration{},
 		minLease: minLease,
@@ -393,52 +408,80 @@ func (q *Queue) Lease(worker string, origins []string, want int) (Assignment, er
 	if len(try) == 0 {
 		return Assignment{}, ErrNoWork
 	}
+
+	// The Source is asked WITHOUT the lock.
+	//
+	// It reads the store, and on a long verified prefix that is not fast:
+	// measured at 353ms across half a million audited epochs, which is what
+	// WhatsApp's history looks like. Holding the queue mutex across it would
+	// serialise every worker in the fleet behind one bolt scan — the cursor
+	// makes the steady state short, but a cold start or a wrap pays the whole
+	// thing, and "occasionally every worker stalls for a third of a second" is
+	// not a property worth having.
+	//
+	// So: read the cursor under the lock, ask outside it, then re-acquire to
+	// check the answer against the leases. Another worker may have taken the
+	// range in between; trimLeasedLocked is what catches that, and the loop
+	// tries the next origin rather than handing out an overlap.
 	for i := range try {
 		origin := try[(q.rotate+i)%len(try)]
 		if len(can) > 0 && !can[origin] {
 			continue
 		}
-		if a, ok := q.nextRunLocked(origin, want, now); ok {
-			q.rotate++
-			return q.handOutLocked(a, worker, now), nil
+		if t, ok := q.quiet[origin]; ok && now.Before(t) {
+			// Asked recently and told there was nothing. Re-asking per request
+			// means re-scanning the whole history per request once a log is
+			// fully audited, which is the common state for a log that is
+			// keeping up.
+			continue
 		}
+		at := q.cursor[origin]
+		src := q.Source
+
+		q.mu.Unlock()
+		from, to, found := scanFor(src, origin, at, want)
+		q.mu.Lock()
+
+		if !found {
+			q.quiet[origin] = q.now().Add(quietFor)
+			continue
+		}
+		now = q.now()
+		f, t2, free, _ := q.trimLeasedLocked(origin, from, to)
+		if free {
+			f, t2, free = q.trimDeferredLocked(origin, f, t2, now)
+		}
+		if !free {
+			// Somebody took it while the lock was down, or it is in backoff.
+			// Move the cursor past it and let the next request try again rather
+			// than scanning further while holding nothing.
+			if to+1 > q.cursor[origin] {
+				q.cursor[origin] = to + 1
+			}
+			continue
+		}
+		q.cursor[origin] = t2 + 1
+		q.rotate++
+		q.nextSeq++
+		return q.handOutLocked(Assignment{
+			ID:     fmt.Sprintf("%s#%d", origin, q.nextSeq),
+			Origin: origin, From: f, To: t2,
+		}, worker, now), nil
 	}
 	return Assignment{}, ErrNoWork
 }
 
-// nextRunLocked asks the Source for a run this origin can offer, skipping what
-// is already out on a lease and wrapping once at the end of the history.
-func (q *Queue) nextRunLocked(origin string, want int, now time.Time) (Assignment, bool) {
-	at := q.cursor[origin]
-	for pass := 0; pass < 2; pass++ {
-		for probe := 0; probe < 8; probe++ {
-			from, to, ok := q.Source(origin, at, want)
-			if !ok {
-				break // nothing from here to the end; try again from the bottom
-			}
-			// Trim against what is already out. Two workers asking at the same
-			// moment must not be handed the same epochs, and the Source cannot
-			// know about leases — so that check belongs here.
-			f, t, free, next := q.trimLeasedLocked(origin, from, to)
-			if free {
-				f, t, free = q.trimDeferredLocked(origin, f, t, now)
-			}
-			if free {
-				q.cursor[origin] = t + 1
-				q.nextSeq++
-				return Assignment{
-					ID:     fmt.Sprintf("%s#%d", origin, q.nextSeq),
-					Origin: origin, From: f, To: t,
-				}, true
-			}
-			if next <= at {
-				next = to + 1 // never go backwards, whatever the trims said
-			}
-			at = next
-		}
-		at = 0 // wrap: the tail is done, so whatever is left is behind us
+// scanFor asks the Source from `at`, and once from the bottom if that found
+// nothing — the tail being done does not mean the gaps behind it are.
+func scanFor(src Source, origin string, at int64, want int) (int64, int64, bool) {
+	if from, to, ok := src(origin, at, want); ok {
+		return from, to, true
 	}
-	return Assignment{}, false
+	if at == 0 {
+		return 0, 0, false
+	}
+	from, to, ok := src(origin, 0, want)
+	return from, to, ok
 }
 
 // trimLeasedLocked shortens a run so it does not overlap anything out on a
@@ -767,6 +810,10 @@ func (q *Queue) releaseLocked(a Assignment) {
 	if at, ok := q.cursor[a.Origin]; !ok || at > a.From {
 		q.cursor[a.Origin] = a.From
 	}
+	// This range is work again, so a "nothing here" answer from before is now
+	// wrong. Without clearing it, an abandoned range would wait out the quiet
+	// interval on top of its lease.
+	delete(q.quiet, a.Origin)
 }
 
 func newNonce() string {
