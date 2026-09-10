@@ -105,7 +105,25 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 		}
 		proofs = ps
 		ps.MayRead = q.LeasedBy
-		proofBase = cfg.Work.ProofHost
+		// The environment wins over the config file here, and it is the only
+		// setting in this program where that is true.
+		//
+		// deploy/witness.json is mounted read-only straight from the repository
+		// — deliberately, because an earlier copy of it drifted and the witness
+		// spent weeks cosigning ten logs out of seventy-seven while reporting
+		// nothing wrong. But that makes the tracked file the deployed file, and
+		// this particular value is the operator's LAN address, which is not
+		// ours to publish. So it lives in .env beside the two Compose needs.
+		//
+		// Getting this wrong is quiet, which is why it is worth the special
+		// case: workers would dial an address that is not the witness, every
+		// proof fetch would fail, and the canaries — the only thing that catches
+		// a worker reporting the published root without doing the work — would
+		// simply never fire.
+		proofBase = os.Getenv("KT_PROOF_HOST")
+		if proofBase == "" {
+			proofBase = cfg.Work.ProofHost
+		}
 		if proofBase == "" {
 			proofBase = bound
 		}

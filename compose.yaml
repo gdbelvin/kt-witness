@@ -30,8 +30,16 @@ services:
     env_file:
       - ./secrets/work.env
 
-    # No environment block: PROTON_TREE_WORKERS went with the local Proton
-    # replay.
+    # Where a worker should dial to fetch proofs. Comes from .env rather than
+    # deploy/witness.json because that file is mounted read-only from the
+    # repository — so it is the deployed file, and this value is the operator's
+    # LAN address. No `:?` guard here: unlike the port bindings, an unset value
+    # fails safe. The witness logs what it is publishing and canaries simply do
+    # not fire, rather than anything being exposed.
+    environment:
+      KT_PROOF_HOST: "${KT_PROOF_HOST:-}"
+
+    # PROTON_TREE_WORKERS went with the local Proton replay.
     #
     # It governed how much of this machine a tree rebuild could take, and the
     # answer was sixteen of thirty-two cores for roughly two hours of every
