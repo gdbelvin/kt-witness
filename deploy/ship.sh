@@ -41,7 +41,10 @@ ssh "$HOST" "cd ~/$DEST && rm -rf cmd internal proto docs deploy cuda rust/kt-ak
 # --exclude patterns are matched against every path component by bsdtar, so any
 # pattern containing witness.json would also match deploy/witness.json. Do not
 # add one; the config is copied explicitly below.
-tar czf - --exclude='.git' --exclude='data' --exclude='*.key' . \
+# *.log: run logs from a worker started in this directory. They are the local
+# machine's output, they can be hundreds of megabytes, and shipping them to the
+# server puts one host's noise in another host's working directory.
+tar czf - --exclude='.git' --exclude='data' --exclude='*.key' --exclude='*.log' . \
   | ssh "$HOST" "cd ~/$DEST && tar xzf -"
 
 scp -q deploy/witness.json "$HOST:~/$DEST/deploy/witness.json"

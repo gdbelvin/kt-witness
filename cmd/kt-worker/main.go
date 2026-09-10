@@ -432,10 +432,17 @@ func (w *worker) run(ctx context.Context) error {
 		// figure was five of ten, below the eight actually offered, so the gate
 		// below never opened and the worker sat idle without saying why.
 		TargetCores: float64(w.budget),
-		// Room above the parallelism actually used, so "permits >= par" means
-		// the machine has headroom rather than that the controller happens to
-		// be sitting exactly at its ceiling.
-		MaxConcurrent: par * 2,
+		// The cap is the width itself, not double it.
+		//
+		// Doubling made sense while the gate asked "permits >= par", where the
+		// extra room was what stopped the controller sitting on its own
+		// threshold. Permits are now the width directly, and a cap above what
+		// can be used is just integrator wind-up: on an idle box permits would
+		// climb to sixteen, and the owner starting a compile would then need
+		// six ticks — a minute and a half — before the number came back down
+		// far enough to narrow anything. Capped at the width, it narrows within
+		// two.
+		MaxConcurrent: par,
 		MinPermits:    1,
 		Log:           w.log,
 	}
@@ -472,20 +479,47 @@ func (w *worker) run(ctx context.Context) error {
 	}()
 
 	r := &work.Runner{
-		Name:     w.name,
-		Log:      w.log,
-		Parallel: w.parallelNow,
-		// The governor's whole remaining job: decide when to ask for more.
+		Name: w.name,
+		Log:  w.log,
+		// The governor narrows the work rather than refusing it.
 		//
-		// It asks whether the machine can support the parallelism this worker
-		// is about to use, so a laptop that somebody has started using simply
-		// stops taking on ranges — while finishing the one it holds, because
-		// abandoning that would strand a lease for no gain.
+		// This used to be the static figure, with the gate below asking whether
+		// the machine could afford the FULL width. On a laptop those are the
+		// same number — the budget is eight cores and eight epochs is eight
+		// cores — so the controller sat exactly on its own threshold: it
+		// reached eight permits only while idle, and running the work it had
+		// just been allowed pushed it back under. The gate would then close,
+		// the machine would go quiet, permits would climb, and it would open
+		// again. Half a duty cycle spent waiting for a number to come back.
+		//
+		// Narrowing is also the better answer to the case the gate was written
+		// for. Somebody starts a compile: the honest response is to verify two
+		// epochs instead of eight, not to stop. Stopping altogether is reserved
+		// for the machine genuinely belonging to someone else, which is what
+		// permits falling to zero means and what the gate below now tests.
+		Parallel: func(origin string) int {
+			n := w.parallelNow(origin)
+			if !gov.Measured() {
+				// Nothing seen yet — the first sample needs an interval to
+				// exist. The static figure is what the operator said this
+				// machine may use, and narrowing below it is a claim that
+				// needs evidence.
+				return n
+			}
+			if spare := int(gov.Spare()); spare > 0 && spare < n {
+				w.log.Info("the machine is busy; narrowing rather than stopping",
+					"origin", origin, "would_run", n, "will_run", spare)
+				return spare
+			}
+			return n
+		},
+		// So the gate is now only the extreme case: is there room for anything
+		// at all. Permits reach zero when everything else on the box already
+		// exceeds this worker's whole budget — the owner is using their laptop
+		// — and then the right thing is to take no new range, while finishing
+		// the one in hand, because abandoning that strands a lease for no gain.
 		BeforeNext: func(ctx context.Context) error {
-			// The live figure, not the one from startup: Runner is about to
-			// ask parallelNow how wide to go, and asking the governor about a
-			// different number would gate on work nobody is going to do.
-			if !gov.Ready(float64(w.parallelNow(""))) {
+			if !gov.Ready(1) {
 				load, budget := gov.Observed()
 				return fmt.Errorf("machine is using %.1f of %.1f cores allowed", load, budget)
 			}

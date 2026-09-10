@@ -416,3 +416,23 @@ func (g *Governor) Observed() (load, budget float64) {
 	defer g.mu.Unlock()
 	return g.last.MachineCores, g.budget(g.last.TotalCores)
 }
+
+// Measured reports whether the controller has seen a usable sample yet.
+//
+// It exists because "narrow the work to what the machine can afford" and "we
+// have not looked at the machine yet" are different answers, and permits alone
+// cannot tell them apart: the blind branch above holds at one permit
+// deliberately, which read as a width means the first assignment after a
+// restart runs at an eighth of the machine for its whole twenty-minute lease.
+//
+// The static figure a worker starts with is the operator's own statement about
+// what may be used. Narrowing below it is a claim that needs evidence, and
+// before the first complete sample there is none.
+func (g *Governor) Measured() bool {
+	if g == nil {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.last.Complete
+}

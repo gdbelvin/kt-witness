@@ -233,3 +233,90 @@ func TestBudgetIgnoresWhatElseThisProcessIsDoing(t *testing.T) {
 		}
 	}
 }
+
+// TestPermitsNarrowRatherThanStopWhenTheOwnerShowsUp pins the shape a worker
+// now depends on: permits are the WIDTH of the work, not a threshold to clear
+// before starting it.
+//
+// The old arrangement gated on "permits >= the full width" with the cap set to
+// twice that width. On a laptop the width and the budget are the same number —
+// eight cores, eight epochs — so the gate sat exactly on the controller's
+// equilibrium: it opened while the machine was idle, and the work it had just
+// permitted pushed it shut again. Roughly half the time was spent waiting for a
+// number to come back.
+//
+// Two properties, and the second is the one that matters. An idle machine
+// reaches the full width. A machine whose owner is using some of it settles
+// somewhere in between — not at zero, because verifying two epochs instead of
+// eight is the honest response to a compile, and not at the top, because the
+// compile is real.
+func TestPermitsNarrowRatherThanStopWhenTheOwnerShowsUp(t *testing.T) {
+	g := &Governor{TargetCores: 8, MaxConcurrent: 8, MinPermits: 1}
+	g.permits = 1
+
+	for i := 0; i < 40; i++ {
+		g.step(sample(0.1, 0.3, 10))
+	}
+	if p := g.Permits(); p != 8 {
+		t.Fatalf("idle machine: permits %.2f, want the full width of 8", p)
+	}
+
+	// The owner starts something that takes four cores. Closed loop, because
+	// that is the only way the question has an answer: this worker's own load
+	// follows the permits it is given — one core per epoch — so the controller
+	// is steering something that steers it back. An open-loop version, holding
+	// the load fixed while permits move, drives straight to the floor and would
+	// have passed while pinning nothing.
+	const owner = 4.0
+	for i := 0; i < 60; i++ {
+		self := g.Permits() // one core per epoch, which is what akdtree costs
+		g.step(sample(self, self+owner, 10))
+	}
+	p := g.Permits()
+	if p < 1 {
+		t.Errorf("permits %.2f: the worker stopped entirely over a compile", p)
+	}
+	if p >= 8 {
+		t.Errorf("permits %.2f: the worker did not yield at all", p)
+	}
+	// It should settle at about what is left of the budget: 8 - 4.
+	if p < 3 || p > 5 {
+		t.Errorf("permits %.2f with four of eight cores taken; want about four", p)
+	}
+	t.Logf("owner using four cores: settled at %.2f epochs", p)
+
+	// And the machine genuinely belonging to somebody else still stops it: the
+	// others' load alone exceeds the whole budget, so the floor does not apply.
+	for i := 0; i < 60; i++ {
+		g.step(sample(0.2, 9.5, 10))
+	}
+	if p := g.Permits(); p > 0.5 {
+		t.Errorf("permits %.2f while others hold the machine; the worker must get out of the way", p)
+	}
+}
+
+// TestMeasuredSeparatesBlindFromBusy. A worker uses permits as the width of its
+// work, and the blind branch holds permits at one — so without this a machine
+// that had not yet taken a sample would look exactly like one whose owner was
+// hammering it, and the first assignment after every restart would run at an
+// eighth of the machine for its whole twenty-minute lease.
+func TestMeasuredSeparatesBlindFromBusy(t *testing.T) {
+	g := &Governor{TargetCores: 8, MaxConcurrent: 8, MinPermits: 1}
+	if g.Measured() {
+		t.Fatal("claimed a measurement before taking one")
+	}
+	// An incomplete sample is still not a measurement.
+	g.step(cpuload.Sample{TotalCores: 10})
+	if g.Measured() {
+		t.Fatal("an incomplete sample counted as a measurement")
+	}
+	g.step(sample(0.2, 0.5, 10))
+	if !g.Measured() {
+		t.Fatal("a complete sample did not count as a measurement")
+	}
+
+	var nilG *Governor
+	if nilG.Measured() {
+		t.Error("a nil governor claimed to have measured something")
+	}
+}

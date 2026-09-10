@@ -50,3 +50,6 @@ rust/**/target/
 
 # Worktrees for parallel sessions are not part of the repository.
 .claude/worktrees/
+
+# Worker and witness run logs. Operational output, not source.
+*.log
