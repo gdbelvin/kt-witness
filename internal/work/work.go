@@ -781,6 +781,29 @@ func (q *Queue) Done(id string) {
 
 // Stats reports queue depth, for the metrics that say whether workers are
 // keeping up or starving.
+// LeasedEpochs reports how many epochs of an origin are currently out with
+// workers.
+//
+// It exists so the thing filling the cache can size the buffer against real
+// demand instead of a constant. A buffer no bigger than what the fleet holds in
+// flight is a buffer that is always entirely leased: the queue looks, finds
+// every cached epoch already spoken for, and answers ErrNoWork while the cache
+// sits at its target. Watched exactly that — 23 of 25 proofs ready, 20 of them
+// leased, and a laptop with seven of eight verifier slots idle waiting out a
+// five-second timeout.
+func (q *Queue) LeasedEpochs(origin string) int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.reclaimLocked()
+	n := 0
+	for _, a := range q.leased {
+		if a.Origin == origin {
+			n += int(a.To-a.From) + 1
+		}
+	}
+	return n
+}
+
 // Depth reports what is waiting and what is out, per origin.
 //
 // Added after a worker sat idle for forty-nine minutes, connected and

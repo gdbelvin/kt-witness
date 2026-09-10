@@ -244,7 +244,7 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 		// bandwidth holding cache room the generator cannot reuse until they
 		// are verified.
 		q.Waiting = prefetch.Held
-		startWorkGenerator(ctx, db, prefetch, resolvers, origins, log)
+		startWorkGenerator(ctx, q, db, prefetch, resolvers, origins, log)
 	} else {
 		// No cache configured, so there is nothing to drain and the queue would
 		// hand out nothing at all. Fall back to asking the store, which is what

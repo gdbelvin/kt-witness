@@ -684,3 +684,59 @@ func TestASingleLogWorkerIsNotStalledBySparseWork(t *testing.T) {
 		t.Errorf("leased epoch %d, which is in backoff; want one past 5000", a.From)
 	}
 }
+
+// TestLeasedEpochsCountsWhatIsActuallyOut, which is what the buffer is sized
+// against.
+//
+// A constant buffer was the mistake: 25 downloaded proofs looked generous until
+// the fleet's in-flight capacity was counted against it. One laptop holds
+// sixteen epochs at a time, so the buffer was no larger than the demand, every
+// cached epoch was leased, and the queue answered ErrNoWork while the cache sat
+// full at its target.
+func TestLeasedEpochsCountsWhatIsActuallyOut(t *testing.T) {
+	const o = "whatsapp.kt/v2"
+	q, now := fixedQueue(t, time.Minute)
+	offer(q, o, 1, 1000)
+	offer(q, "other/log", 1, 1000)
+
+	if n := q.LeasedEpochs(o); n != 0 {
+		t.Fatalf("nothing leased yet, got %d", n)
+	}
+	a, err := q.Lease("w", []string{o}, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := q.LeasedEpochs(o); n != 6 {
+		t.Errorf("leased %d epochs, want the 6 handed out", n)
+	}
+	// Another log's leases are not this one's demand.
+	if _, err := q.Lease("w2", []string{"other/log"}, 4); err != nil {
+		t.Fatal(err)
+	}
+	if n := q.LeasedEpochs(o); n != 6 {
+		t.Errorf("another log's lease changed this one's count: %d", n)
+	}
+	// Reported work stops counting: the buffer should shrink as the fleet
+	// finishes, not stay sized for work that is done.
+	for e := a.From; e <= a.To; e++ {
+		if err := q.Accept(Result{AssignmentID: a.ID, Nonce: a.Nonce, Origin: o, Epoch: e}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := q.LeasedEpochs(o); n != 0 {
+		t.Errorf("%d epochs still counted after the whole range came back", n)
+	}
+	// And an expired lease stops counting too, or the buffer would stay sized
+	// for a machine that has gone away.
+	b, err := q.Lease("w3", []string{o}, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := q.LeasedEpochs(o); n != 5 {
+		t.Fatalf("expected 5 leased, got %d (%d..%d)", n, b.From, b.To)
+	}
+	*now = now.Add(2 * time.Hour)
+	if n := q.LeasedEpochs(o); n != 0 {
+		t.Errorf("%d epochs counted after the lease expired", n)
+	}
+}
