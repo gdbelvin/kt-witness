@@ -56,22 +56,24 @@ services:
     # the history-coverage metric counts against a range frozen in the past.
     command: ["-config", "/config/witness.json", "-backfill"]
 
-    # Tier B streams a ~284 MB Meta proof per verified epoch, and tmpfs keeps
-    # that churn off disk. The size has to be CONCURRENCY times a proof, not one
-    # proof, and 1g was one proof plus slack — correct when the sweep ran a
-    # single verification at a time and quietly wrong ever since.
+    # Scratch space for the Rust reference sidecar, which is NOT in the path by
+    # default and so does not normally use any of this.
     #
-    # What it costs: the witness reported "unverifiable (fetch): No space left
-    # on device" on a host with 568 GB free, and re-queued every epoch it had
-    # just failed to fetch. A full disk, on the disk nobody was looking at.
+    # The sidecar is a separate process reached through a pipe, so a 284 MB
+    # proof has to become a file: it downloads to /tmp before replaying. The Go
+    # verifier holds the proof in memory and writes nothing, and it is what
+    # audit.verifier: "go" selects.
     #
-    # The concurrency is the sidecar pool, which audit.DefaultWorkers derives
-    # from mem_limit — 8 on this box — plus live auditing, which is never paced.
-    # 12g is that with room for the proofs to grow, and tmpfs is page-backed, so
-    # it occupies what is written and nothing while idle. The witness checks
-    # this at startup against the pool it actually built and says so if it is
-    # short, because the failure mode is a fetch error rather than anything that
-    # names the real cause.
+    # The size is kept because the sidecar remains a supported configuration and
+    # getting it wrong is expensive in a way that names nothing: at 1g, sized
+    # when one verification ran at a time, a widened pool produced
+    # "unverifiable (fetch): No space left on device" on a host with 568 GB
+    # free, five times per epoch, until each was recorded permanently unverified
+    # and skipped. The rule is concurrency times the largest proof — the sidecar
+    # pool is 8 here — and the witness checks it at startup when, and only when,
+    # something is going to use it.
+    #
+    # tmpfs is page-backed, so an unused 12g occupies nothing.
     tmpfs:
       - /tmp:size=${KT_TMPFS_SIZE:-12g}
 
