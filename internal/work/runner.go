@@ -248,6 +248,15 @@ func (r *Runner) one(ctx context.Context, a Assignment, e int64, timeout time.Du
 		// Unavailable is an answer. The queue decides whether and when to try
 		// again; this worker's job is to say what happened.
 		res.Err = err.Error()
+		// And to say it out loud. Nothing logged this, so a worker failing
+		// every epoch and one verifying every epoch produced identical output:
+		// the results went up the stream, the queue retried them one at a time,
+		// and the only visible sign was assignments arriving with "-retry" in
+		// their names, which is a long way from the machine that knows why.
+		if r.Log != nil {
+			r.Log.Warn("verification did not produce roots", "origin", a.Origin,
+				"epoch", e, "err", err)
+		}
 	} else {
 		// No verdict here, deliberately. Whether these match what the operator
 		// published is the witness's question, and it is the only party that
