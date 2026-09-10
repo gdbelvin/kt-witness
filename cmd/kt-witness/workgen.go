@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gdbsecurity/kt-witness/internal/audit"
@@ -121,25 +123,41 @@ func fillOnce(ctx context.Context, db *store.Store, pf *audit.Prefetcher,
 		return 0, 0
 	}
 
-	started := 0
-	for e := at; e <= h.To && started < fillBatch; e++ {
+	// Concurrently, because Fetch BLOCKS: it takes a slot from the prefetcher's
+	// semaphore and does the download inline. Called in a loop it downloads one
+	// proof at a time, the semaphore is never contended, and prefetch_workers
+	// has no effect at all — which is exactly what happened. Outbound
+	// connections sat at five however high that number was set.
+	//
+	// The fan-out is the whole point of this stage. p.sem is what bounds it.
+	var wg sync.WaitGroup
+	var started atomic.Int64
+	for e := at; e <= h.To && e < at+int64(fillBatch); e++ {
 		ref, err := r.ResolveEpoch(ctx, e)
 		if err != nil {
 			continue // an epoch we cannot address is not one we can download
 		}
-		if err := pf.Fetch(ctx, origin, ref.LogDirectory, e, ref.PrevRoot, ref.CurrRoot); err != nil {
-			log.Debug("could not prefetch a proof", "origin", origin, "epoch", e, "err", err)
-			continue
-		}
-		started++
+		wg.Add(1)
+		go func(e int64, ref *audit.EpochRef) {
+			defer wg.Done()
+			if err := pf.Fetch(ctx, origin, ref.LogDirectory, e, ref.PrevRoot, ref.CurrRoot); err != nil {
+				log.Debug("could not prefetch a proof", "origin", origin, "epoch", e, "err", err)
+				return
+			}
+			started.Add(1)
+		}(e, ref)
 	}
-	return started, at + int64(fillBatch)
+	wg.Wait()
+	return int(started.Load()), at + int64(fillBatch)
 }
 
-// fillBatch is how many epochs one pass asks for. Small, because Fetch bounds
-// its own concurrency and the point of the loop is to keep asking rather than
-// to ask for everything at once.
-const fillBatch = 8
+// fillBatch is how many epochs one pass fetches at once.
+//
+// These go out concurrently and the prefetcher's own semaphore bounds how many
+// actually run, so this is the width of one wave rather than a concurrency
+// limit. Wide enough that both logs can have several downloads in flight at
+// once, since one slow CDN response should not hold up the rest of its batch.
+const fillBatch = 24
 
 func sleep(ctx context.Context, d time.Duration) {
 	select {
