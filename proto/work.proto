@@ -78,16 +78,20 @@ message Assignment {
   // verdict worth having — it checks the proof against roots it resolved
   // itself, from the source, not against anything this witness asserted.
   //
-  // Set for a canary. The witness serves a proof it has corrupted by one bit,
-  // and the worker must reject it. Nothing else distinguishes a canary from
-  // ordinary work, and the worker is not told which it has.
+  // When the witness serves proofs, this is set on EVERY assignment, and the
+  // worker fetches {base}/proof/{origin}/{epoch}. One proof in a hundred that
+  // it serves has a bit flipped, and the worker must reject those — which only
+  // tests anything because it cannot tell which ones they are.
   //
-  // The limit is worth stating: a worker engineered to notice that a URL
-  // points at the witness rather than the operator could pass every canary
-  // while fabricating everything else. This catches a verifier that broke or
-  // stopped checking, not an adversary that anticipated the test — which is
-  // why the channel is confined to machines the operator controls.
-  string proof_url = 7;
+  // An earlier version set this only for the corrupted ones, which labelled
+  // them: a worker had merely to refuse anything coming from the witness to
+  // score perfectly while verifying nothing. A test the subject can identify
+  // is not a test.
+  //
+  // The roots are still resolved by the worker from the operator, never taken
+  // from here. Serving the bytes lets the witness test a worker; it does not
+  // let it make one agree.
+  string proof_base = 7;
 
   string id = 1;
   string origin = 2;

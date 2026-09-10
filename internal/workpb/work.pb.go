@@ -334,20 +334,24 @@ type Assignment struct {
 	// verdict worth having — it checks the proof against roots it resolved
 	// itself, from the source, not against anything this witness asserted.
 	//
-	// Set for a canary. The witness serves a proof it has corrupted by one bit,
-	// and the worker must reject it. Nothing else distinguishes a canary from
-	// ordinary work, and the worker is not told which it has.
+	// When the witness serves proofs, this is set on EVERY assignment, and the
+	// worker fetches {base}/proof/{origin}/{epoch}. One proof in a hundred that
+	// it serves has a bit flipped, and the worker must reject those — which only
+	// tests anything because it cannot tell which ones they are.
 	//
-	// The limit is worth stating: a worker engineered to notice that a URL
-	// points at the witness rather than the operator could pass every canary
-	// while fabricating everything else. This catches a verifier that broke or
-	// stopped checking, not an adversary that anticipated the test — which is
-	// why the channel is confined to machines the operator controls.
-	ProofUrl string `protobuf:"bytes,7,opt,name=proof_url,json=proofUrl,proto3" json:"proof_url,omitempty"`
-	Id       string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Origin   string `protobuf:"bytes,2,opt,name=origin,proto3" json:"origin,omitempty"`
-	From     int64  `protobuf:"varint,3,opt,name=from,proto3" json:"from,omitempty"`
-	To       int64  `protobuf:"varint,4,opt,name=to,proto3" json:"to,omitempty"`
+	// An earlier version set this only for the corrupted ones, which labelled
+	// them: a worker had merely to refuse anything coming from the witness to
+	// score perfectly while verifying nothing. A test the subject can identify
+	// is not a test.
+	//
+	// The roots are still resolved by the worker from the operator, never taken
+	// from here. Serving the bytes lets the witness test a worker; it does not
+	// let it make one agree.
+	ProofBase string `protobuf:"bytes,7,opt,name=proof_base,json=proofBase,proto3" json:"proof_base,omitempty"`
+	Id        string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Origin    string `protobuf:"bytes,2,opt,name=origin,proto3" json:"origin,omitempty"`
+	From      int64  `protobuf:"varint,3,opt,name=from,proto3" json:"from,omitempty"`
+	To        int64  `protobuf:"varint,4,opt,name=to,proto3" json:"to,omitempty"`
 	// Echoed in every result for this assignment.
 	Nonce string `protobuf:"bytes,5,opt,name=nonce,proto3" json:"nonce,omitempty"`
 	// Unix seconds. Past it the lease is void: results will be refused and the
@@ -388,9 +392,9 @@ func (*Assignment) Descriptor() ([]byte, []int) {
 	return file_proto_work_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *Assignment) GetProofUrl() string {
+func (x *Assignment) GetProofBase() string {
 	if x != nil {
-		return x.ProofUrl
+		return x.ProofBase
 	}
 	return ""
 }
@@ -791,10 +795,11 @@ const file_proto_work_proto_rawDesc = "" +
 	"\aorigins\x18\x02 \x03(\tR\aorigins\x12\x1a\n" +
 	"\bparallel\x18\x03 \x01(\x05R\bparallel\x12\x18\n" +
 	"\aversion\x18\x04 \x01(\tR\aversion\x12\x1a\n" +
-	"\bplatform\x18\x05 \x01(\tR\bplatform\"\xb0\x01\n" +
+	"\bplatform\x18\x05 \x01(\tR\bplatform\"\xb2\x01\n" +
 	"\n" +
-	"Assignment\x12\x1b\n" +
-	"\tproof_url\x18\a \x01(\tR\bproofUrl\x12\x0e\n" +
+	"Assignment\x12\x1d\n" +
+	"\n" +
+	"proof_base\x18\a \x01(\tR\tproofBase\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06origin\x18\x02 \x01(\tR\x06origin\x12\x12\n" +
 	"\x04from\x18\x03 \x01(\x03R\x04from\x12\x0e\n" +

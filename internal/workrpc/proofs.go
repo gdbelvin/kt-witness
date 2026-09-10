@@ -2,123 +2,222 @@ package workrpc
 
 import (
 	"crypto/rand"
-	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
 
-// ProofServer hands out the corrupted proofs that canaries are made of.
+// ProofServer is where every worker fetches every proof, and one in a hundred
+// of them has a bit flipped.
 //
-// It exists because a worker fetches its own proofs from the operator, which is
-// the arrangement that makes its verdict worth having — and which leaves this
-// witness no way to give it something it ought to refuse. A canary needs bytes
-// only we control, so for those assignments the worker is pointed here instead.
+// # Why all of them, and not just the canaries
 //
-// # Confined like the work channel
+// The first version of this served only corrupted proofs, and pointed workers
+// at them with a field that ordinary assignments left empty. That is a canary
+// with a label on it: a worker wanting to cheat needed only to notice that a
+// proof came from the witness rather than the operator, refuse those, and
+// fabricate everything else. It would have scored perfectly on every test while
+// verifying nothing, which is worse than not testing at all — the test would
+// have been producing evidence for the wrong conclusion.
 //
-// Same LAN-only rule, for a related reason. The corrupted proof itself is not a
-// secret — it is public data with a bit flipped — but which epochs are canaries
-// is exactly what a worker must not be able to learn, and a public endpoint is
-// an enumeration of them.
+// A test the subject can identify is not a test. So every proof a worker
+// verifies comes from here, and the worker cannot tell which is which because
+// there is nothing to tell.
 //
-// # Lifetime
+// # What this does and does not cost
 //
-// A canary proof is served once and then dropped. Holding them would grow
-// without bound at 284 MB apiece, and a canary that can be fetched twice is one
-// a worker could have fetched already.
+// The witness fetches each proof instead of the worker. External bandwidth is
+// unchanged — every machine here sits behind one connection, so the bytes cross
+// it once either way — and the LAN hop is free. What it does add is that the
+// witness is now in the path: a proof it cannot fetch is one no worker can
+// verify.
+//
+// # What a worker still does for itself
+//
+// The roots. They are resolved from the operator's own listing by the worker,
+// never taken from the assignment, and that is what keeps this honest: a proof
+// this witness corrupted cannot rebuild roots the operator published. Serving
+// the bytes lets us test a worker; it does not let us make one agree with us.
 type ProofServer struct {
 	Log *slog.Logger
 
-	mu     sync.Mutex
-	served map[string]string // token -> file path
-	base   string
+	// Fetch returns the proof for one epoch, as the operator published it.
+	Fetch func(origin string, epoch int64) (io.ReadCloser, int64, error)
+
+	// Every is the canary rate: 100 corrupts one proof in a hundred. Zero means
+	// that default.
+	Every int
+
+	mu       sync.Mutex
+	seen     int
+	canaries map[string]int64 // "origin\x00epoch" -> when it was served
 }
 
-// NewProofServer serves on addr, which must name a LAN address for the same
-// reason the work channel must.
-func NewProofServer(addr string, log *slog.Logger) (*ProofServer, string, error) {
+// NewProofServer starts serving on addr, which must be a LAN address for the
+// same reason the work channel must.
+func NewProofServer(addr string, log *slog.Logger, fetch func(string, int64) (io.ReadCloser, int64, error), every int) (*ProofServer, string, error) {
 	note, err := CheckListenAddr(addr)
 	if err != nil {
 		return nil, "", err
 	}
 	if note != "" && log != nil {
-		log.Warn("canary proof server confinement is enforced outside this process",
+		log.Warn("proof server confinement is enforced outside this process",
 			"listen", addr, "note", note)
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, "", err
 	}
-	p := &ProofServer{Log: log, served: map[string]string{}}
+	p := &ProofServer{Log: log, Fetch: fetch, Every: every, canaries: map[string]int64{}}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/canary/", p.serve)
+	mux.HandleFunc("/proof/", p.serve)
 	srv := &http.Server{
-		Handler: mux,
-		// A proof is hundreds of megabytes over a LAN, so the write timeout has
-		// to allow for that without letting a stalled fetch hold the slot open
-		// indefinitely.
+		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
-		WriteTimeout:      10 * time.Minute,
+		// A Meta proof is ~280 MB over a LAN. Long enough for that, short
+		// enough that a stalled fetch does not hold the slot forever.
+		WriteTimeout: 15 * time.Minute,
 	}
 	go func() {
 		if err := srv.Serve(ln); err != nil && log != nil {
-			log.Error("canary proof server stopped", "err", err)
+			log.Error("proof server stopped", "err", err)
 		}
 	}()
 	return p, ln.Addr().String(), nil
 }
 
-// Offer registers a file to be served once, and returns the URL for it.
-func (p *ProofServer) Offer(path, advertiseHost string) (string, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("no randomness for a canary token: %w", err)
-	}
-	token := hex.EncodeToString(b[:])
-	p.mu.Lock()
-	p.served[token] = path
-	p.mu.Unlock()
-	return fmt.Sprintf("http://%s/canary/%s", advertiseHost, token), nil
-}
-
+// serve answers /proof/{origin}/{epoch}.
 func (p *ProofServer) serve(w http.ResponseWriter, r *http.Request) {
-	token := filepath.Base(r.URL.Path)
-	p.mu.Lock()
-	path, ok := p.served[token]
-	delete(p.served, token) // once
-	p.mu.Unlock()
-	if !ok {
-		// Deliberately the same answer a real proof store gives for an object
-		// that is not there, rather than anything that says "canary".
+	rest := strings.TrimPrefix(r.URL.Path, "/proof/")
+	i := strings.LastIndex(rest, "/")
+	if i < 0 {
 		http.NotFound(w, r)
 		return
 	}
-	defer os.Remove(path)
+	origin, epochStr := rest[:i], rest[i+1:]
+	epoch, err := strconv.ParseInt(epochStr, 10, 64)
+	if err != nil || origin == "" {
+		http.NotFound(w, r)
+		return
+	}
 
-	f, err := os.Open(path)
+	body, size, err := p.Fetch(origin, epoch)
 	if err != nil {
-		http.NotFound(w, r)
+		// The same answer the operator's store gives for an object that is not
+		// there. A worker learns that it could not have the proof, not why.
+		http.Error(w, "", http.StatusNotFound)
 		return
 	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		http.Error(w, "", http.StatusInternalServerError)
-		return
+	defer body.Close()
+
+	corrupt := p.due()
+	if corrupt {
+		p.mark(origin, epoch)
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
-	http.ServeContent(w, r, "", st.ModTime(), f)
+	if size > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	}
+
+	if !corrupt {
+		if _, err := io.Copy(w, body); err != nil && p.Log != nil {
+			p.Log.Debug("proof transfer interrupted", "origin", origin, "epoch", epoch, "err", err)
+		}
+		return
+	}
+
+	// Flip one bit on the way past, at a position chosen before the transfer
+	// starts so the stream is not buffered whole. The byte offset is uniform
+	// over the size the operator reported.
+	at, bit := int64(0), 0
+	if size > 0 {
+		if n, err := rand.Int(rand.Reader, big.NewInt(size)); err == nil {
+			at = n.Int64()
+		}
+		if n, err := rand.Int(rand.Reader, big.NewInt(8)); err == nil {
+			bit = int(n.Int64())
+		}
+	}
+	if err := copyFlipping(w, body, at, byte(1)<<uint(bit)); err != nil && p.Log != nil {
+		p.Log.Debug("canary transfer interrupted", "origin", origin, "epoch", epoch, "err", err)
+	}
+	if p.Log != nil {
+		p.Log.Info("served a canary", "origin", origin, "epoch", epoch,
+			"corrupted", fmt.Sprintf("byte %d of %d, bit %d", at, size, bit))
+	}
 }
 
-// Pending reports how many offers have not been fetched.
-func (p *ProofServer) Pending() int {
+// copyFlipping streams src to dst, flipping one bit at offset.
+//
+// Streaming rather than buffering because these are hundreds of megabytes and
+// there may be eight in flight; holding them whole to change one byte would
+// make the observer the thing that falls over.
+func copyFlipping(dst io.Writer, src io.Reader, offset int64, mask byte) error {
+	buf := make([]byte, 1<<20)
+	var pos int64
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			if offset >= pos && offset < pos+int64(n) {
+				buf[offset-pos] ^= mask
+			}
+			if _, wErr := dst.Write(buf[:n]); wErr != nil {
+				return wErr
+			}
+			pos += int64(n)
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func (p *ProofServer) due() bool {
+	every := p.Every
+	if every <= 0 {
+		every = 100
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return len(p.served)
+	p.seen++
+	return p.seen%every == 0
+}
+
+func (p *ProofServer) mark(origin string, epoch int64) {
+	p.canaries[key(origin, epoch)] = time.Now().Unix()
+}
+
+// WasCanary reports whether the proof served for this epoch was corrupted, and
+// forgets it. Called once, when the result comes back.
+func (p *ProofServer) WasCanary(origin string, epoch int64) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	k := key(origin, epoch)
+	_, ok := p.canaries[k]
+	if ok {
+		delete(p.canaries, k)
+	}
+	return ok
+}
+
+// Outstanding reports canaries served but not yet answered. A worker that takes
+// them and never replies is as much a problem as one that answers wrongly.
+func (p *ProofServer) Outstanding() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.canaries)
+}
+
+func key(origin string, epoch int64) string {
+	return origin + "\x00" + strconv.FormatInt(epoch, 10)
 }

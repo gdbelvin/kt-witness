@@ -156,6 +156,12 @@ type config struct {
 		// address and published port, which is not what the container sees
 		// itself bound to.
 		ProofHost string `json:"proof_host"`
+		// CanaryEvery is how often a proof served to a worker has a bit
+		// flipped: 100 corrupts one in a hundred. Zero means that default.
+		//
+		// Every proof goes through the server, not just these, because a
+		// corrupted proof a worker can identify tests nothing.
+		CanaryEvery int `json:"canary_every"`
 
 		Listen   string `json:"listen"`
 		TokenEnv string `json:"token_env"`
@@ -775,7 +781,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 				wTimeout = auditor.Timeout
 			}
 		}
-		w, minter, err := startWorkChannel(ctx, cfg, db, governorFor(auditor), wSidecar, wResolvers, wTimeout, log)
+		w, err := startWorkChannel(ctx, cfg, db, governorFor(auditor), wSidecar, wResolvers, wTimeout, log)
 		if err != nil {
 			// Refusing to start is the point. A work channel that silently did
 			// not come up would leave the witness looking healthy while the
@@ -784,27 +790,6 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 			os.Exit(1)
 		}
 		workers = w
-
-		// Now that the queue exists, let the in-process canary hand it a
-		// verified proof to build a worker canary from. Wired here rather than
-		// at construction because the verifier is built before the channel it
-		// serves, and a package-level hook to bridge that would be a global for
-		// the sake of an ordering detail.
-		if canaryV != nil && minter != nil {
-			byDir := map[string]string{}
-			for _, l := range cfg.Logs {
-				if l.Type == "akd" && l.LogDirectory != "" {
-					byDir[strings.TrimSuffix(l.LogDirectory, "/")] = l.Origin
-				}
-			}
-			canaryV.OnProof = func(dir string, epoch int64, prev, curr, path string) {
-				origin := byDir[strings.TrimSuffix(dir, "/")]
-				if origin == "" {
-					return
-				}
-				minter.offerCanary(origin, epoch, prev, curr, path)
-			}
-		}
 	}
 	defer stop()
 

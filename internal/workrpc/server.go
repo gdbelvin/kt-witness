@@ -40,6 +40,10 @@ type Server struct {
 	Token      string
 	Log        *slog.Logger
 
+	// ProofBase is where workers fetch proofs, put on every assignment so that
+	// none of them is distinguishable by carrying it.
+	ProofBase string
+
 	// Idle is how long to wait before asking the queue again when it had
 	// nothing. Short enough that a freed range is picked up promptly, long
 	// enough that an idle fleet is not a busy loop.
@@ -129,7 +133,7 @@ func (s *Server) dispatch(ctx context.Context, stream pb.Work_SessionServer, hel
 				Assignment: &pb.Assignment{
 					Id: a.ID, Origin: a.Origin, From: a.From, To: a.To,
 					Nonce: a.Nonce, DeadlineUnix: a.Deadline.Unix(),
-					ProofUrl: a.ProofURL,
+					ProofBase: s.ProofBase,
 				}}}
 			if err := stream.Send(send); err != nil {
 				return err

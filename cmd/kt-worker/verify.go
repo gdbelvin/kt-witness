@@ -59,7 +59,7 @@ type akdVerifier struct {
 	threads int
 }
 
-func (v akdVerifier) verify(ctx context.Context, origin string, epoch int64, proofURL string) (string, string, error) {
+func (v akdVerifier) verify(ctx context.Context, origin string, epoch int64, proofBase string) (string, string, error) {
 	s := v.src[origin]
 	if s == nil {
 		return "", "", fmt.Errorf("no log directory configured for %s", origin)
@@ -80,8 +80,12 @@ func (v akdVerifier) verify(ctx context.Context, origin string, epoch int64, pro
 		"prev_root":     ref.PrevRoot,
 		"curr_root":     ref.CurrRoot,
 	}
-	if proofURL != "" {
-		path, err := fetchProof(ctx, proofURL)
+	if proofBase != "" {
+		// Every proof from the same place, so none of them is special. The
+		// roots below still come from the operator, which is what keeps this
+		// worker's verdict its own.
+		url := fmt.Sprintf("%s/proof/%s/%d", strings.TrimSuffix(proofBase, "/"), origin, epoch)
+		path, err := fetchProof(ctx, url)
 		if err != nil {
 			return "", "", fmt.Errorf("fetching the supplied proof: %w", err)
 		}

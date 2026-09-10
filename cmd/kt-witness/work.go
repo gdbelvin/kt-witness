@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,10 +27,10 @@ import (
 // startWorkChannel serves verification work to machines on this network.
 func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pace.Governor,
 	sidecar audit.Verifier, resolvers []audit.Resolver, timeout time.Duration,
-	log *slog.Logger) (func() map[string]time.Time, *canaryMinter, error) {
+	log *slog.Logger) (func() map[string]time.Time, error) {
 	note, err := workrpc.CheckListenAddr(cfg.Work.Listen)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if note != "" {
 		// WARN because it is the one thing about this channel this process
@@ -41,7 +44,7 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 	}
 	token := os.Getenv(env)
 	if token == "" {
-		return nil, nil, fmt.Errorf("work channel: %s is not set; a missing token closes "+
+		return nil, fmt.Errorf("work channel: %s is not set; a missing token closes "+
 			"the channel rather than opening it", env)
 	}
 
@@ -49,40 +52,79 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 	if cfg.Work.Lease != "" {
 		d, err := time.ParseDuration(cfg.Work.Lease)
 		if err != nil {
-			return nil, nil, fmt.Errorf("work.lease: %w", err)
+			return nil, fmt.Errorf("work.lease: %w", err)
 		}
 		lease = d
 	}
 
 	q := work.NewQueue(lease)
 
-	// Canaries need bytes only this witness controls, served where only this
-	// network can reach them. Same confinement rule as the work channel, for a
-	// related reason: the corrupted proof is not a secret, but which epochs are
-	// canaries is exactly what a worker must not learn.
-	var minter *canaryMinter
+	// Every proof a remote worker verifies is fetched from here, and one in a
+	// hundred has a bit flipped.
+	//
+	// Serving all of them is the point. An earlier version served only the
+	// corrupted ones, which labelled them: a worker had merely to refuse
+	// anything arriving from the witness to score perfectly on every test while
+	// verifying nothing. A test the subject can identify is not a test — it is
+	// evidence for the wrong conclusion.
+	//
+	// What the worker still does for itself is resolve the roots, from the
+	// operator's own listing. That is what keeps this honest: a proof this
+	// witness corrupted cannot rebuild roots the operator published, so serving
+	// the bytes lets us test a worker without letting us make one agree.
+	var proofs *workrpc.ProofServer
+	var proofBase string
 	if addr := cfg.Work.ProofListen; addr != "" {
-		ps, bound, err := workrpc.NewProofServer(addr, log)
+		byOrigin := map[string]audit.Resolver{}
+		for _, r := range resolvers {
+			byOrigin[r.Origin()] = r
+		}
+		fetch := func(origin string, epoch int64) (io.ReadCloser, int64, error) {
+			r := byOrigin[origin]
+			if r == nil {
+				return nil, 0, fmt.Errorf("no resolver for %s", origin)
+			}
+			ref, err := r.ResolveEpoch(ctx, epoch)
+			if err != nil {
+				return nil, 0, err
+			}
+			url := fmt.Sprintf("%s/%d/%s/%s", strings.TrimSuffix(ref.LogDirectory, "/"),
+				epoch, ref.PrevRoot, ref.CurrRoot)
+			resp, err := http.Get(url)
+			if err != nil {
+				return nil, 0, err
+			}
+			if resp.StatusCode != http.StatusOK {
+				resp.Body.Close()
+				return nil, 0, fmt.Errorf("GET %s: HTTP %s", url, resp.Status)
+			}
+			return resp.Body, resp.ContentLength, nil
+		}
+		ps, bound, err := workrpc.NewProofServer(addr, log, fetch, cfg.Work.CanaryEvery)
 		if err != nil {
-			return nil, nil, fmt.Errorf("canary proof server: %w", err)
+			return nil, fmt.Errorf("proof server: %w", err)
 		}
-		host := cfg.Work.ProofHost
-		if host == "" {
-			host = bound
+		proofs = ps
+		proofBase = cfg.Work.ProofHost
+		if proofBase == "" {
+			proofBase = bound
 		}
-		minter = &canaryMinter{q: q, proofs: ps, host: host, log: log, dir: os.TempDir()}
-		startCanaryFeed(ctx, minter)
-		log.Info("canary proof server listening", "addr", bound, "workers_dial", host)
+		proofBase = "http://" + proofBase
+		log.Info("serving proofs to workers", "addr", bound, "workers_dial", proofBase,
+			"canary_every", canaryEvery(cfg.Work.CanaryEvery),
+			"note", "one proof in this many has a bit flipped; the worker is not told which")
 	} else {
-		log.Warn("no canary proof server configured; remote workers are not being tested",
-			"note", "a worker reporting the published root without verifying cannot be detected without this")
+		log.Warn("not serving proofs; remote workers fetch their own and cannot be tested",
+			"note", "a worker reporting the published root without verifying cannot be caught this way")
 	}
+
 	srv := &workrpc.Server{
-		Queue: q,
-		Token: token,
-		Log:   log,
+		Queue:     q,
+		ProofBase: proofBase,
+		Token:     token,
+		Log:       log,
 		OnResult: func(r work.Result) error {
-			return recordWorkerResult(db, q, r, log)
+			return recordWorkerResult(db, q, proofs, r, log)
 		},
 		OnCapacity: func(worker string, c work.Capacity) {
 			recordCapacity(worker, c)
@@ -91,7 +133,7 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 
 	ln, err := net.Listen("tcp", cfg.Work.Listen)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	// Match the workers' keepalives, and let a worker probe between
 	// assignments — an idle fleet is still a fleet, and a machine that sleeps
@@ -149,7 +191,7 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 		"origins", origins,
 		"note", "local network only; not published through the tunnel")
 
-	return srv.Workers, minter, nil
+	return srv.Workers, nil
 }
 
 // recordWorkerResult turns a worker's verdict into an audit record.
@@ -164,12 +206,26 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 // that did nothing can report it; that is what spot-checking is for, and it is
 // not built yet. Until it is, this channel should only be given to machines the
 // operator controls, which is also why the listener refuses a public address.
-func recordWorkerResult(db *store.Store, q *work.Queue, r work.Result, log *slog.Logger) error {
-	// A canary's verdict is about the worker, not about the log. Recording it
-	// as an audit would write "unverified" against an epoch that verifies
-	// perfectly well — a false hole in the coverage, which is the one number
-	// this witness must not get wrong in that direction.
-	if checkCanary(q, r, log) {
+func recordWorkerResult(db *store.Store, q *work.Queue, proofs *workrpc.ProofServer, r work.Result, log *slog.Logger) error {
+	// Was this one of the proofs we corrupted?
+	//
+	// Its verdict is about the worker, not about the log, so it is never
+	// recorded as an audit: writing "unverified" against an epoch that verifies
+	// perfectly well would put a false hole in the coverage, which is the one
+	// number this witness must not get wrong in that direction.
+	if proofs != nil && proofs.WasCanary(r.Origin, r.Epoch) {
+		if !r.Verified {
+			metrics.Inc("kt_witness_worker_canary_caught_total", map[string]string{"worker": r.Worker})
+			log.Info("worker rejected a corrupted proof, as it must",
+				"worker", r.Worker, "origin", r.Origin, "epoch", r.Epoch, "reported", r.Err)
+		} else {
+			metrics.Inc("kt_witness_worker_canary_missed_total", map[string]string{"worker": r.Worker})
+			log.Error("A WORKER PASSED A CORRUPTED PROOF AS VERIFIED — it is not verifying "+
+				"anything, and every result it has reported must be treated as unproven. "+
+				"Stop giving it work and re-audit what it claimed",
+				"worker", r.Worker, "origin", r.Origin, "epoch", r.Epoch,
+				"assignment", r.AssignmentID, "root_it_reported", r.Root)
+		}
 		return nil
 	}
 	if r.Err != "" {
