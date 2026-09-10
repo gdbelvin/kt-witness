@@ -32,6 +32,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -184,8 +185,26 @@ type Queue struct {
 	// and to rotate between them fairly.
 	Origins []string
 
+	// Waiting reports how many downloaded proofs are sitting unverified for an
+	// origin. Optional; nil falls back to plain rotation.
+	//
+	// It is what decides which log a worker that can do several is given, and
+	// the answer is "whichever has the most already on disk". Those bytes are
+	// bandwidth that has been spent — the scarcest thing this system has — and
+	// they occupy cache room that the generator cannot use until they are
+	// verified and released. Draining the deepest first turns that room over
+	// fastest.
+	//
+	// Round-robin alone got this wrong in a way that took a full cache to make
+	// visible: 212 Meta proofs, about 60 GB of a 64 GB cache, sat unverified
+	// because the only machine that could do Meta was alternating evenly with
+	// WhatsApp — while the generator kept topping WhatsApp back up to its
+	// target, spending the remaining room on new downloads rather than letting
+	// the paid-for ones through.
+	Waiting func(origin string) int
+
 	// rotate is where the round-robin over origins starts, advanced on every
-	// lease.
+	// lease. Used when Waiting is nil, and as the tie-break when it is not.
 	//
 	// Without it the first origin in the list wins every time a worker can do
 	// more than one, and a log whose epochs are slow to fetch holds the others
@@ -437,8 +456,21 @@ func (q *Queue) Lease(worker string, origins []string, want int) (Assignment, er
 	// check the answer against the leases. Another worker may have taken the
 	// range in between; trimLeasedLocked is what catches that, and the loop
 	// tries the next origin rather than handing out an overlap.
+	// Deepest first, rotating within a tie. See Waiting.
+	order := make([]string, len(try))
 	for i := range try {
-		origin := try[(q.rotate+i)%len(try)]
+		order[i] = try[(q.rotate+i)%len(try)]
+	}
+	if q.Waiting != nil {
+		depth := make(map[string]int, len(order))
+		for _, o := range order {
+			depth[o] = q.Waiting(o)
+		}
+		sort.SliceStable(order, func(i, j int) bool {
+			return depth[order[i]] > depth[order[j]]
+		})
+	}
+	for _, origin := range order {
 		if len(can) > 0 && !can[origin] {
 			continue
 		}

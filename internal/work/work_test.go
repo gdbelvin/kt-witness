@@ -575,3 +575,63 @@ func TestAFullyAuditedLogIsNotRescannedPerRequest(t *testing.T) {
 			"was never re-asked and new epochs would never be found", scans)
 	}
 }
+
+// TestTheDeepestBacklogIsDrainedFirst.
+//
+// A worker that can do several logs should be given the one with the most
+// proofs already downloaded. Those bytes are bandwidth that has been spent —
+// the scarcest thing here — and they hold cache room the generator cannot reuse
+// until they are verified and released.
+//
+// Plain rotation got this wrong in a way only a full cache made visible: 212
+// Meta proofs, about 60 GB of a 64 GB cache, sat unverified because the only
+// machine that could do Meta alternated evenly with WhatsApp, while the
+// generator kept topping WhatsApp back up and spending the last of the room on
+// new downloads.
+func TestTheDeepestBacklogIsDrainedFirst(t *testing.T) {
+	const deep, shallow = "meta.messenger.kt/v1", "whatsapp.kt/v2"
+	q, _ := fixedQueue(t, time.Minute)
+	offer(q, shallow, 1, 1000)
+	offer(q, deep, 1, 1000)
+	q.Waiting = func(o string) int {
+		if o == deep {
+			return 212
+		}
+		return 23
+	}
+
+	// A worker that can do both is given the deep one, repeatedly — not every
+	// other turn.
+	for i := 0; i < 4; i++ {
+		a, err := q.Lease("both", []string{deep, shallow}, 4)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if a.Origin != deep {
+			t.Fatalf("lease %d went to %s; the log with 212 waiting should win "+
+				"over the one with 23", i, a.Origin)
+		}
+	}
+
+	// A worker that can only do the shallow one is unaffected. Priority orders
+	// a choice; it must not deny work to a machine that has no choice.
+	a, err := q.Lease("whatsapp-only", []string{shallow}, 4)
+	if err != nil {
+		t.Fatalf("a single-log worker was starved by the priority: %v", err)
+	}
+	if a.Origin != shallow {
+		t.Fatalf("got %s for a worker that only declared %s", a.Origin, shallow)
+	}
+
+	// And it follows the depth rather than the name: flip which is deeper and
+	// the choice flips with it.
+	q.Waiting = func(o string) int {
+		if o == shallow {
+			return 500
+		}
+		return 1
+	}
+	if a, err := q.Lease("both", []string{deep, shallow}, 4); err != nil || a.Origin != shallow {
+		t.Errorf("after the depths reversed: %s (%v), want %s", a.Origin, err, shallow)
+	}
+}

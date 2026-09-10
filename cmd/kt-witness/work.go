@@ -240,6 +240,10 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 	// why the store is no longer asked here.
 	if prefetch != nil && prefetch.Dir != "" {
 		q.Source = cacheSource(prefetch, log)
+		// Drain the log with the most already downloaded. Those bytes are spent
+		// bandwidth holding cache room the generator cannot reuse until they
+		// are verified.
+		q.Waiting = prefetch.Held
 		startWorkGenerator(ctx, db, prefetch, resolvers, origins, log)
 	} else {
 		// No cache configured, so there is nothing to drain and the queue would
