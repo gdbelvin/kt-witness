@@ -93,6 +93,9 @@ type Governor struct {
 	permits  float64
 	inFlight int
 	last     cpuload.Sample
+	// started records whether a complete sample has been applied. The first one
+	// sets the permit level outright; the rest correct it.
+	started bool
 }
 
 const (
@@ -254,7 +257,23 @@ func (g *Governor) step(sample cpuload.Sample) {
 		err = headroom
 	}
 
-	g.permits += err * gain
+	// The first complete sample sets the level; every one after it corrects.
+	//
+	// Integrating up from zero at 0.35 of the error takes three ticks — 45
+	// seconds — to reach full width on an idle machine, and during it the
+	// worker reports "the machine is busy; narrowing" about a box at a load
+	// average of 1.5 on forty cores. That is not a controller being careful,
+	// it is a controller reporting its own startup as a property of the host.
+	//
+	// A measurement is not a guess, so there is nothing to approach carefully:
+	// the first one says how much room there is, and the gain exists to damp
+	// oscillation between corrections, not to distrust the first reading.
+	if !g.started {
+		g.started = true
+		g.permits = err
+	} else {
+		g.permits += err * gain
+	}
 
 	// The floor holds against our own load, not against the neighbours'.
 	//

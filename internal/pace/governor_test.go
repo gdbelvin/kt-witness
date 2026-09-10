@@ -320,3 +320,55 @@ func TestMeasuredSeparatesBlindFromBusy(t *testing.T) {
 		t.Error("a nil governor claimed to have measured something")
 	}
 }
+
+// TestTheFirstSampleSetsTheLevelRatherThanNudgingToward It. A worker uses
+// permits as the width of its work, so integrating up from zero at 0.35 of the
+// error means three ticks — 45 seconds — before an idle machine reaches full
+// width. Watched on a 40-core box at a load average of 1.5: the worker reported
+// "the machine is busy; narrowing rather than stopping" about its own startup.
+//
+// The gain damps oscillation between corrections. It is not a reason to
+// distrust the first reading, which is a measurement like any other.
+func TestTheFirstSampleSetsTheLevelRatherThanNudgingTowardIt(t *testing.T) {
+	g := &Governor{TargetCores: 38, MaxConcurrent: 38, MinPermits: 1}
+
+	// A 40-core box at a load average of 1.5, which is what the GPU host looks
+	// like at rest. One sample should be enough.
+	g.step(sample(0.1, 1.5, 40))
+	if p := g.Permits(); p < 36 {
+		t.Errorf("permits %.2f after one sample of a nearly idle 40-core box; "+
+			"want essentially the full width, not a ramp", p)
+	}
+
+	// Incomplete samples must not count as the first one — they hold at a
+	// conservative single permit, and a later real sample must still be able to
+	// set the level outright rather than integrate up from there.
+	g2 := &Governor{TargetCores: 38, MaxConcurrent: 38, MinPermits: 1}
+	for i := 0; i < 5; i++ {
+		g2.step(cpuload.Sample{TotalCores: 40})
+	}
+	if p := g2.Permits(); p != 1 {
+		t.Fatalf("permits %.2f while blind, want the conservative 1", p)
+	}
+	g2.step(sample(0.1, 1.5, 40))
+	if p := g2.Permits(); p < 36 {
+		t.Errorf("permits %.2f on the first real sample after being blind; "+
+			"want the full width", p)
+	}
+
+	// And it is only the FIRST: a busy machine after that still corrects
+	// gradually, so one noisy sample cannot slam the width to the floor.
+	g3 := &Governor{TargetCores: 38, MaxConcurrent: 38, MinPermits: 1}
+	g3.step(sample(0.1, 1.5, 40))
+	before := g3.Permits()
+	g3.step(sample(38, 60, 40)) // a sudden spike of other people's work
+	after := g3.Permits()
+	if after >= before {
+		t.Errorf("permits %.2f -> %.2f; an over-budget machine must pull the width down",
+			before, after)
+	}
+	if after < before-(60-38)*gain-0.001 {
+		t.Errorf("permits %.2f -> %.2f; the correction skipped the gain and slammed",
+			before, after)
+	}
+}
