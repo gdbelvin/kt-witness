@@ -47,7 +47,14 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 			"the channel rather than opening it", env)
 	}
 
-	lease := 10 * time.Minute
+	// The MINIMUM lease, not the lease. It used to be the whole answer, fixed at
+	// twenty minutes — chosen when twenty-five epochs cost about that much
+	// against the Rust subprocess. An epoch now costs a couple of seconds, so an
+	// abandoned range was stranded for roughly fifty times longer than the work
+	// would have taken, and a queue full of leases nobody is working looks
+	// exactly like a queue that is busy. The queue now derives the deadline from
+	// what epochs of that log have actually been costing; this floors it.
+	lease := 2 * time.Minute
 	if cfg.Work.Lease != "" {
 		d, err := time.ParseDuration(cfg.Work.Lease)
 		if err != nil {
@@ -204,8 +211,8 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 			log.Error("work channel stopped", "err", err)
 		}
 	}()
-	// Feed it from the oldest unaudited epochs, which is the end this witness's
-	// own downward sweep is furthest from.
+	// What still needs auditing, asked of the store when somebody wants work.
+	// There is no feeder and no queued list — see worksource.go.
 	origins := cfg.Work.Origins
 	if len(origins) == 0 {
 		for _, l := range cfg.Logs {
@@ -214,7 +221,8 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 			}
 		}
 	}
-	startWorkFeed(ctx, db, q, origins, log)
+	q.Origins = origins
+	q.Source = storeSource(db, log)
 	publishQueueDepth(ctx, q)
 
 	// The witness's own verification, as ordinary participants on the same
@@ -410,8 +418,17 @@ func recordCapacity(worker string, c work.Capacity) {
 // graph shows only what workers claim they could do — not whether they were
 // offered anything.
 func publishQueueDepth(ctx context.Context, q *work.Queue) {
-	metrics.Describe("kt_witness_work_queue_pending", metrics.Gauge,
-		"Ranges waiting to be handed out, by log")
+	// Renamed, because the old name became a lie. There is no queue of pending
+	// ranges any more: what needs auditing lives in the store, and
+	// kt_witness_history_unverified_epochs is the number that answers "how much
+	// is left". This one counts epochs that FAILED and are serving a backoff —
+	// a different and smaller question, and one worth watching on its own.
+	//
+	// A gauge that keeps its old name while changing its meaning is how a
+	// dashboard starts lying quietly. Two panels were doing exactly that
+	// earlier today for a different reason.
+	metrics.Describe("kt_witness_work_retry_pending", metrics.Gauge,
+		"Epochs that failed and are waiting out a retry backoff, by log")
 	metrics.Describe("kt_witness_work_queue_leased", metrics.Gauge,
 		"Ranges currently held by a worker, by log")
 	go func() {
@@ -425,7 +442,7 @@ func publishQueueDepth(ctx context.Context, q *work.Queue) {
 			// misreading this exists to prevent.
 			for _, o := range knownOrigins(pending, leased) {
 				l := map[string]string{"origin": o}
-				metrics.Set("kt_witness_work_queue_pending", l, float64(pending[o]))
+				metrics.Set("kt_witness_work_retry_pending", l, float64(pending[o]))
 				metrics.Set("kt_witness_work_queue_leased", l, float64(leased[o]))
 			}
 			select {

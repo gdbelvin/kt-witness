@@ -52,6 +52,7 @@ type WorkerMessage struct {
 	//	*WorkerMessage_Result
 	//	*WorkerMessage_Progress
 	//	*WorkerMessage_Capacity
+	//	*WorkerMessage_Want
 	Msg           isWorkerMessage_Msg `protobuf_oneof:"msg"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -130,6 +131,15 @@ func (x *WorkerMessage) GetCapacity() *Capacity {
 	return nil
 }
 
+func (x *WorkerMessage) GetWant() *Want {
+	if x != nil {
+		if x, ok := x.Msg.(*WorkerMessage_Want); ok {
+			return x.Want
+		}
+	}
+	return nil
+}
+
 type isWorkerMessage_Msg interface {
 	isWorkerMessage_Msg()
 }
@@ -150,6 +160,10 @@ type WorkerMessage_Capacity struct {
 	Capacity *Capacity `protobuf:"bytes,4,opt,name=capacity,proto3,oneof"`
 }
 
+type WorkerMessage_Want struct {
+	Want *Want `protobuf:"bytes,5,opt,name=want,proto3,oneof"`
+}
+
 func (*WorkerMessage_Hello) isWorkerMessage_Msg() {}
 
 func (*WorkerMessage_Result) isWorkerMessage_Msg() {}
@@ -157,6 +171,8 @@ func (*WorkerMessage_Result) isWorkerMessage_Msg() {}
 func (*WorkerMessage_Progress) isWorkerMessage_Msg() {}
 
 func (*WorkerMessage_Capacity) isWorkerMessage_Msg() {}
+
+func (*WorkerMessage_Want) isWorkerMessage_Msg() {}
 
 type WitnessMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -249,8 +265,9 @@ type Hello struct {
 	// indistinguishable from the log being down — so it is asked rather than
 	// assumed.
 	Origins []string `protobuf:"bytes,2,rep,name=origins,proto3" json:"origins,omitempty"`
-	// How many epochs it will work on at once. Advisory: it sizes assignments,
-	// and a worker that overstates it simply misses deadlines.
+	// How many epochs it will work on at once. The opening Want, in effect: the
+	// witness sizes the first assignment from it, and everything after that comes
+	// from Want messages as capacity frees up.
 	Parallel int32 `protobuf:"varint,3,opt,name=parallel,proto3" json:"parallel,omitempty"`
 	// Free-text, for the operator's own benefit when something looks wrong.
 	Version  string `protobuf:"bytes,4,opt,name=version,proto3" json:"version,omitempty"`
@@ -343,6 +360,68 @@ func (x *Hello) GetProtocol() int32 {
 	return 0
 }
 
+// Want asks for more work, and is what makes this channel pull rather than push.
+//
+// The witness used to decide when to send: it leased a range, pushed it, and
+// then blocked until that range came back in full before leasing another. So
+// every worker held exactly one range at a time, whatever it was — a forty-core
+// box and a laptop got the same thing — and the pipeline drained completely at
+// every boundary while the last epoch finished and an ack round-tripped.
+// Measured on a laptop: twenty-three seconds between ranges of twelve epochs it
+// could work eight at a time.
+//
+// The worker knows its own capacity and always did; it reports it in Hello and
+// in Capacity, and for a long time the witness only logged it. Now it asks.
+//
+// Epochs is how many MORE this worker can take on top of what it already holds.
+// It is a request, not a reservation: the witness may send fewer, or nothing,
+// and the worker asks again when it has room. Asking for more than can be
+// finished inside a lease is self-defeating rather than dangerous — the surplus
+// expires and is handed to somebody else.
+type Want struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Epochs        int32                  `protobuf:"varint,1,opt,name=epochs,proto3" json:"epochs,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Want) Reset() {
+	*x = Want{}
+	mi := &file_proto_work_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Want) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Want) ProtoMessage() {}
+
+func (x *Want) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_work_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Want.ProtoReflect.Descriptor instead.
+func (*Want) Descriptor() ([]byte, []int) {
+	return file_proto_work_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *Want) GetEpochs() int32 {
+	if x != nil {
+		return x.Epochs
+	}
+	return 0
+}
+
 // Assignment is a contiguous range of epochs on one log.
 type Assignment struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -367,23 +446,10 @@ type Assignment struct {
 	// from here. Serving the bytes lets the witness test a worker; it does not
 	// let it make one agree.
 	ProofBase string `protobuf:"bytes,7,opt,name=proof_base,json=proofBase,proto3" json:"proof_base,omitempty"`
-	// Epochs in this assignment are from..to counting by step.
-	//
-	// Step is 2, not 1, and that is a security property rather than a
-	// scheduling one. A worker holding epoch E and epoch E+1 can answer for E
-	// without checking anything: the published roots chain, so curr_E equals
-	// prev_{E+1} equals Root(unchanged_{E+1}) — computable from the neighbour's
-	// proof alone, with the commitment never applied and the merged tree never
-	// built. Interleaving denies it the neighbour.
-	Step int32 `protobuf:"varint,8,opt,name=step,proto3" json:"step,omitempty"`
-	// Block groups the interleaved halves of one range. A worker is never leased
-	// two assignments from the same block, because holding both would hand it
-	// the neighbours the step exists to withhold.
-	Block  string `protobuf:"bytes,9,opt,name=block,proto3" json:"block,omitempty"`
-	Id     string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Origin string `protobuf:"bytes,2,opt,name=origin,proto3" json:"origin,omitempty"`
-	From   int64  `protobuf:"varint,3,opt,name=from,proto3" json:"from,omitempty"`
-	To     int64  `protobuf:"varint,4,opt,name=to,proto3" json:"to,omitempty"`
+	Id        string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Origin    string `protobuf:"bytes,2,opt,name=origin,proto3" json:"origin,omitempty"`
+	From      int64  `protobuf:"varint,3,opt,name=from,proto3" json:"from,omitempty"`
+	To        int64  `protobuf:"varint,4,opt,name=to,proto3" json:"to,omitempty"`
 	// Echoed in every result for this assignment.
 	Nonce string `protobuf:"bytes,5,opt,name=nonce,proto3" json:"nonce,omitempty"`
 	// Unix seconds. Past it the lease is void: results will be refused and the
@@ -396,7 +462,7 @@ type Assignment struct {
 
 func (x *Assignment) Reset() {
 	*x = Assignment{}
-	mi := &file_proto_work_proto_msgTypes[3]
+	mi := &file_proto_work_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -408,7 +474,7 @@ func (x *Assignment) String() string {
 func (*Assignment) ProtoMessage() {}
 
 func (x *Assignment) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_work_proto_msgTypes[3]
+	mi := &file_proto_work_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -421,26 +487,12 @@ func (x *Assignment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Assignment.ProtoReflect.Descriptor instead.
 func (*Assignment) Descriptor() ([]byte, []int) {
-	return file_proto_work_proto_rawDescGZIP(), []int{3}
+	return file_proto_work_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Assignment) GetProofBase() string {
 	if x != nil {
 		return x.ProofBase
-	}
-	return ""
-}
-
-func (x *Assignment) GetStep() int32 {
-	if x != nil {
-		return x.Step
-	}
-	return 0
-}
-
-func (x *Assignment) GetBlock() string {
-	if x != nil {
-		return x.Block
 	}
 	return ""
 }
@@ -518,7 +570,7 @@ type Result struct {
 
 func (x *Result) Reset() {
 	*x = Result{}
-	mi := &file_proto_work_proto_msgTypes[4]
+	mi := &file_proto_work_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -530,7 +582,7 @@ func (x *Result) String() string {
 func (*Result) ProtoMessage() {}
 
 func (x *Result) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_work_proto_msgTypes[4]
+	mi := &file_proto_work_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -543,7 +595,7 @@ func (x *Result) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Result.ProtoReflect.Descriptor instead.
 func (*Result) Descriptor() ([]byte, []int) {
-	return file_proto_work_proto_rawDescGZIP(), []int{4}
+	return file_proto_work_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Result) GetAssignmentId() string {
@@ -621,7 +673,7 @@ type Progress struct {
 
 func (x *Progress) Reset() {
 	*x = Progress{}
-	mi := &file_proto_work_proto_msgTypes[5]
+	mi := &file_proto_work_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -633,7 +685,7 @@ func (x *Progress) String() string {
 func (*Progress) ProtoMessage() {}
 
 func (x *Progress) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_work_proto_msgTypes[5]
+	mi := &file_proto_work_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -646,7 +698,7 @@ func (x *Progress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Progress.ProtoReflect.Descriptor instead.
 func (*Progress) Descriptor() ([]byte, []int) {
-	return file_proto_work_proto_rawDescGZIP(), []int{5}
+	return file_proto_work_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Progress) GetAssignmentId() string {
@@ -671,8 +723,11 @@ func (x *Progress) GetEpoch() int64 {
 // opposite responses. A worker that says "I am down to one at a time because my
 // owner came back" is reporting a healthy system doing what it was built to do.
 //
-// It is advisory in the strict sense: nothing here is checked, and nothing here
-// changes what the queue hands out. It is for the operator to look at.
+// Capacity is for the operator to look at; Want is what actually schedules.
+// They are deliberately separate: this one is a description of the machine and
+// is sent on a timer whether or not there is work, so a fleet that has gone
+// quiet is still legible. Conflating them would mean an idle worker stopped
+// reporting at exactly the moment its state became interesting.
 type Capacity struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// How many epochs this worker will run at once, right now. Its own
@@ -694,7 +749,7 @@ type Capacity struct {
 
 func (x *Capacity) Reset() {
 	*x = Capacity{}
-	mi := &file_proto_work_proto_msgTypes[6]
+	mi := &file_proto_work_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -706,7 +761,7 @@ func (x *Capacity) String() string {
 func (*Capacity) ProtoMessage() {}
 
 func (x *Capacity) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_work_proto_msgTypes[6]
+	mi := &file_proto_work_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -719,7 +774,7 @@ func (x *Capacity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Capacity.ProtoReflect.Descriptor instead.
 func (*Capacity) Descriptor() ([]byte, []int) {
-	return file_proto_work_proto_rawDescGZIP(), []int{6}
+	return file_proto_work_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Capacity) GetParallel() int32 {
@@ -764,7 +819,7 @@ type Ack struct {
 
 func (x *Ack) Reset() {
 	*x = Ack{}
-	mi := &file_proto_work_proto_msgTypes[7]
+	mi := &file_proto_work_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -776,7 +831,7 @@ func (x *Ack) String() string {
 func (*Ack) ProtoMessage() {}
 
 func (x *Ack) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_work_proto_msgTypes[7]
+	mi := &file_proto_work_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -789,7 +844,7 @@ func (x *Ack) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ack.ProtoReflect.Descriptor instead.
 func (*Ack) Descriptor() ([]byte, []int) {
-	return file_proto_work_proto_rawDescGZIP(), []int{7}
+	return file_proto_work_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Ack) GetAssignmentId() string {
@@ -824,12 +879,13 @@ var File_proto_work_proto protoreflect.FileDescriptor
 
 const file_proto_work_proto_rawDesc = "" +
 	"\n" +
-	"\x10proto/work.proto\x12\x11ktwitness.work.v1\"\xf3\x01\n" +
+	"\x10proto/work.proto\x12\x11ktwitness.work.v1\"\xa2\x02\n" +
 	"\rWorkerMessage\x120\n" +
 	"\x05hello\x18\x01 \x01(\v2\x18.ktwitness.work.v1.HelloH\x00R\x05hello\x123\n" +
 	"\x06result\x18\x02 \x01(\v2\x19.ktwitness.work.v1.ResultH\x00R\x06result\x129\n" +
 	"\bprogress\x18\x03 \x01(\v2\x1b.ktwitness.work.v1.ProgressH\x00R\bprogress\x129\n" +
-	"\bcapacity\x18\x04 \x01(\v2\x1b.ktwitness.work.v1.CapacityH\x00R\bcapacityB\x05\n" +
+	"\bcapacity\x18\x04 \x01(\v2\x1b.ktwitness.work.v1.CapacityH\x00R\bcapacity\x12-\n" +
+	"\x04want\x18\x05 \x01(\v2\x17.ktwitness.work.v1.WantH\x00R\x04wantB\x05\n" +
 	"\x03msg\"\x84\x01\n" +
 	"\x0eWitnessMessage\x12?\n" +
 	"\n" +
@@ -843,19 +899,20 @@ const file_proto_work_proto_rawDesc = "" +
 	"\bparallel\x18\x03 \x01(\x05R\bparallel\x12\x18\n" +
 	"\aversion\x18\x04 \x01(\tR\aversion\x12\x1a\n" +
 	"\bplatform\x18\x05 \x01(\tR\bplatform\x12\x1a\n" +
-	"\bprotocol\x18\x06 \x01(\x05R\bprotocol\"\xdc\x01\n" +
+	"\bprotocol\x18\x06 \x01(\x05R\bprotocol\"\x1e\n" +
+	"\x04Want\x12\x16\n" +
+	"\x06epochs\x18\x01 \x01(\x05R\x06epochs\"\xcb\x01\n" +
 	"\n" +
 	"Assignment\x12\x1d\n" +
 	"\n" +
-	"proof_base\x18\a \x01(\tR\tproofBase\x12\x12\n" +
-	"\x04step\x18\b \x01(\x05R\x04step\x12\x14\n" +
-	"\x05block\x18\t \x01(\tR\x05block\x12\x0e\n" +
+	"proof_base\x18\a \x01(\tR\tproofBase\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06origin\x18\x02 \x01(\tR\x06origin\x12\x12\n" +
 	"\x04from\x18\x03 \x01(\x03R\x04from\x12\x0e\n" +
 	"\x02to\x18\x04 \x01(\x03R\x02to\x12\x14\n" +
 	"\x05nonce\x18\x05 \x01(\tR\x05nonce\x12#\n" +
-	"\rdeadline_unix\x18\x06 \x01(\x03R\fdeadlineUnix\"\x9c\x02\n" +
+	"\rdeadline_unix\x18\x06 \x01(\x03R\fdeadlineUnixJ\x04\b\b\x10\tJ\x04\b\t\x10\n" +
+	"R\x04stepR\x05block\"\x9c\x02\n" +
 	"\x06Result\x12#\n" +
 	"\rassignment_id\x18\x01 \x01(\tR\fassignmentId\x12\x14\n" +
 	"\x05nonce\x18\x02 \x01(\tR\x05nonce\x12\x16\n" +
@@ -897,31 +954,33 @@ func file_proto_work_proto_rawDescGZIP() []byte {
 	return file_proto_work_proto_rawDescData
 }
 
-var file_proto_work_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_proto_work_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_proto_work_proto_goTypes = []any{
 	(*WorkerMessage)(nil),  // 0: ktwitness.work.v1.WorkerMessage
 	(*WitnessMessage)(nil), // 1: ktwitness.work.v1.WitnessMessage
 	(*Hello)(nil),          // 2: ktwitness.work.v1.Hello
-	(*Assignment)(nil),     // 3: ktwitness.work.v1.Assignment
-	(*Result)(nil),         // 4: ktwitness.work.v1.Result
-	(*Progress)(nil),       // 5: ktwitness.work.v1.Progress
-	(*Capacity)(nil),       // 6: ktwitness.work.v1.Capacity
-	(*Ack)(nil),            // 7: ktwitness.work.v1.Ack
+	(*Want)(nil),           // 3: ktwitness.work.v1.Want
+	(*Assignment)(nil),     // 4: ktwitness.work.v1.Assignment
+	(*Result)(nil),         // 5: ktwitness.work.v1.Result
+	(*Progress)(nil),       // 6: ktwitness.work.v1.Progress
+	(*Capacity)(nil),       // 7: ktwitness.work.v1.Capacity
+	(*Ack)(nil),            // 8: ktwitness.work.v1.Ack
 }
 var file_proto_work_proto_depIdxs = []int32{
 	2, // 0: ktwitness.work.v1.WorkerMessage.hello:type_name -> ktwitness.work.v1.Hello
-	4, // 1: ktwitness.work.v1.WorkerMessage.result:type_name -> ktwitness.work.v1.Result
-	5, // 2: ktwitness.work.v1.WorkerMessage.progress:type_name -> ktwitness.work.v1.Progress
-	6, // 3: ktwitness.work.v1.WorkerMessage.capacity:type_name -> ktwitness.work.v1.Capacity
-	3, // 4: ktwitness.work.v1.WitnessMessage.assignment:type_name -> ktwitness.work.v1.Assignment
-	7, // 5: ktwitness.work.v1.WitnessMessage.ack:type_name -> ktwitness.work.v1.Ack
-	0, // 6: ktwitness.work.v1.Work.Session:input_type -> ktwitness.work.v1.WorkerMessage
-	1, // 7: ktwitness.work.v1.Work.Session:output_type -> ktwitness.work.v1.WitnessMessage
-	7, // [7:8] is the sub-list for method output_type
-	6, // [6:7] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	5, // 1: ktwitness.work.v1.WorkerMessage.result:type_name -> ktwitness.work.v1.Result
+	6, // 2: ktwitness.work.v1.WorkerMessage.progress:type_name -> ktwitness.work.v1.Progress
+	7, // 3: ktwitness.work.v1.WorkerMessage.capacity:type_name -> ktwitness.work.v1.Capacity
+	3, // 4: ktwitness.work.v1.WorkerMessage.want:type_name -> ktwitness.work.v1.Want
+	4, // 5: ktwitness.work.v1.WitnessMessage.assignment:type_name -> ktwitness.work.v1.Assignment
+	8, // 6: ktwitness.work.v1.WitnessMessage.ack:type_name -> ktwitness.work.v1.Ack
+	0, // 7: ktwitness.work.v1.Work.Session:input_type -> ktwitness.work.v1.WorkerMessage
+	1, // 8: ktwitness.work.v1.Work.Session:output_type -> ktwitness.work.v1.WitnessMessage
+	8, // [8:9] is the sub-list for method output_type
+	7, // [7:8] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	7, // [7:7] is the sub-list for extension extendee
+	0, // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_proto_work_proto_init() }
@@ -934,6 +993,7 @@ func file_proto_work_proto_init() {
 		(*WorkerMessage_Result)(nil),
 		(*WorkerMessage_Progress)(nil),
 		(*WorkerMessage_Capacity)(nil),
+		(*WorkerMessage_Want)(nil),
 	}
 	file_proto_work_proto_msgTypes[1].OneofWrappers = []any{
 		(*WitnessMessage_Assignment)(nil),
@@ -945,7 +1005,7 @@ func file_proto_work_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_work_proto_rawDesc), len(file_proto_work_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -115,8 +115,38 @@ func (s *Server) Session(stream pb.Work_SessionServer) error {
 	ctx := stream.Context()
 	errc := make(chan error, 1)
 
-	// Push assignments until the worker goes away.
-	go func() { errc <- s.dispatch(ctx, stream, hello, proofBase) }()
+	// Requests for work, from the read loop below to the dispatcher.
+	//
+	// Buffered and non-blocking on send: a worker that asks faster than the
+	// queue can answer should have its extra requests dropped, not queued.
+	// Every Want carries the CURRENT room, so the newest one is the only true
+	// number and a backlog of stale ones would hand out work against capacity
+	// that no longer exists.
+	wants := make(chan int, 1)
+
+	// Hello's parallel is the opening request. Without it a worker would sit
+	// silent until its own first Want, which costs a round of idle time on
+	// every reconnect — and reconnects are routine: a lid closing, a network
+	// changing, this witness restarting.
+	//
+	// A worker that declares nothing is given one epoch rather than none, and
+	// told so. Nothing is the literal reading and it is the wrong failure: the
+	// worker connects, is authorised, reports capacity, and silently never
+	// receives work — which looks from every angle like an empty queue. One
+	// epoch makes the misconfiguration visible in its own throughput instead.
+	opening := int(hello.Parallel)
+	if opening < 1 {
+		opening = 1
+		if s.Log != nil {
+			s.Log.Warn("worker declared no parallelism; giving it one epoch at a time",
+				"worker", hello.Name,
+				"note", "set Hello.parallel, or send a Want — this worker will be very slow")
+		}
+	}
+	wants <- opening
+
+	// Answer requests until the worker goes away.
+	go func() { errc <- s.dispatch(ctx, stream, hello, proofBase, wants) }()
 
 	// Read results until the worker stops sending.
 	for {
@@ -133,6 +163,22 @@ func (s *Server) Session(stream pb.Work_SessionServer) error {
 		switch m := msg.Msg.(type) {
 		case *pb.WorkerMessage_Result:
 			s.handleResult(stream, hello.Name, m.Result)
+		case *pb.WorkerMessage_Want:
+			// Newest wins. A full buffer means an earlier request is still
+			// unanswered, and this one supersedes it: both describe the same
+			// worker's room, and only the later one is current.
+			select {
+			case wants <- int(m.Want.Epochs):
+			default:
+				select {
+				case <-wants:
+				default:
+				}
+				select {
+				case wants <- int(m.Want.Epochs):
+				default:
+				}
+			}
 		case *pb.WorkerMessage_Capacity:
 			if s.OnCapacity != nil {
 				c := m.Capacity
@@ -156,76 +202,48 @@ func (s *Server) Session(stream pb.Work_SessionServer) error {
 	}
 }
 
-func (s *Server) dispatch(ctx context.Context, stream pb.Work_SessionServer, hello *pb.Hello, proofBase string) error {
-	idle := s.Idle
-	if idle <= 0 {
-		idle = 2 * time.Second
-	}
-	t := time.NewTimer(idle)
-	defer t.Stop()
+// dispatch answers requests for work. It does not decide when to send.
+//
+// It used to: lease a range, push it, then block until that range came back in
+// full before leasing another. Every worker held exactly one range whatever its
+// size — a forty-core box and a laptop got the same thing — and the pipeline
+// drained at every boundary while the last epoch finished and an ack
+// round-tripped. Before that it did the opposite and pushed forty ranges at
+// whichever worker connected first, every one counting down a deadline it could
+// not meet, while every other machine was told there was no work. One
+// assignment at a time was the correction to that, and it was the other error.
+//
+// The worker knows its own capacity, has always reported it, and for a long
+// time this only logged it. Now it asks and this answers.
+func (s *Server) dispatch(ctx context.Context, stream pb.Work_SessionServer, hello *pb.Hello, proofBase string, wants <-chan int) error {
 	for {
-		a, err := s.Queue.Lease(hello.Name, hello.Origins)
-		if err == nil {
-			send := &pb.WitnessMessage{Msg: &pb.WitnessMessage_Assignment{
-				Assignment: &pb.Assignment{
-					Id: a.ID, Origin: a.Origin, From: a.From, To: a.To,
-					Nonce: a.Nonce, DeadlineUnix: a.Deadline.Unix(),
-					ProofBase: proofBase,
-					Step:      int32(a.Step), Block: a.Block,
-				}}}
-			if err := stream.Send(send); err != nil {
-				return err
-			}
-			// One range at a time, because a lease starts running the moment it
-			// is handed out.
-			//
-			// This loop used to lease and send without pausing, which drained
-			// the whole queue to whichever worker connected first: forty ranges
-			// sitting in one stream's buffer, every one of them counting down a
-			// twenty-minute deadline it could not possibly be worked inside,
-			// while every other machine on the network was told there was no
-			// work. The worker itself takes one at a time — this now matches it.
-			if err := s.awaitSettled(ctx, a); err != nil {
-				return err
-			}
+		var want int
+		select {
+		case <-ctx.Done():
+			return nil
+		case want = <-wants:
+		}
+		if want < 1 {
 			continue
 		}
-		if !errors.Is(err, work.ErrNoWork) {
+		a, err := s.Queue.Lease(hello.Name, hello.Origins, want)
+		if errors.Is(err, work.ErrNoWork) {
+			// Nothing to give. The worker asks again on its own schedule
+			// rather than this holding the request open, so a queue that fills
+			// a moment later does not wait on a timer here.
+			continue
+		}
+		if err != nil {
 			return err
 		}
-		if !t.Stop() {
-			select {
-			case <-t.C:
-			default:
-			}
-		}
-		t.Reset(idle)
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-t.C:
-		}
-	}
-}
-
-// awaitSettled blocks until an assignment has come back in full or its lease
-// has lapsed. Polling rather than signalling: the two ways a range settles are
-// a result arriving and a deadline passing, and one clock covers both without a
-// second piece of state to keep consistent with the queue.
-func (s *Server) awaitSettled(ctx context.Context, a work.Assignment) error {
-	t := time.NewTicker(time.Second)
-	defer t.Stop()
-	for {
-		if s.Queue.Finished(a.ID) {
-			return nil
-		}
-		if !a.Deadline.IsZero() && time.Now().After(a.Deadline) {
-			return nil // the queue will reclaim it on the next lease
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-t.C:
+		send := &pb.WitnessMessage{Msg: &pb.WitnessMessage_Assignment{
+			Assignment: &pb.Assignment{
+				Id: a.ID, Origin: a.Origin, From: a.From, To: a.To,
+				Nonce: a.Nonce, DeadlineUnix: a.Deadline.Unix(),
+				ProofBase: proofBase,
+			}}}
+		if err := stream.Send(send); err != nil {
+			return err
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -29,7 +30,13 @@ import (
 type Runner struct {
 	// Next blocks until an assignment is available, or returns ErrNoWork to be
 	// asked again after Idle.
-	Next func(ctx context.Context) (Assignment, error)
+	// Next asks for up to `want` more epochs. It is the pull.
+	//
+	// The witness used to decide when to send and this was a bare receive from
+	// a channel — the worker had no way to say how much it could take, so it
+	// got one range at a time whatever it was. `want` is what this machine has
+	// room for right now, and the witness may answer with less.
+	Next func(ctx context.Context, want int) (Assignment, error)
 	// Verify rebuilds the two roots from the proof and returns them.
 	//
 	// It is not given the roots the operator published and does not decide
@@ -105,7 +112,17 @@ func DefaultParallel() int {
 	return n
 }
 
-// Run works assignments until the context ends.
+// Run keeps this machine's verification slots full until the context ends.
+//
+// A fixed pool of goroutines pulls epochs off one channel; a separate loop asks
+// for more work whenever the channel is short. Nothing waits for a range to
+// finish before the next one is requested, so the pipeline does not drain at
+// range boundaries.
+//
+// It used to: Next returned one assignment, do() spread the pool across exactly
+// that assignment's epochs, and everything stopped until the last one landed and
+// an ack round-tripped. Measured on a laptop that could work eight at a time,
+// twenty-three seconds passed between ranges of twelve epochs.
 func (r *Runner) Run(ctx context.Context) error {
 	idle := r.Idle
 	if idle <= 0 {
@@ -115,11 +132,99 @@ func (r *Runner) Run(ctx context.Context) error {
 	if timeout <= 0 {
 		timeout = 15 * time.Minute
 	}
+	par := DefaultParallel()
+	if r.Parallel != nil {
+		par = r.Parallel("")
+	}
+	if par < 1 {
+		par = 1
+	}
+
+	// Two contexts, and the split is the point.
+	//
+	// `ctx` governs whether to ask for MORE work: a cancelled parent stops the
+	// request loop immediately. `work` governs epochs already accepted, and
+	// deliberately survives the parent's cancellation — those epochs are out on
+	// a lease and the witness is waiting for them, so dropping them strands the
+	// range until its deadline and gains nothing. Each is still bounded by
+	// EpochTimeout, so this cannot hang.
+	//
+	// The first version used one context for both, and a shutdown mid-range
+	// silently discarded whatever was queued behind the epochs in flight.
+	work, stopWork := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopWork()
+
+	// Depth two: one epoch being worked per slot, and one queued behind it. Any
+	// deeper and this machine is holding a lease on work it will not start for
+	// a while, which is the mistake the old dispatcher made in the other
+	// direction — it pushed forty ranges at one worker, every one of them
+	// counting down a deadline it could not meet.
+	jobs := make(chan job, par*2)
+	var inFlight atomic.Int64
+
+	// Closed when reporting fails, which means the stream is gone. That is
+	// different from the parent being cancelled: there, epochs already accepted
+	// are still worth finishing because somebody is waiting for them. Here
+	// nobody is, so everything stops — including the request loop, which would
+	// otherwise go on asking a channel that has died.
+	//
+	// Without this the pool drained and Run never returned.
+	failed := make(chan struct{})
+	var failOnce sync.Once
+
+	var wg sync.WaitGroup
+	for i := 0; i < par; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				if work.Err() != nil {
+					inFlight.Add(-1)
+					continue
+				}
+				if err := r.one(work, j.a, j.epoch, timeout); err != nil {
+					// The results have nowhere to go: reporting failed, so
+					// every further epoch would be CPU spent on an answer
+					// nobody will receive.
+					failOnce.Do(func() {
+						stopWork()
+						close(failed)
+					})
+				}
+				inFlight.Add(-1)
+			}
+		}()
+	}
+	defer func() {
+		close(jobs)
+		wg.Wait()
+	}()
+
 	holding := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		select {
+		case <-failed:
+			return ErrReportFailed
+		default:
+		}
+		// Room for more? in-flight counts what is being worked and what is
+		// queued behind it, so this asks before the pool runs dry rather than
+		// after.
+		room := int64(par*2) - inFlight.Load()
+		if room <= 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-failed:
+				return ErrReportFailed
+			case <-time.After(100 * time.Millisecond):
+			}
+			continue
+		}
+
 		if r.BeforeNext != nil {
 			if err := r.BeforeNext(ctx); err != nil {
 				if ctx.Err() != nil {
@@ -151,7 +256,8 @@ func (r *Runner) Run(ctx context.Context) error {
 			}
 			holding = false
 		}
-		a, err := r.Next(ctx)
+
+		a, err := r.Next(ctx, int(room))
 		switch {
 		case err == ErrNoWork:
 			select {
@@ -163,42 +269,13 @@ func (r *Runner) Run(ctx context.Context) error {
 		case err != nil:
 			return err
 		}
-		r.do(ctx, a, timeout)
-	}
-}
-
-func (r *Runner) do(ctx context.Context, a Assignment, timeout time.Duration) {
-	par := DefaultParallel()
-	if r.Parallel != nil {
-		par = r.Parallel(a.Origin)
-	}
-	if par < 1 {
-		par = 1
-	}
-	if r.Log != nil {
-		r.Log.Info("assignment", "id", a.ID, "origin", a.Origin,
-			"from", a.From, "to", a.To, "parallel", par,
-			"lease", time.Until(a.Deadline).Round(time.Second).String())
-	}
-
-	// A range stops the moment its results have nowhere to go.
-	//
-	// Without this the worker carried on verifying into a closed stream: every
-	// epoch after a disconnect cost real CPU on somebody's laptop and was
-	// thrown away, and the range sat on a lease that could not be given back
-	// until it expired. Observed on the first restart the laptop survived —
-	// eight epochs verified and discarded before anyone noticed.
-	ctx, stopRange := context.WithCancel(ctx)
-	defer stopRange()
-
-	epochs := make(chan int64)
-	go func() {
-		defer close(epochs)
-		step := a.Step
-		if step < 1 {
-			step = 1
+		if r.Log != nil {
+			r.Log.Info("assignment", "id", a.ID, "origin", a.Origin,
+				"from", a.From, "to", a.To, "epochs", a.To-a.From+1,
+				"asked_for", room,
+				"lease", time.Until(a.Deadline).Round(time.Second).String())
 		}
-		for e := a.From; e <= a.To; e += step {
+		for e := a.From; e <= a.To; e++ {
 			// Past the deadline the range may already belong to somebody else,
 			// so continuing spends the scarcest resource on results that will
 			// be refused.
@@ -206,30 +283,26 @@ func (r *Runner) do(ctx context.Context, a Assignment, timeout time.Duration) {
 				if r.Log != nil {
 					r.Log.Warn("lease expired mid-assignment; stopping", "id", a.ID, "reached", e)
 				}
-				return
+				break
 			}
+			inFlight.Add(1)
 			select {
 			case <-ctx.Done():
-				return
-			case epochs <- e:
+				inFlight.Add(-1)
+				return ctx.Err()
+			case <-failed:
+				inFlight.Add(-1)
+				return ErrReportFailed
+			case jobs <- job{a: a, epoch: e}:
 			}
 		}
-	}()
-
-	var wg sync.WaitGroup
-	for i := 0; i < par; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for e := range epochs {
-				if err := r.one(ctx, a, e, timeout); err != nil {
-					stopRange()
-					return
-				}
-			}
-		}()
 	}
-	wg.Wait()
+}
+
+// job is one epoch and the assignment that authorises it.
+type job struct {
+	a     Assignment
+	epoch int64
 }
 
 // one verifies a single epoch and reports whatever came of it. It returns an

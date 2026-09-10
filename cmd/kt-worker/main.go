@@ -464,7 +464,6 @@ func (w *worker) run(ctx context.Context) error {
 					ID: a.Id, Origin: a.Origin, From: a.From, To: a.To,
 					Nonce: a.Nonce, Deadline: time.Unix(a.DeadlineUnix, 0),
 					ProofBase: a.ProofBase,
-					Step:      int64(a.Step), Block: a.Block,
 				}
 			case *pb.WitnessMessage_Ack:
 				if !m.Ack.Accepted {
@@ -580,10 +579,31 @@ func (w *worker) run(ctx context.Context) error {
 			}
 			return nil
 		},
-		Next: func(ctx context.Context) (work.Assignment, error) {
+		// Ask, then wait for the answer. This is the pull.
+		//
+		// `want` is what the Runner has room for right now — slots free in its
+		// pool plus the queue behind it — so a machine that has just finished
+		// eight epochs asks for eight, and one whose owner came back asks for
+		// two. The witness may answer with fewer or with nothing.
+		//
+		// A deadline on the wait, because "no work" arrives as silence: the
+		// witness does not hold a request open, so an empty queue looks
+		// identical to a slow one. Timing out and asking again costs a message
+		// and keeps the two distinguishable from here.
+		Next: func(ctx context.Context, want int) (work.Assignment, error) {
+			if err := stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Want{
+				Want: &pb.Want{Epochs: int32(want)},
+			}}); err != nil {
+				return work.Assignment{}, err
+			}
+			wait, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
 			select {
-			case <-ctx.Done():
-				return work.Assignment{}, ctx.Err()
+			case <-wait.Done():
+				if ctx.Err() != nil {
+					return work.Assignment{}, ctx.Err()
+				}
+				return work.Assignment{}, work.ErrNoWork
 			case a, ok := <-assignments:
 				if !ok {
 					return work.Assignment{}, <-recvErr

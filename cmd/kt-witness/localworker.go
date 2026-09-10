@@ -82,8 +82,12 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 		// No request gate here, deliberately: the width above is this host's
 		// yielding, and a second brake that can never release would be one
 		// silent stall waiting to happen.
-		Next: func(ctx context.Context) (work.Assignment, error) {
-			return q.Lease(name, originsOf(byOrigin))
+		// The witness's own worker pulls from the same queue as the borrowed
+		// ones, through a function call instead of a stream. That the two are
+		// the same code path is the point: whatever the queue does about
+		// leases, retries and adjacency, it does for this machine too.
+		Next: func(ctx context.Context, want int) (work.Assignment, error) {
+			return q.Lease(name, originsOf(byOrigin), want)
 		},
 		Verify: func(ctx context.Context, origin string, epoch int64, _ string) (string, string, error) {
 			// The proof base is ignored here: this worker shares a process with

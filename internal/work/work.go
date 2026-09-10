@@ -62,14 +62,6 @@ type Assignment struct {
 	// wastes the one resource this whole design exists to conserve.
 	Deadline time.Time `json:"deadline"`
 
-	// Step is the gap between epochs in this assignment: 2, so that a worker
-	// never holds two adjacent epochs. See LeasedBy for why that matters.
-	Step int64 `json:"step,omitempty"`
-
-	// Block groups the interleaved halves of one range, so a worker can be
-	// refused the other half.
-	Block string `json:"block,omitempty"`
-
 	// Worker is who currently holds this lease. Set on lease, empty while
 	// pending. It is what lets the proof server answer "may this machine read
 	// this epoch", which is the check that closes the root-chaining bypass.
@@ -154,7 +146,10 @@ type Hello struct {
 }
 
 var (
-	ErrNoWork       = errors.New("work: nothing to hand out")
+	ErrNoWork = errors.New("work: nothing to hand out")
+	// ErrReportFailed ends a session whose results have nowhere to go: every
+	// further epoch would be CPU spent on an answer nobody will receive.
+	ErrReportFailed = errors.New("work: results could not be reported")
 	ErrUnknownID    = errors.New("work: no such assignment")
 	ErrBadNonce     = errors.New("work: nonce does not match the assignment")
 	ErrLeaseExpired = errors.New("work: the lease for this assignment has expired")
@@ -167,22 +162,108 @@ var (
 // interval of duplicated work — against the cost of persisting a structure that
 // changes every few seconds.
 type Queue struct {
-	mu      sync.Mutex
-	pending []Assignment
-	leased  map[string]Assignment
-	lease   time.Duration
-	now     func() time.Time
-	nextSeq int
+	mu     sync.Mutex
+	leased map[string]Assignment
+	now    func() time.Time
+
+	// Origins is every log this queue serves, used when a worker declares none
+	// and to rotate between them fairly.
+	Origins []string
+
+	// rotate is where the round-robin over origins starts, advanced on every
+	// lease.
+	//
+	// Without it the first origin in the list wins every time a worker can do
+	// more than one, and a log whose epochs are slow to fetch holds the others
+	// back. That failure has now been fixed twice at other layers — a feeder
+	// loop that queued Meta until its depth limit and never reached WhatsApp,
+	// and a depth cap counted across every origin at once — so it goes here,
+	// where the choice is actually made.
+	rotate int
+
+	// Source answers what still needs auditing. The queue does not hold a list
+	// of pending work at all.
+	//
+	// It used to: a separate feeder walked each log's history on a thirty-second
+	// timer and pushed fixed-size chunks into a slice here. That feeder kept its
+	// own cursor, its own idea of which chunks were done, and its own depth cap
+	// — three pieces of state duplicating what the store already knew, and every
+	// one of them was wrong at some point today. The cursor only ever moved
+	// forward, so an epoch that failed was never offered again; the "is this
+	// chunk done" probe sampled one epoch in twenty-five; the depth cap was
+	// shared across logs, so a bandwidth-bound one starved a fast one out
+	// entirely and left a laptop idle in front of 7,877 unverified epochs.
+	//
+	// So the queue asks the store, at the moment somebody wants work. One
+	// source of truth, no timer, and no chunk size to get wrong.
+	Source Source
+
+	// cursor is where each origin's scan has reached. Not a record of what is
+	// done — the Source knows that — only a hint so consecutive requests do not
+	// re-scan the same prefix. It wraps.
+	cursor map[string]int64
+
+	// retry holds single epochs that came back unavailable, with the backoff
+	// they are serving. These are offered before anything the Source suggests,
+	// because an epoch that failed once is the work most likely to be missed.
+	retry []Assignment
 
 	// reported counts what has come back for each leased assignment, so a
-	// finished range can be released instead of sitting on a lease until it
-	// expires and is handed out again.
+	// finished range is released instead of sitting on a lease until it expires
+	// and is handed out again.
 	reported map[string]map[int64]bool
 
 	// attempts counts failures per epoch, so an epoch that is simply gone stops
 	// being rescheduled. Entries are dropped on success or on giving up.
 	attempts map[string]int
+
+	// deferred is when each failed epoch may be offered again.
+	//
+	// The backoff has to live here rather than in the Source, because the Source
+	// reads the store and the store says — correctly — that a failed epoch is
+	// unverified. Without this the queue would hand the same broken epoch out
+	// again the instant it came back, as fast as a worker could ask.
+	deferred map[string]time.Time
+
+	// perEpoch is an exponentially-weighted mean of how long one epoch actually
+	// takes, per origin, measured from the results workers report.
+	//
+	// It exists so the lease is not a constant. It was twenty minutes, chosen
+	// when twenty-five epochs cost about that much against the Rust verifier. An
+	// epoch now costs a couple of seconds, so a dead worker stranded its range
+	// for roughly fifty times longer than the work would have taken — and the
+	// only symptom is a queue that looks busy while nothing moves.
+	perEpoch map[string]time.Duration
+
+	// minLease floors the derived deadline, and is the whole answer before
+	// anything has been measured. It is a bound on the pessimism, not a
+	// schedule: the derivation grows past it as soon as one epoch has been
+	// timed, which is what stops a slow log's ranges expiring under the worker.
+	minLease time.Duration
+
+	nextSeq int
 }
+
+// Source returns the next contiguous run of epochs needing audit for one
+// origin, at or after `after`, at most n long. ok is false when there is
+// nothing left from there to the end of that log's history.
+//
+// Contiguous, and that is a change. Ranges used to be split into two
+// interleaved assignments — evens and odds — so that no worker held two
+// adjacent epochs, because a worker holding E and E+1 can answer for E without
+// doing the append-only check at all: the published roots chain, so curr_E is
+// prev_{E+1} is Root(unchanged_{E+1}), computable from the neighbour's proof
+// with the commitment never applied and the merged tree never built.
+//
+// The reasoning was right; the mechanism did not deliver it. The queue refused
+// the two halves only SIMULTANEOUSLY, and a worker was routinely handed the
+// second half a couple of minutes after finishing the first — nothing stopped
+// it keeping the proofs. So the adjacency was never withheld, and the machinery
+// cost the completion arithmetic that stalled a laptop for a lease at a time.
+//
+// What withholds it now is the canary, aimed at the part of the proof the
+// shortcut does not read. See internal/workrpc/proofs.go.
+type Source func(origin string, after int64, n int) (from, to int64, ok bool)
 
 const (
 	// maxAttempts is how many times an epoch that came back unavailable is
@@ -199,65 +280,85 @@ const (
 	// retryBase is the first backoff; it doubles per attempt. Long enough that
 	// a retry is not simply the same request into the same broken thing.
 	retryBase = time.Minute
+
+	// giveUpFor is how long an epoch the queue has given up on is left alone.
+	//
+	// A day rather than forever. The usual reason an epoch cannot be fetched is
+	// that it has aged out of the operator's storage, and that does not undo
+	// itself — but an operator restoring a bucket does happen, and a witness
+	// that stopped looking permanently would never find out.
+	giveUpFor = 24 * time.Hour
 )
 
-func NewQueue(lease time.Duration) *Queue {
-	if lease <= 0 {
-		lease = 10 * time.Minute
+func NewQueue(minLease time.Duration) *Queue {
+	if minLease <= 0 {
+		minLease = 2 * time.Minute
 	}
 	return &Queue{
 		leased:   map[string]Assignment{},
 		reported: map[string]map[int64]bool{},
 		attempts: map[string]int{},
-		lease:    lease, now: time.Now,
+		cursor:   map[string]int64{},
+		deferred: map[string]time.Time{},
+		perEpoch: map[string]time.Duration{},
+		minLease: minLease,
+		now:      time.Now,
 	}
 }
 
-func (q *Queue) holdsBlockLocked(worker, block string) bool {
-	for _, a := range q.leased {
-		if a.Worker == worker && a.Block == block {
-			return true
-		}
-	}
-	return false
-}
-
-// AddInterleaved queues one range as two assignments that skip each other's
-// epochs, so no worker can hold two adjacent ones.
-func (q *Queue) AddInterleaved(origin string, from, to int64) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.nextSeq++
-	block := fmt.Sprintf("%s#%d", origin, q.nextSeq)
-	for offset := int64(0); offset < 2; offset++ {
-		start := from + offset
-		if start > to {
-			continue
-		}
-		q.pending = append(q.pending, Assignment{
-			ID:     fmt.Sprintf("%s.%d", block, offset),
-			Origin: origin, From: start, To: to, Step: 2, Block: block,
-		})
-	}
-}
-
-// Add queues a range for dispatch.
-func (q *Queue) Add(origin string, from, to int64) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.nextSeq++
-	q.pending = append(q.pending, Assignment{
-		ID:     fmt.Sprintf("%s#%d", origin, q.nextSeq),
-		Origin: origin, From: from, To: to,
-	})
-}
-
-// Lease hands out the next range a worker can do, or ErrNoWork.
+// leaseForLocked is how long a worker gets for n epochs of this origin.
 //
-// Expired leases are reclaimed here rather than by a sweeper: the only moment
-// the answer matters is when somebody is asking for work, and a background
-// timer would be a second thing to get wrong.
-func (q *Queue) Lease(worker string, origins []string) (Assignment, error) {
+// Derived from what epochs of this log have actually been costing, times a
+// generous margin, floored. The constant it replaces was twenty minutes, chosen
+// when twenty-five epochs cost about that much against the Rust verifier; an
+// epoch now costs a couple of seconds, so an abandoned range was stranded for
+// roughly fifty times longer than the work would have taken, and the only
+// symptom is a queue that looks busy while nothing moves.
+func (q *Queue) leaseForLocked(origin string, n int) time.Duration {
+	per := q.perEpoch[origin]
+	if per <= 0 {
+		// Nothing measured yet, so the floor is the whole answer. It is the
+		// conservative direction on purpose: a lease that is too long merely
+		// delays reclaiming an abandoned range, while one that is too short
+		// expires under a worker doing real work and throws the answer away.
+		return q.minLease
+	}
+	d := time.Duration(n) * per * 4
+	if d < q.minLease {
+		d = q.minLease
+	}
+	return d
+}
+
+// observeLocked folds one measured epoch into the running mean.
+func (q *Queue) observeLocked(origin string, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	if cur := q.perEpoch[origin]; cur > 0 {
+		// Slow exponential mean: one unusually slow epoch should widen the
+		// lease a little, not quadruple it.
+		q.perEpoch[origin] = (cur*7 + d) / 8
+		return
+	}
+	q.perEpoch[origin] = d
+}
+
+// Lease hands a worker up to `want` contiguous epochs it can do.
+//
+// Pull, not push. The witness used to decide when to send: it leased a range,
+// pushed it, and blocked until that range came back in full — so every worker
+// held exactly one range whatever its size, and the pipeline drained at every
+// boundary. The worker knows its own capacity and has always reported it; now
+// it asks, and this answers.
+//
+// Retries first, then the Source. Expired leases are reclaimed here rather than
+// by a sweeper: the only moment the answer matters is when somebody is asking
+// for work, and a background timer would be a second thing to keep consistent.
+func (q *Queue) Lease(worker string, origins []string, want int) (Assignment, error) {
+	if want < 1 {
+		want = 1
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.reclaimLocked()
@@ -267,30 +368,151 @@ func (q *Queue) Lease(worker string, origins []string) (Assignment, error) {
 		can[o] = true
 	}
 	now := q.now()
-	for i, a := range q.pending {
+
+	// An epoch that failed once is the work most likely to be missed
+	// altogether, so it is offered before anything new.
+	for i, a := range q.retry {
 		if len(can) > 0 && !can[a.Origin] {
 			continue
 		}
 		if !a.notBefore.IsZero() && now.Before(a.notBefore) {
-			continue // a retry whose backoff has not elapsed
-		}
-		if a.Block != "" && q.holdsBlockLocked(worker, a.Block) {
-			// This worker already has the other half of this range. Handing it
-			// both would give it every epoch and its neighbour, which is the
-			// arrangement the interleaving exists to prevent.
 			continue
 		}
+		q.retry = append(q.retry[:i], q.retry[i+1:]...)
+		return q.handOutLocked(a, worker, now), nil
+	}
 
-		q.pending = append(q.pending[:i], q.pending[i+1:]...)
-		a.Nonce = newNonce()
-		a.notBefore = time.Time{}
-		a.Deadline = now.Add(q.lease)
-		a.Worker = worker
-		q.leased[a.ID] = a
-		q.reported[a.ID] = map[int64]bool{}
-		return a, nil
+	if q.Source == nil {
+		return Assignment{}, ErrNoWork
+	}
+	// A worker that declared no origins gets anything, which is what it meant.
+	try := origins
+	if len(try) == 0 {
+		try = q.Origins
+	}
+	if len(try) == 0 {
+		return Assignment{}, ErrNoWork
+	}
+	for i := range try {
+		origin := try[(q.rotate+i)%len(try)]
+		if len(can) > 0 && !can[origin] {
+			continue
+		}
+		if a, ok := q.nextRunLocked(origin, want, now); ok {
+			q.rotate++
+			return q.handOutLocked(a, worker, now), nil
+		}
 	}
 	return Assignment{}, ErrNoWork
+}
+
+// nextRunLocked asks the Source for a run this origin can offer, skipping what
+// is already out on a lease and wrapping once at the end of the history.
+func (q *Queue) nextRunLocked(origin string, want int, now time.Time) (Assignment, bool) {
+	at := q.cursor[origin]
+	for pass := 0; pass < 2; pass++ {
+		for probe := 0; probe < 8; probe++ {
+			from, to, ok := q.Source(origin, at, want)
+			if !ok {
+				break // nothing from here to the end; try again from the bottom
+			}
+			// Trim against what is already out. Two workers asking at the same
+			// moment must not be handed the same epochs, and the Source cannot
+			// know about leases — so that check belongs here.
+			f, t, free, next := q.trimLeasedLocked(origin, from, to)
+			if free {
+				f, t, free = q.trimDeferredLocked(origin, f, t, now)
+			}
+			if free {
+				q.cursor[origin] = t + 1
+				q.nextSeq++
+				return Assignment{
+					ID:     fmt.Sprintf("%s#%d", origin, q.nextSeq),
+					Origin: origin, From: f, To: t,
+				}, true
+			}
+			if next <= at {
+				next = to + 1 // never go backwards, whatever the trims said
+			}
+			at = next
+		}
+		at = 0 // wrap: the tail is done, so whatever is left is behind us
+	}
+	return Assignment{}, false
+}
+
+// trimLeasedLocked shortens a run so it does not overlap anything out on a
+// lease, returning the free portion and where to resume looking.
+//
+// Two workers asking at the same moment must not be handed the same epochs, and
+// the Source cannot know about leases — it reads the store, and the store
+// records verdicts, not who is currently working on what. So the check belongs
+// here.
+//
+// The `next` return is what the first version got wrong. When a run began
+// inside a lease it advanced past the whole RUN, so a lease covering 10..12 of
+// a run 10..20 discarded 13..20 as well — free work, dropped until the cursor
+// wrapped all the way round the history. Advancing past the LEASE is the
+// difference.
+func (q *Queue) trimLeasedLocked(origin string, from, to int64) (f, t int64, free bool, next int64) {
+	// Skip forward past any lease covering the start of the run. Repeated
+	// because leases can abut: one worker on 10..12 and another on 13..15.
+	for moved := true; moved; {
+		moved = false
+		for _, a := range q.leased {
+			if a.Origin == origin && from >= a.From && from <= a.To {
+				from = a.To + 1
+				moved = true
+			}
+		}
+		if from > to {
+			return 0, 0, false, from
+		}
+	}
+	// Then stop the run before the next lease that starts inside it.
+	for _, a := range q.leased {
+		if a.Origin == origin && a.From > from && a.From <= to {
+			to = a.From - 1
+		}
+	}
+	return from, to, from <= to, to + 1
+}
+
+// trimDeferredLocked drops epochs still serving a retry backoff from the front
+// of a run, and truncates it before the next one.
+//
+// The backoff has to be applied here rather than in the Source, because the
+// Source reads the store and the store says — correctly — that a failed epoch
+// is unverified. Without this the queue would hand the same broken epoch out
+// again the instant it came back, as fast as a worker could ask for it.
+//
+// Sparse by construction: these are epochs something went wrong with, so the
+// common case walks a short run and finds nothing.
+func (q *Queue) trimDeferredLocked(origin string, from, to int64, now time.Time) (int64, int64, bool) {
+	for from <= to {
+		if t, ok := q.deferred[epochKey(origin, from)]; ok && now.Before(t) {
+			from++
+			continue
+		}
+		break
+	}
+	for e := from; e <= to; e++ {
+		if t, ok := q.deferred[epochKey(origin, e)]; ok && now.Before(t) {
+			return from, e - 1, from <= e-1
+		}
+	}
+	return from, to, from <= to
+}
+
+func (q *Queue) handOutLocked(a Assignment, worker string, now time.Time) Assignment {
+	n := int(a.To-a.From) + 1
+	a.Nonce = newNonce()
+	a.notBefore = time.Time{}
+	a.Deadline = now.Add(q.leaseForLocked(a.Origin, n))
+	a.Worker = worker
+	q.leased[a.ID] = a
+	q.reported[a.ID] = map[int64]bool{}
+	return a
 }
 
 // Accept checks a result against the assignment it claims to answer.
@@ -310,9 +532,7 @@ func (q *Queue) Accept(r Result) error {
 		return ErrBadNonce
 	}
 	if q.now().After(a.Deadline) {
-		delete(q.leased, r.AssignmentID)
-		delete(q.reported, r.AssignmentID)
-		q.pending = append(q.pending, stripLease(a))
+		q.releaseLocked(a)
 		return ErrLeaseExpired
 	}
 	if r.Epoch < a.From || r.Epoch > a.To {
@@ -324,29 +544,28 @@ func (q *Queue) Accept(r Result) error {
 	//
 	// Nothing used to do this, and the consequence was quiet: a finished
 	// assignment sat in the leased map until its deadline, and reclaimLocked
-	// then put it back on the queue as though it had been abandoned. Every
-	// range would have been verified twice, once for real and once ten minutes
-	// later, and the only visible symptom is a coverage rate that is half what
-	// the hardware should give.
+	// then put it back as though it had been abandoned. Every range would have
+	// been verified twice, and the only visible symptom is a coverage rate that
+	// is half what the hardware should give.
+	//
+	// The count is To-From+1 again, plainly, because ranges are contiguous
+	// again. It briefly was (To-From)/step+1, for interleaved assignments, and
+	// getting that wrong did not fail — it stalled. The range never registered
+	// as finished, the dispatcher waited out the whole lease, and a machine that
+	// had done its work sat idle for twenty minutes looking healthy.
 	seen := q.reported[r.AssignmentID]
 	if seen == nil {
 		seen = map[int64]bool{}
 		q.reported[r.AssignmentID] = seen
 	}
 	seen[r.Epoch] = true
-	// Count the epochs this assignment actually contains, which is not
-	// To-From+1 once assignments count by two.
-	//
-	// Getting this wrong does not fail, it stalls: the range never registers as
-	// finished, the dispatcher waits out the full lease before offering the
-	// worker anything else, and a machine that has done its work sits idle for
-	// twenty minutes looking healthy. Observed exactly that — one assignment,
-	// thirteen epochs, then nothing, with twenty-nine more waiting in the queue.
-	step := a.Step
-	if step < 1 {
-		step = 1
+	if r.Err == "" {
+		// What this epoch actually cost, which is what sizes the next lease.
+		q.observeLocked(r.Origin, time.Duration(r.DurationMS)*time.Millisecond)
+		k := epochKey(r.Origin, r.Epoch)
+		delete(q.deferred, k)
 	}
-	if int64(len(seen)) == (a.To-a.From)/step+1 {
+	if int64(len(seen)) == a.To-a.From+1 {
 		delete(q.leased, r.AssignmentID)
 		delete(q.reported, r.AssignmentID)
 	}
@@ -384,16 +603,36 @@ func (q *Queue) Reschedule(origin string, epoch int64) (attempt int, requeued bo
 		// Accept the answer. The epoch is unavailable, which is a finding about
 		// the ecosystem rather than a failure of this queue, and the caller has
 		// already recorded it.
+		//
+		// Deferred for a long time rather than merely forgotten, because the
+		// Source would otherwise hand it straight back: the store records the
+		// epoch as unverified, which is true and is the whole point of
+		// recording it. Dropping the attempt counter alone would make the
+		// give-up unreachable in a new way — the queue would re-offer a
+		// permanently-lost epoch as fast as workers could ask, burning the
+		// ecosystem's scarcest resource re-discovering a fact already written
+		// down.
+		//
+		// Long, not forever. Data that has aged out is the common case and it
+		// does not come back; but an operator restoring a bucket is a thing
+		// that happens, and a witness that never looks again would never
+		// notice.
 		delete(q.attempts, k)
+		q.deferred[k] = q.now().Add(giveUpFor)
 		return n, false
 	}
 	q.attempts[k] = n
 
 	q.nextSeq++
-	q.pending = append(q.pending, Assignment{
+	notBefore := q.now().Add(retryBase << (n - 1))
+	// Also recorded as deferred, so the Source does not simply hand this epoch
+	// straight back. The store still says it is unverified — which is true, and
+	// exactly why the backoff has to live here rather than there.
+	q.deferred[k] = notBefore
+	q.retry = append(q.retry, Assignment{
 		ID:     fmt.Sprintf("%s#%d-retry%d", origin, q.nextSeq, n),
 		Origin: origin, From: epoch, To: epoch,
-		notBefore: q.now().Add(retryBase << (n - 1)),
+		notBefore: notBefore,
 	})
 	return n, true
 }
@@ -437,7 +676,11 @@ func (q *Queue) Depth() (pendingByOrigin, leasedByOrigin map[string]int) {
 	now := q.now()
 	pendingByOrigin = map[string]int{}
 	leasedByOrigin = map[string]int{}
-	for _, a := range q.pending {
+	// "Pending" is now retries waiting to be offered again. There is no queue
+	// of fresh work to count: what has not been audited lives in the store, and
+	// kt_witness_history_unverified_epochs is the number that answers "how much
+	// is left" — this one answers "how much has gone wrong".
+	for _, a := range q.retry {
 		if a.notBefore.IsZero() || !now.Before(a.notBefore) {
 			pendingByOrigin[a.Origin]++
 		}
@@ -459,7 +702,7 @@ func (q *Queue) Stats() (pending, leased int) {
 	defer q.mu.Unlock()
 	q.reclaimLocked()
 	now := q.now()
-	for _, a := range q.pending {
+	for _, a := range q.retry {
 		if a.notBefore.IsZero() || !now.Before(a.notBefore) {
 			pending++
 		}
@@ -486,7 +729,7 @@ func (q *Queue) StatsFor(origin string) (pending, leased int) {
 	defer q.mu.Unlock()
 	q.reclaimLocked()
 	now := q.now()
-	for _, a := range q.pending {
+	for _, a := range q.retry {
 		if a.Origin != origin {
 			continue
 		}
@@ -504,18 +747,26 @@ func (q *Queue) StatsFor(origin string) (pending, leased int) {
 
 func (q *Queue) reclaimLocked() {
 	now := q.now()
-	for id, a := range q.leased {
+	for _, a := range q.leased {
 		if now.After(a.Deadline) {
-			delete(q.leased, id)
-			delete(q.reported, id)
-			q.pending = append(q.pending, stripLease(a))
+			q.releaseLocked(a)
 		}
 	}
 }
 
-func stripLease(a Assignment) Assignment {
-	a.Nonce, a.Deadline, a.Worker = "", time.Time{}, ""
-	return a
+// releaseLocked drops a lease and rewinds that origin's cursor to the start of
+// the range, so it is offered again promptly.
+//
+// Nothing is put back on a list, because there is no list. The store still says
+// those epochs are unverified — that is what makes them work — so releasing the
+// lease is the whole of it. The rewind is only so the next request finds them
+// now rather than after a full pass over half a million epochs.
+func (q *Queue) releaseLocked(a Assignment) {
+	delete(q.leased, a.ID)
+	delete(q.reported, a.ID)
+	if at, ok := q.cursor[a.Origin]; !ok || at > a.From {
+		q.cursor[a.Origin] = a.From
+	}
 }
 
 func newNonce() string {
@@ -554,16 +805,7 @@ func (q *Queue) LeasedBy(worker, origin string, epoch int64) bool {
 		if epoch < a.From || epoch > a.To {
 			continue
 		}
-		// Membership, not just range: an assignment counting by two contains
-		// every other epoch, and the ones it skips are exactly the neighbours
-		// that would let this worker avoid the append-only check.
-		step := a.Step
-		if step < 1 {
-			step = 1
-		}
-		if (epoch-a.From)%step == 0 {
-			return true
-		}
+		return true
 	}
 	return false
 }
