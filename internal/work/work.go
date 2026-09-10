@@ -61,6 +61,10 @@ type Assignment struct {
 	// worker past it should stop: its results will be refused, and continuing
 	// wastes the one resource this whole design exists to conserve.
 	Deadline time.Time `json:"deadline"`
+
+	// ProofURL, when set, is where to fetch the proof instead of building the
+	// URL from the operator's log directory. Set only for canaries.
+	ProofURL string `json:"proof_url,omitempty"`
 }
 
 // Result is a worker's verdict on one epoch.
@@ -146,6 +150,9 @@ type Queue struct {
 	// attempts counts failures per epoch, so an epoch that is simply gone stops
 	// being rescheduled. Entries are dropped on success or on giving up.
 	attempts map[string]int
+
+	// canaries maps an assignment id to the corrupted proof it carries.
+	canaries map[string]*canary
 }
 
 const (
@@ -194,6 +201,21 @@ func (q *Queue) Add(origin string, from, to int64) {
 // the answer matters is when somebody is asking for work, and a background
 // timer would be a second thing to get wrong.
 func (q *Queue) Lease(worker string, origins []string) (Assignment, error) {
+	return q.leaseOne(worker, origins, true)
+}
+
+// LeaseExcludingCanaries is for a worker that shares this process.
+//
+// A canary tests whether a worker is really verifying, and one running inside
+// the witness is tested by audit.Canary on the way through the sidecar pool —
+// where the corrupted proof can be checked directly. Handing it a canary
+// through the queue would prove nothing and would consume one meant for a
+// machine that can actually be caught lying.
+func (q *Queue) LeaseExcludingCanaries(worker string, origins []string) (Assignment, error) {
+	return q.leaseOne(worker, origins, false)
+}
+
+func (q *Queue) leaseOne(worker string, origins []string, canaries bool) (Assignment, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.reclaimLocked()
@@ -209,6 +231,9 @@ func (q *Queue) Lease(worker string, origins []string) (Assignment, error) {
 		}
 		if !a.notBefore.IsZero() && now.Before(a.notBefore) {
 			continue // a retry whose backoff has not elapsed
+		}
+		if !canaries && a.ProofURL != "" {
+			continue
 		}
 		q.pending = append(q.pending[:i], q.pending[i+1:]...)
 		a.Nonce = newNonce()

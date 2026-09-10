@@ -53,6 +53,16 @@ type Canary struct {
 	// minutes.
 	Every int
 
+	// OnProof, if set, is handed a proof that has just verified, so something
+	// else can build a canary from it. Called at the same cadence as the
+	// in-process canary and given the file before it is deleted.
+	//
+	// Bytes that have already been checked, deliberately: a canary built from a
+	// proof we have not verified ourselves could fail for a reason unrelated to
+	// the bit that was flipped, and a canary that might legitimately fail
+	// proves nothing when it does.
+	OnProof func(logDirectory string, epoch int64, prevRoot, currRoot, proofPath string)
+
 	mu   sync.Mutex
 	seen int
 }
@@ -79,6 +89,9 @@ func (c *Canary) VerifyCached(ctx context.Context, logDirectory string, epoch in
 		return res, err
 	}
 
+	if c.OnProof != nil {
+		c.OnProof(logDirectory, epoch, prevRoot, currRoot, src)
+	}
 	if cErr := c.run(ctx, logDirectory, epoch, prevRoot, currRoot, src, timeout); cErr != nil && c.Log != nil {
 		c.Log.Warn("canary could not be run; no conclusion either way", "epoch", epoch, "err", cErr)
 		metrics.Inc("kt_witness_canary_error_total", nil)

@@ -79,9 +79,16 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 		// yielding, and a second brake that can never release would be one
 		// silent stall waiting to happen.
 		Next: func(ctx context.Context) (work.Assignment, error) {
-			return q.Lease(name, originsOf(byOrigin))
+			return q.LeaseExcludingCanaries(name, originsOf(byOrigin))
 		},
-		Verify: func(ctx context.Context, origin string, epoch int64) (string, string, error) {
+		Verify: func(ctx context.Context, origin string, epoch int64, proofURL string) (string, string, error) {
+			// The local worker is never sent a canary: it shares a process with
+			// the thing that would be testing it, so the test would prove
+			// nothing. Its verifier is covered by audit.Canary instead, which
+			// corrupts proofs on the way through the sidecar pool.
+			if proofURL != "" {
+				return "", "", fmt.Errorf("local worker was given a proof URL; canaries are for remote workers")
+			}
 			return verifyEpochHere(ctx, byOrigin[origin], sidecar, origin, epoch, timeout)
 		},
 		Report: func(ctx context.Context, res work.Result) error {

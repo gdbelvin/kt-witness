@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -24,7 +26,7 @@ import (
 type verifier interface {
 	// verify returns the root it computed and the root the operator signed.
 	// Deciding what a disagreement means is the witness's job, not this one's.
-	verify(ctx context.Context, origin string, epoch int64) (root, signed string, err error)
+	verify(ctx context.Context, origin string, epoch int64, proofURL string) (root, signed string, err error)
 }
 
 // akdVerifier replays a Meta or WhatsApp audit proof with the Rust sidecar.
@@ -57,22 +59,36 @@ type akdVerifier struct {
 	threads int
 }
 
-func (v akdVerifier) verify(ctx context.Context, origin string, epoch int64) (string, string, error) {
+func (v akdVerifier) verify(ctx context.Context, origin string, epoch int64, proofURL string) (string, string, error) {
 	s := v.src[origin]
 	if s == nil {
 		return "", "", fmt.Errorf("no log directory configured for %s", origin)
 	}
+	// The roots always come from the operator's own listing, never from the
+	// assignment — including when the witness supplies the proof. That is what
+	// makes this worker's verdict worth having, and it is what makes a canary
+	// work: a proof the witness corrupted cannot rebuild roots the operator
+	// published, so the only way to "pass" one is to not be verifying.
 	ref, err := s.ResolveEpoch(ctx, epoch)
 	if err != nil {
 		return "", "", fmt.Errorf("resolving %s epoch %d: %w", origin, epoch, err)
 	}
 
-	req, _ := json.Marshal(map[string]any{
+	fields := map[string]any{
 		"log_directory": ref.LogDirectory,
 		"epoch":         epoch,
 		"prev_root":     ref.PrevRoot,
 		"curr_root":     ref.CurrRoot,
-	})
+	}
+	if proofURL != "" {
+		path, err := fetchProof(ctx, proofURL)
+		if err != nil {
+			return "", "", fmt.Errorf("fetching the supplied proof: %w", err)
+		}
+		defer os.Remove(path)
+		fields["proof_path"] = path
+	}
+	req, _ := json.Marshal(fields)
 	cmd := exec.CommandContext(ctx, v.bin)
 	cmd.Stdin = strings.NewReader(string(req))
 	if v.threads > 0 {
@@ -157,7 +173,7 @@ type protonGPUVerifier struct {
 	dir string // where the retained tree and diffs live
 }
 
-func (v protonGPUVerifier) verify(ctx context.Context, origin string, epoch int64) (string, string, error) {
+func (v protonGPUVerifier) verify(ctx context.Context, origin string, epoch int64, _ string) (string, string, error) {
 	tree := fmt.Sprintf("%s/epoch_tree_%d.bin", v.dir, epoch)
 	cmd := exec.CommandContext(ctx, v.bin, tree)
 	out, err := cmd.Output()
@@ -172,4 +188,35 @@ func (v protonGPUVerifier) verify(ctx context.Context, origin string, epoch int6
 		return "", "", fmt.Errorf("%s output was not JSON: %s", v.bin, strings.TrimSpace(string(out)))
 	}
 	return r.Root, r.Signed, nil
+}
+
+// fetchProof downloads a proof the witness supplied, to a temp file the caller
+// deletes. Used only for canaries.
+func fetchProof(ctx context.Context, url string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GET %s: HTTP %s", url, resp.Status)
+	}
+	f, err := os.CreateTemp("", "kt-supplied-proof-*.bin")
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
 }

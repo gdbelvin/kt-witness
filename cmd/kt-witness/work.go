@@ -24,10 +24,10 @@ import (
 // startWorkChannel serves verification work to machines on this network.
 func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pace.Governor,
 	sidecar audit.Verifier, resolvers []audit.Resolver, timeout time.Duration,
-	log *slog.Logger) (func() map[string]time.Time, error) {
+	log *slog.Logger) (func() map[string]time.Time, *canaryMinter, error) {
 	note, err := workrpc.CheckListenAddr(cfg.Work.Listen)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if note != "" {
 		// WARN because it is the one thing about this channel this process
@@ -41,7 +41,7 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 	}
 	token := os.Getenv(env)
 	if token == "" {
-		return nil, fmt.Errorf("work channel: %s is not set; a missing token closes "+
+		return nil, nil, fmt.Errorf("work channel: %s is not set; a missing token closes "+
 			"the channel rather than opening it", env)
 	}
 
@@ -49,12 +49,34 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 	if cfg.Work.Lease != "" {
 		d, err := time.ParseDuration(cfg.Work.Lease)
 		if err != nil {
-			return nil, fmt.Errorf("work.lease: %w", err)
+			return nil, nil, fmt.Errorf("work.lease: %w", err)
 		}
 		lease = d
 	}
 
 	q := work.NewQueue(lease)
+
+	// Canaries need bytes only this witness controls, served where only this
+	// network can reach them. Same confinement rule as the work channel, for a
+	// related reason: the corrupted proof is not a secret, but which epochs are
+	// canaries is exactly what a worker must not learn.
+	var minter *canaryMinter
+	if addr := cfg.Work.ProofListen; addr != "" {
+		ps, bound, err := workrpc.NewProofServer(addr, log)
+		if err != nil {
+			return nil, nil, fmt.Errorf("canary proof server: %w", err)
+		}
+		host := cfg.Work.ProofHost
+		if host == "" {
+			host = bound
+		}
+		minter = &canaryMinter{q: q, proofs: ps, host: host, log: log, dir: os.TempDir()}
+		startCanaryFeed(ctx, minter)
+		log.Info("canary proof server listening", "addr", bound, "workers_dial", host)
+	} else {
+		log.Warn("no canary proof server configured; remote workers are not being tested",
+			"note", "a worker reporting the published root without verifying cannot be detected without this")
+	}
 	srv := &workrpc.Server{
 		Queue: q,
 		Token: token,
@@ -69,7 +91,7 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 
 	ln, err := net.Listen("tcp", cfg.Work.Listen)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// Match the workers' keepalives, and let a worker probe between
 	// assignments — an idle fleet is still a fleet, and a machine that sleeps
@@ -127,7 +149,7 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 		"origins", origins,
 		"note", "local network only; not published through the tunnel")
 
-	return srv.Workers, nil
+	return srv.Workers, minter, nil
 }
 
 // recordWorkerResult turns a worker's verdict into an audit record.
@@ -143,6 +165,13 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 // not built yet. Until it is, this channel should only be given to machines the
 // operator controls, which is also why the listener refuses a public address.
 func recordWorkerResult(db *store.Store, q *work.Queue, r work.Result, log *slog.Logger) error {
+	// A canary's verdict is about the worker, not about the log. Recording it
+	// as an audit would write "unverified" against an epoch that verifies
+	// perfectly well — a false hole in the coverage, which is the one number
+	// this witness must not get wrong in that direction.
+	if checkCanary(q, r, log) {
+		return nil
+	}
 	if r.Err != "" {
 		// Unavailable is an answer, and the worker was right to send it rather
 		// than retry on its own. Two things follow from it.

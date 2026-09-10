@@ -129,6 +129,7 @@ func (s *Server) dispatch(ctx context.Context, stream pb.Work_SessionServer, hel
 				Assignment: &pb.Assignment{
 					Id: a.ID, Origin: a.Origin, From: a.From, To: a.To,
 					Nonce: a.Nonce, DeadlineUnix: a.Deadline.Unix(),
+					ProofUrl: a.ProofURL,
 				}}}
 			if err := stream.Send(send); err != nil {
 				return err

@@ -147,6 +147,16 @@ type config struct {
 	// local refuses to start, and a missing token closes the channel rather
 	// than opening it.
 	Work struct {
+		// ProofListen is where corrupted canary proofs are served, and must be
+		// a LAN address for the same reason the work channel must. Empty
+		// disables canaries for remote workers, which means a worker that
+		// reports the published root without verifying cannot be caught.
+		ProofListen string `json:"proof_listen"`
+		// ProofHost is what a worker should dial to reach it — the host's LAN
+		// address and published port, which is not what the container sees
+		// itself bound to.
+		ProofHost string `json:"proof_host"`
+
 		Listen   string `json:"listen"`
 		TokenEnv string `json:"token_env"`
 		Lease    string `json:"lease"`
@@ -603,6 +613,9 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 	}
 
 	var auditor *audit.Auditor
+	// Held so the work channel can hand it a verified proof once the queue
+	// exists; the verifier is built before the channel it serves.
+	var canaryV *audit.Canary
 	var auditInterval time.Duration
 	var resolvers []audit.Resolver
 	if cfg.Audit.SidecarPath != "" {
@@ -637,7 +650,8 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		// retained proof before the shadow deletes it.
 		if cfg.Audit.CanaryEvery >= 0 {
 			pool.KeepProofs()
-			sidecar = &audit.Canary{Primary: pool, Log: log, Every: cfg.Audit.CanaryEvery}
+			canaryV = &audit.Canary{Primary: pool, Log: log, Every: cfg.Audit.CanaryEvery}
+			sidecar = canaryV
 			log.Info("canary verification enabled",
 				"every", canaryEvery(cfg.Audit.CanaryEvery),
 				"note", "a corrupted proof that verifies means every verdict from that verifier is worthless")
@@ -761,7 +775,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 				wTimeout = auditor.Timeout
 			}
 		}
-		w, err := startWorkChannel(ctx, cfg, db, governorFor(auditor), wSidecar, wResolvers, wTimeout, log)
+		w, minter, err := startWorkChannel(ctx, cfg, db, governorFor(auditor), wSidecar, wResolvers, wTimeout, log)
 		if err != nil {
 			// Refusing to start is the point. A work channel that silently did
 			// not come up would leave the witness looking healthy while the
@@ -770,6 +784,27 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 			os.Exit(1)
 		}
 		workers = w
+
+		// Now that the queue exists, let the in-process canary hand it a
+		// verified proof to build a worker canary from. Wired here rather than
+		// at construction because the verifier is built before the channel it
+		// serves, and a package-level hook to bridge that would be a global for
+		// the sake of an ordering detail.
+		if canaryV != nil && minter != nil {
+			byDir := map[string]string{}
+			for _, l := range cfg.Logs {
+				if l.Type == "akd" && l.LogDirectory != "" {
+					byDir[strings.TrimSuffix(l.LogDirectory, "/")] = l.Origin
+				}
+			}
+			canaryV.OnProof = func(dir string, epoch int64, prev, curr, path string) {
+				origin := byDir[strings.TrimSuffix(dir, "/")]
+				if origin == "" {
+					return
+				}
+				minter.offerCanary(origin, epoch, prev, curr, path)
+			}
+		}
 	}
 	defer stop()
 

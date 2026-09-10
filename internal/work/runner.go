@@ -39,7 +39,7 @@ type Runner struct {
 	// worker reports it and moves on; rescheduling is the queue's business,
 	// because a client that decided when to retry would be making a scheduling
 	// decision using only its own narrow view of one machine.
-	Verify func(ctx context.Context, origin string, epoch int64) (root, signed string, err error)
+	Verify func(ctx context.Context, origin string, epoch int64, proofURL string) (root, signed string, err error)
 	// Report records one verdict. Calls are serialised, so an implementation
 	// writing to a gRPC stream needs no lock of its own.
 	Report func(ctx context.Context, r Result) error
@@ -223,7 +223,7 @@ func (r *Runner) one(ctx context.Context, a Assignment, e int64, timeout time.Du
 		Epoch: e, Worker: r.Name,
 	}
 	ec, cancel := context.WithTimeout(ctx, timeout)
-	root, signed, err := r.Verify(ec, a.Origin, e)
+	root, signed, err := r.Verify(ec, a.Origin, e, a.ProofURL)
 	cancel()
 	if err != nil {
 		// Unavailable is an answer. The queue decides whether and when to try

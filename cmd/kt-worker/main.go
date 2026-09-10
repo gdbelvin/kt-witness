@@ -352,6 +352,7 @@ func (w *worker) run(ctx context.Context) error {
 				assignments <- work.Assignment{
 					ID: a.Id, Origin: a.Origin, From: a.From, To: a.To,
 					Nonce: a.Nonce, Deadline: time.Unix(a.DeadlineUnix, 0),
+					ProofURL: a.ProofUrl,
 				}
 			case *pb.WitnessMessage_Ack:
 				if !m.Ack.Accepted {
@@ -452,12 +453,12 @@ func (w *worker) run(ctx context.Context) error {
 				return a, nil
 			}
 		},
-		Verify: func(ctx context.Context, origin string, epoch int64) (string, string, error) {
+		Verify: func(ctx context.Context, origin string, epoch int64, proofURL string) (string, string, error) {
 			v, ok := w.verifiers[origin]
 			if !ok {
 				return "", "", fmt.Errorf("no verifier configured for %s", origin)
 			}
-			return v.verify(ctx, origin, epoch)
+			return v.verify(ctx, origin, epoch, proofURL)
 		},
 		Report: func(ctx context.Context, res work.Result) error {
 			if res.Verified {
