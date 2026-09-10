@@ -53,7 +53,9 @@ func (akdVerifier) verify(ctx context.Context, origin string, epoch int64, proof
 	if proofBase == "" {
 		return "", "", fmt.Errorf("no proof source: this worker does not fetch from the operator")
 	}
-	url := fmt.Sprintf("%s/proof/%s/%d", strings.TrimSuffix(proofBase, "/"), origin, epoch)
+	// The base already carries this session's token; the worker simply uses the
+	// URL it was given.
+	url := fmt.Sprintf("%s/%s/%d", strings.TrimSuffix(proofBase, "/"), origin, epoch)
 	data, err := fetchProof(ctx, url)
 	if err != nil {
 		return "", "", fmt.Errorf("fetching the proof: %w", err)

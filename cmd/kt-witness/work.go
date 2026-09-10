@@ -104,11 +104,12 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 			return nil, fmt.Errorf("proof server: %w", err)
 		}
 		proofs = ps
+		ps.MayRead = q.LeasedBy
 		proofBase = cfg.Work.ProofHost
 		if proofBase == "" {
 			proofBase = bound
 		}
-		proofBase = "http://" + proofBase
+		proofBase = "http://" + proofBase + "/proof"
 		log.Info("serving proofs to workers", "addr", bound, "workers_dial", proofBase,
 			"canary_every", canaryEvery(cfg.Work.CanaryEvery),
 			"note", "one proof in this many has a bit flipped; the worker is not told which")
@@ -120,6 +121,7 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 	srv := &workrpc.Server{
 		Queue:     q,
 		ProofBase: proofBase,
+		Proofs:    proofs,
 		Token:     token,
 		Log:       log,
 		OnResult: func(r work.Result) error {
@@ -214,18 +216,39 @@ func recordWorkerResult(ctx context.Context, db *store.Store, q *work.Queue,
 	// perfectly well would put a false hole in the coverage, which is the one
 	// number this witness must not get wrong in that direction.
 	if proofs != nil && proofs.WasCanary(r.Origin, r.Epoch) {
-		if !r.Verified {
+		// Decided on the ROOTS, not on a verdict field.
+		//
+		// This branch used to read r.Verified, which no worker sets and nothing
+		// assigns until sixty lines below — so every canary counted as caught
+		// and the alarm was unreachable. That was my regression: the protocol
+		// stopped carrying a worker verdict when workers began reporting
+		// computed roots, and this check was left reading the field that went
+		// away. A detector that cannot fire is worse than none, because it
+		// reads as evidence.
+		//
+		// A corrupted proof cannot rebuild the roots the operator published. So
+		// a worker caught it if it reported an error or roots that do not
+		// match; it missed it only by reporting the published values, which it
+		// could not have computed from what it was given.
+		ref, refErr := resolvePublished(ctx, resolvers, r.Origin, r.Epoch)
+		caught := r.Err != "" || refErr != nil ||
+			r.ComputedPrev != ref.PrevRoot || r.ComputedCurr != ref.CurrRoot
+		if caught {
 			metrics.Inc("kt_witness_worker_canary_caught_total", map[string]string{"worker": r.Worker})
 			log.Info("worker rejected a corrupted proof, as it must",
 				"worker", r.Worker, "origin", r.Origin, "epoch", r.Epoch, "reported", r.Err)
 		} else {
 			metrics.Inc("kt_witness_worker_canary_missed_total", map[string]string{"worker": r.Worker})
-			log.Error("A WORKER PASSED A CORRUPTED PROOF AS VERIFIED — it is not verifying "+
-				"anything, and every result it has reported must be treated as unproven. "+
-				"Stop giving it work and re-audit what it claimed",
+			log.Error("A WORKER RETURNED THE PUBLISHED ROOTS FOR A CORRUPTED PROOF — it "+
+				"cannot have computed them from what it was served, so it is not verifying. "+
+				"Every result it has reported must be treated as unproven",
 				"worker", r.Worker, "origin", r.Origin, "epoch", r.Epoch,
-				"assignment", r.AssignmentID, "roots_it_reported", r.ComputedPrev+"/"+r.ComputedCurr)
+				"assignment", r.AssignmentID)
 		}
+		// The epoch itself is still unaudited: this proof was corrupted on
+		// purpose, so nobody has checked the real one. Put it back rather than
+		// leaving a hole the feeder's cursor has already moved past.
+		q.Reschedule(r.Origin, r.Epoch)
 		return nil
 	}
 	if r.Err != "" {

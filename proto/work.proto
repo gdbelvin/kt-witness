@@ -67,6 +67,19 @@ message Hello {
   // Free-text, for the operator's own benefit when something looks wrong.
   string version = 4;
   string platform = 5;
+
+  // The protocol this worker speaks. A session whose protocol differs from the
+  // witness's is refused, loudly, rather than served.
+  //
+  // This exists because a stale worker is not a worker that fails: protobuf
+  // fields are positional, so an old build's `root` arrives in the field now
+  // called `computed_prev_root` and the witness records the resulting mismatch
+  // as a fact about the LOG. Two workers running a build one commit old wrote
+  // roughly 3,300 false "unverified" epochs that way, which is a false hole in
+  // the coverage — the one number this witness must not get wrong in that
+  // direction. Refusing the session costs a restart; accepting it corrupts the
+  // record silently.
+  int32 protocol = 6;
 }
 
 // Assignment is a contiguous range of epochs on one log.
@@ -92,6 +105,21 @@ message Assignment {
   // from here. Serving the bytes lets the witness test a worker; it does not
   // let it make one agree.
   string proof_base = 7;
+
+  // Epochs in this assignment are from..to counting by step.
+  //
+  // Step is 2, not 1, and that is a security property rather than a
+  // scheduling one. A worker holding epoch E and epoch E+1 can answer for E
+  // without checking anything: the published roots chain, so curr_E equals
+  // prev_{E+1} equals Root(unchanged_{E+1}) — computable from the neighbour's
+  // proof alone, with the commitment never applied and the merged tree never
+  // built. Interleaving denies it the neighbour.
+  int32 step = 8;
+
+  // Block groups the interleaved halves of one range. A worker is never leased
+  // two assignments from the same block, because holding both would hand it
+  // the neighbours the step exists to withhold.
+  string block = 9;
 
   string id = 1;
   string origin = 2;

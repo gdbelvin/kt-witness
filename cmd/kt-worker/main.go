@@ -305,6 +305,7 @@ func (w *worker) run(ctx context.Context) error {
 		// buys ranges that miss their deadline.
 		Parallel: int32(par),
 		Version:  version,
+		Protocol: work.ProtocolVersion,
 		Platform: runtime.GOOS + "/" + runtime.GOARCH,
 	}}}); err != nil {
 		return err
@@ -339,6 +340,7 @@ func (w *worker) run(ctx context.Context) error {
 					ID: a.Id, Origin: a.Origin, From: a.From, To: a.To,
 					Nonce: a.Nonce, Deadline: time.Unix(a.DeadlineUnix, 0),
 					ProofBase: a.ProofBase,
+					Step:      int64(a.Step), Block: a.Block,
 				}
 			case *pb.WitnessMessage_Ack:
 				if !m.Ack.Accepted {

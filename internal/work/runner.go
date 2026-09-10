@@ -186,7 +186,11 @@ func (r *Runner) do(ctx context.Context, a Assignment, timeout time.Duration) {
 	epochs := make(chan int64)
 	go func() {
 		defer close(epochs)
-		for e := a.From; e <= a.To; e++ {
+		step := a.Step
+		if step < 1 {
+			step = 1
+		}
+		for e := a.From; e <= a.To; e += step {
 			// Past the deadline the range may already belong to somebody else,
 			// so continuing spends the scarcest resource on results that will
 			// be refused.

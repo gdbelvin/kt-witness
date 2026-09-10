@@ -2,12 +2,15 @@ package workrpc
 
 import (
 	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
+
+	"github.com/gdbsecurity/kt-witness/internal/metrics"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,13 +54,52 @@ type ProofServer struct {
 	// Fetch returns the proof for one epoch, as the operator published it.
 	Fetch func(origin string, epoch int64) (io.ReadCloser, int64, error)
 
+	// MayRead reports whether this worker currently holds a lease covering the
+	// epoch it is asking for. It is the authorisation, and it is what closes
+	// the root-chaining bypass described below.
+	MayRead func(worker, origin string, epoch int64) bool
+
 	// Every is the canary rate: 100 corrupts one proof in a hundred. Zero means
 	// that default.
 	Every int
 
 	mu       sync.Mutex
 	seen     int
-	canaries map[string]int64 // "origin\x00epoch" -> when it was served
+	canaries map[string]int64  // "origin\x00epoch" -> when it was served
+	sessions map[string]string // per-session token -> worker name
+}
+
+// Session registers a token for one worker's session and returns it. The token
+// goes into the proof base URL that session is given, so a worker authenticates
+// simply by using the URL it was handed.
+func (p *ProofServer) Session(worker string) (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("no randomness for a session token: %w", err)
+	}
+	token := hex.EncodeToString(b[:])
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.sessions == nil {
+		p.sessions = map[string]string{}
+	}
+	p.sessions[token] = worker
+	return token, nil
+}
+
+// EndSession forgets a token when its stream closes, so a disconnected worker
+// cannot keep reading proofs.
+func (p *ProofServer) EndSession(token string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.sessions, token)
+}
+
+func (p *ProofServer) workerFor(token string) (string, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	w, ok := p.sessions[token]
+	return w, ok
 }
 
 // NewProofServer starts serving on addr, which must be a LAN address for the
@@ -75,7 +117,8 @@ func NewProofServer(addr string, log *slog.Logger, fetch func(string, int64) (io
 	if err != nil {
 		return nil, "", err
 	}
-	p := &ProofServer{Log: log, Fetch: fetch, Every: every, canaries: map[string]int64{}}
+	p := &ProofServer{Log: log, Fetch: fetch, Every: every,
+		canaries: map[string]int64{}, sessions: map[string]string{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/proof/", p.serve)
 	srv := &http.Server{
@@ -93,9 +136,15 @@ func NewProofServer(addr string, log *slog.Logger, fetch func(string, int64) (io
 	return p, ln.Addr().String(), nil
 }
 
-// serve answers /proof/{origin}/{epoch}.
+// serve answers /proof/{session}/{origin}/{epoch}.
 func (p *ProofServer) serve(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/proof/")
+	j := strings.Index(rest, "/")
+	if j < 0 {
+		http.NotFound(w, r)
+		return
+	}
+	session, rest := rest[:j], rest[j+1:]
 	i := strings.LastIndex(rest, "/")
 	if i < 0 {
 		http.NotFound(w, r)
@@ -104,6 +153,27 @@ func (p *ProofServer) serve(w http.ResponseWriter, r *http.Request) {
 	origin, epochStr := rest[:i], rest[i+1:]
 	epoch, err := strconv.ParseInt(epochStr, 10, 64)
 	if err != nil || origin == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	worker, ok := p.workerFor(session)
+	if !ok {
+		// An unknown session. Answered the same way as a missing proof: a
+		// caller learns that it cannot have this, not why, and not whether the
+		// epoch exists.
+		http.NotFound(w, r)
+		return
+	}
+	if p.MayRead != nil && !p.MayRead(worker, origin, epoch) {
+		// Asking for an epoch it does not hold is the signature of the
+		// root-chaining bypass, so it is logged rather than merely refused.
+		if p.Log != nil {
+			p.Log.Warn("worker asked for a proof outside its assignment",
+				"worker", worker, "origin", origin, "epoch", epoch,
+				"note", "this is what a worker skipping the append-only check would do")
+		}
+		metricsIncOutOfLease()
 		http.NotFound(w, r)
 		return
 	}
@@ -220,4 +290,8 @@ func (p *ProofServer) Outstanding() int {
 
 func key(origin string, epoch int64) string {
 	return origin + "\x00" + strconv.FormatInt(epoch, 10)
+}
+
+func metricsIncOutOfLease() {
+	metrics.Inc("kt_witness_proof_out_of_lease_total", nil)
 }

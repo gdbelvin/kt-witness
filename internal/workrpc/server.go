@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -44,6 +45,11 @@ type Server struct {
 	// none of them is distinguishable by carrying it.
 	ProofBase string
 
+	// Proofs, when set, issues a per-session token and authorises reads against
+	// the leases this queue has granted. Without it a worker could fetch any
+	// epoch, including the neighbour that lets it skip the append-only check.
+	Proofs *ProofServer
+
 	// Idle is how long to wait before asking the queue again when it had
 	// nothing. Short enough that a freed range is picked up promptly, long
 	// enough that an idle fleet is not a busy loop.
@@ -68,8 +74,39 @@ func (s *Server) Session(stream pb.Work_SessionServer) error {
 		return status.Error(codes.InvalidArgument,
 			"the first message must be a Hello naming the worker")
 	}
+	// A worker speaking a different protocol is refused rather than served.
+	//
+	// Silence is the danger here, not failure. Protobuf fields are positional,
+	// so an old build's verdict arrives in the field now called
+	// computed_prev_root, the roots do not match, and the witness records that
+	// as a fact about the log — a false hole in the coverage, written
+	// confidently. Two stale workers did exactly that.
+	if hello.Protocol != work.ProtocolVersion {
+		if s.Log != nil {
+			s.Log.Error("refusing a worker that speaks a different protocol; rebuild it",
+				"worker", hello.Name, "worker_protocol", hello.Protocol,
+				"witness_protocol", work.ProtocolVersion, "worker_version", hello.Version)
+		}
+		return status.Errorf(codes.FailedPrecondition,
+			"this witness speaks protocol %d and you sent %d — rebuild the worker",
+			work.ProtocolVersion, hello.Protocol)
+	}
+
 	s.track(hello.Name, true)
 	defer s.track(hello.Name, false)
+
+	// One token per session, carried in the proof URLs this session is given.
+	// A worker authenticates by using the URL it was handed, and the token dies
+	// with the stream so a disconnected worker stops being able to read.
+	proofBase := s.ProofBase
+	if s.Proofs != nil && proofBase != "" {
+		token, err := s.Proofs.Session(hello.Name)
+		if err != nil {
+			return status.Error(codes.Internal, "cannot issue a proof session")
+		}
+		defer s.Proofs.EndSession(token)
+		proofBase = strings.TrimSuffix(proofBase, "/") + "/" + token
+	}
 	if s.Log != nil {
 		s.Log.Info("worker connected", "name", hello.Name, "origins", hello.Origins,
 			"parallel", hello.Parallel, "platform", hello.Platform)
@@ -79,7 +116,7 @@ func (s *Server) Session(stream pb.Work_SessionServer) error {
 	errc := make(chan error, 1)
 
 	// Push assignments until the worker goes away.
-	go func() { errc <- s.dispatch(ctx, stream, hello) }()
+	go func() { errc <- s.dispatch(ctx, stream, hello, proofBase) }()
 
 	// Read results until the worker stops sending.
 	for {
@@ -119,7 +156,7 @@ func (s *Server) Session(stream pb.Work_SessionServer) error {
 	}
 }
 
-func (s *Server) dispatch(ctx context.Context, stream pb.Work_SessionServer, hello *pb.Hello) error {
+func (s *Server) dispatch(ctx context.Context, stream pb.Work_SessionServer, hello *pb.Hello, proofBase string) error {
 	idle := s.Idle
 	if idle <= 0 {
 		idle = 2 * time.Second
@@ -133,7 +170,8 @@ func (s *Server) dispatch(ctx context.Context, stream pb.Work_SessionServer, hel
 				Assignment: &pb.Assignment{
 					Id: a.ID, Origin: a.Origin, From: a.From, To: a.To,
 					Nonce: a.Nonce, DeadlineUnix: a.Deadline.Unix(),
-					ProofBase: s.ProofBase,
+					ProofBase: proofBase,
+					Step:      int32(a.Step), Block: a.Block,
 				}}}
 			if err := stream.Send(send); err != nil {
 				return err

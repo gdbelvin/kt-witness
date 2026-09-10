@@ -63,7 +63,7 @@ func TestAWorkerIsDispatchedAndItsResultRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Hello{
-		Hello: &pb.Hello{Name: "laptop", Origins: []string{"m/kt"}}}}); err != nil {
+		Hello: &pb.Hello{Name: "laptop", Origins: []string{"m/kt"}, Protocol: work.ProtocolVersion}}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -116,7 +116,7 @@ func TestAReplayedNonceIsRefusedAndExplained(t *testing.T) {
 	ctx, cancel := context.WithTimeout(authed(context.Background(), "t"), 5*time.Second)
 	defer cancel()
 	stream, _ := dial(t, s).Session(ctx)
-	stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Hello{Hello: &pb.Hello{Name: "w"}}})
+	stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Hello{Hello: &pb.Hello{Name: "w", Protocol: work.ProtocolVersion}}})
 	m, err := stream.Recv()
 	if err != nil {
 		t.Fatal(err)
@@ -190,7 +190,7 @@ func TestAWorkerIsGivenOneRangeAtATime(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Hello{
-		Hello: &pb.Hello{Name: "laptop", Origins: []string{"m/kt"}}}}); err != nil {
+		Hello: &pb.Hello{Name: "laptop", Origins: []string{"m/kt"}, Protocol: work.ProtocolVersion}}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -243,4 +243,40 @@ func TestAWorkerIsGivenOneRangeAtATime(t *testing.T) {
 		}
 	}
 	t.Error("no further range after the first was completed")
+}
+
+// A worker on the wrong protocol is refused, not served.
+//
+// This is the check that was missing when two workers ran a build one commit
+// old and wrote roughly 3,300 false "unverified" epochs. Protobuf fields are
+// positional, so a stale worker does not fail — its old verdict lands in the
+// field now called computed_prev_root, the roots do not match, and the witness
+// records that as a fact about the LOG. A false hole in the coverage is the one
+// error this witness must not make in that direction, and it was making it
+// silently.
+func TestAWorkerOnTheWrongProtocolIsRefused(t *testing.T) {
+	q := work.NewQueue(time.Minute)
+	q.Add("m/kt", 1, 1)
+	s := &Server{Queue: q, Token: "s3cret", Idle: 10 * time.Millisecond,
+		OnResult: func(work.Result) error { return nil }}
+
+	ctx, cancel := context.WithTimeout(authed(context.Background(), "s3cret"), 5*time.Second)
+	defer cancel()
+	stream, err := dial(t, s).Session(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An older build: no protocol field at all, which arrives as zero.
+	if err := stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Hello{
+		Hello: &pb.Hello{Name: "stale-laptop", Origins: []string{"m/kt"}, Version: "0.1.0"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Recv(); err == nil {
+		t.Fatal("a worker on protocol 0 was given work; it would report roots that mean something else")
+	}
+
+	// And the work it was refused is still there for a worker that can do it.
+	if pending, _ := q.Stats(); pending != 1 {
+		t.Errorf("pending=%d; refusing a stale worker must not consume the work", pending)
+	}
 }
