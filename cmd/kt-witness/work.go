@@ -190,7 +190,7 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 		Token:     token,
 		Log:       log,
 		OnResult: func(r work.Result) error {
-			return recordWorkerResult(ctx, db, q, proofs, prefetch, resolvers, r, log)
+			return recordWorkerResult(ctx, db, q, proofs, prefetch, resolvers, r, false, log)
 		},
 		OnCapacity: func(worker string, c work.Capacity) {
 			recordCapacity(worker, c)
@@ -292,9 +292,20 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 // that did nothing can report it; that is what spot-checking is for, and it is
 // not built yet. Until it is, this channel should only be given to machines the
 // operator controls, which is also why the listener refuses a public address.
+// local says the result came from the verifier running inside THIS process.
+//
+// A boolean passed by the caller, not a name read off the wire, and the
+// difference is the whole security argument. Only this witness's own arithmetic
+// may poison a log, and if that were decided by comparing r.Worker against
+// "witness" then any machine on the work channel could send Hello.Name
+// "witness" and have its mismatches published as accusations against an honest
+// operator. The two call sites are distinct code paths — the gRPC server's and
+// the in-process worker's — so this cannot be forged by anything on the wire.
+type localResult bool
+
 func recordWorkerResult(ctx context.Context, db *store.Store, q *work.Queue,
 	proofs *workrpc.ProofServer, pf *audit.Prefetcher, resolvers []audit.Resolver,
-	r work.Result, log *slog.Logger) error {
+	r work.Result, local localResult, log *slog.Logger) error {
 	// Was this one of the proofs we corrupted?
 	//
 	// Its verdict is about the worker, not about the log, so it is never
@@ -377,19 +388,54 @@ func recordWorkerResult(ctx context.Context, db *store.Store, q *work.Queue,
 
 	matches := r.ComputedPrev == ref.PrevRoot && r.ComputedCurr == ref.CurrRoot
 	if !matches {
-		// A mismatch is a question, not a finding. It means one of: the worker
-		// is broken, the worker is lying, or the log built its tree wrongly —
-		// and those are not distinguishable from here. The strongest claim this
-		// system makes belongs to the witness's own verifier, so the epoch is
-		// recorded unverified and re-queued for this machine to settle.
 		metrics.Inc("kt_witness_worker_mismatch_total", map[string]string{"worker": r.Worker})
-		log.Error("A WORKER'S ROOTS DO NOT MATCH THE PUBLISHED ONES — recorded as "+
-			"unverified and re-queued. No finding is made against the log until this "+
-			"witness has verified the epoch itself",
-			"worker", r.Worker, "origin", r.Origin, "epoch", r.Epoch,
+
+		if !local {
+			// A mismatch reported by another machine is a question, not a
+			// finding. It means one of: that worker is broken, that worker is
+			// lying, or the log built its tree wrongly — and those are not
+			// distinguishable from here. So the epoch is recorded unverified
+			// and re-queued for this witness to settle itself.
+			log.Error("A WORKER'S ROOTS DO NOT MATCH THE PUBLISHED ONES — recorded as "+
+				"unverified and re-queued. No finding is made against the log until this "+
+				"witness has verified the epoch itself",
+				"worker", r.Worker, "origin", r.Origin, "epoch", r.Epoch,
+				"computed_prev", r.ComputedPrev, "published_prev", ref.PrevRoot,
+				"computed_curr", r.ComputedCurr, "published_curr", ref.CurrRoot)
+			q.Reschedule(r.Origin, r.Epoch)
+			return db.RecordAudit(&store.Audit{
+				Origin: r.Origin, Epoch: r.Epoch, Sampled: true, Rate: 1,
+				Strategy: "worker:" + r.Worker, Verified: false, Attempts: 1,
+				DecidedAt: time.Now().UTC(),
+			})
+		}
+
+		// This witness's own verifier disagrees with what the operator
+		// published, and that is a finding.
+		//
+		// Unlike a missing object or a failed download, it cannot be a
+		// misreading on our part: the proof was decoded, the tree was built,
+		// and the root it produces is not the root that was signed. That is
+		// arithmetic. A fetch or decode failure never reaches here — it comes
+		// back as r.Err and is handled above as unavailable — so a mismatch
+		// with no error is the log's own proof failing to reconstruct its own
+		// published root.
+		//
+		// The re-queue that a remote worker's mismatch triggers is what brings
+		// the epoch here. This is the end of that road, not a parallel path:
+		// the strongest claim this system makes is made in exactly one place,
+		// by the machine that computed it.
+		log.Error("CONSTRUCTION AUDIT FAILED", "origin", r.Origin, "epoch", r.Epoch,
 			"computed_prev", r.ComputedPrev, "published_prev", ref.PrevRoot,
 			"computed_curr", r.ComputedCurr, "published_curr", ref.CurrRoot)
-		q.Reschedule(r.Origin, r.Epoch)
+		if err := db.RecordFork(&store.Fork{
+			Origin: r.Origin,
+			Reason: fmt.Sprintf("construction audit failed at epoch %d: the published "+
+				"proof does not reconstruct the published root", r.Epoch),
+			DetectedAt: time.Now().UTC(),
+		}); err != nil {
+			return err
+		}
 		return db.RecordAudit(&store.Audit{
 			Origin: r.Origin, Epoch: r.Epoch, Sampled: true, Rate: 1,
 			Strategy: "worker:" + r.Worker, Verified: false, Attempts: 1,
