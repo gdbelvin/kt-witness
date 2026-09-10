@@ -21,8 +21,9 @@ import (
 // append-only check. The witness's canary catches that only if the bit it
 // flips lands in bytes the shortcut skips, and a bit chosen uniformly over the
 // whole file almost never does: `unchanged` is the entire previous tree and
-// `inserted` is one epoch of additions. On the test fixture that is 11.8% of
-// the bytes, and on a Meta proof of several million nodes it is smaller still.
+// `inserted` is one epoch of additions. Measured on real WhatsApp proofs it is
+// 7.99% of the bytes; the 11.8% the tests report is a synthetic fixture, whose
+// element counts are chosen rather than observed.
 
 // Range is a half-open byte range [Start, End) of a proof's encoding.
 type Range struct{ Start, End int }

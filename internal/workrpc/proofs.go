@@ -361,10 +361,18 @@ func readInserted(src io.Reader, limit int) ([]byte, insertedSpan) {
 //
 // It catches it only if the flipped bit is in bytes the shortcut skips. Chosen
 // uniformly over the file it almost never is: `unchanged` is the entire previous
-// tree and `inserted` is one epoch of additions, so on the test fixture 11.77%
-// of the bytes are inserted and on a Meta proof of several million nodes the
-// share is smaller again. A uniform canary was therefore testing, nine times in
-// ten, the one thing the shortcut still does honestly.
+// tree and `inserted` is one epoch of additions.
+//
+// Measured in production, on real WhatsApp proofs of about 30 MB: `inserted` is
+// 7.99% of the bytes, and the figure held across separate epochs. It was written
+// here as 11.77% first, from a synthetic fixture whose element counts are chosen
+// parameters — the real share is lower, as expected, because a real log has far
+// more standing tree than one epoch of additions. A Meta proof, at several
+// million nodes, should be lower again; it has not been measured, because the
+// only machine verifying Meta through this server is stopped.
+//
+// So a uniform canary was testing, better than nine times in ten, the one thing
+// the shortcut still does honestly.
 //
 // # The split
 //
