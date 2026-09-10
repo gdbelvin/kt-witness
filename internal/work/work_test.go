@@ -635,3 +635,52 @@ func TestTheDeepestBacklogIsDrainedFirst(t *testing.T) {
 		t.Errorf("after the depths reversed: %s (%v), want %s", a.Origin, err, shallow)
 	}
 }
+
+// TestASingleLogWorkerIsNotStalledBySparseWork.
+//
+// This is the stall it was written for, watched in production: a laptop idle at
+// 0% CPU for six minutes with forty downloaded proofs waiting for it.
+//
+// Proofs are released as they are verified, so what remains cached is scattered
+// — forty epochs spread over half a million. When a run turned out to be leased
+// or serving a backoff, Lease gave up on the ORIGIN and moved to the next one;
+// for a worker that declared a single log there is no next one, so it got
+// ErrNoWork and waited for its own next request. Each request advanced the
+// cursor by one run, at seven seconds a request.
+//
+// A worker with several logs never saw it: the other origin answered.
+func TestASingleLogWorkerIsNotStalledBySparseWork(t *testing.T) {
+	const o = "whatsapp.kt/v2"
+	q, _ := fixedQueue(t, time.Minute)
+	q.Origins = []string{o}
+
+	// Sparse: cached epochs every thousand, as a partly-drained cache looks.
+	cached := map[int64]bool{}
+	for e := int64(1000); e <= 10000; e += 1000 {
+		cached[e] = true
+	}
+	q.Source = func(_ string, after int64, n int) (int64, int64, bool) {
+		for e := after; e <= 10000; e++ {
+			if cached[e] {
+				return e, e, true
+			}
+		}
+		return 0, 0, false
+	}
+
+	// The first several are already in backoff — failed and waiting — which is
+	// exactly what a retried region looks like.
+	for e := int64(1000); e <= 5000; e += 1000 {
+		q.deferred[epochKey(o, e)] = q.now().Add(time.Hour)
+	}
+
+	// One request must reach past all of them rather than giving up at the
+	// first. Before the fix this returned ErrNoWork five times in a row.
+	a, err := q.Lease("laptop", []string{o}, 4)
+	if err != nil {
+		t.Fatalf("a single-log worker got nothing with usable work cached: %v", err)
+	}
+	if a.From <= 5000 {
+		t.Errorf("leased epoch %d, which is in backoff; want one past 5000", a.From)
+	}
+}

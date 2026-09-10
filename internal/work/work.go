@@ -335,6 +335,13 @@ const (
 	// It is the cadence the feeder this replaced ran at, which was never the
 	// part of it that was wrong.
 	quietFor = 30 * time.Second
+
+	// maxProbes bounds how far one request will look within a log before
+	// giving up and letting the next request continue from where it reached.
+	//
+	// The cursor is what makes that safe: it advances past everything already
+	// rejected, so consecutive requests make progress rather than re-walking.
+	maxProbes = 16
 )
 
 func NewQueue(minLease time.Duration) *Queue {
@@ -481,29 +488,53 @@ func (q *Queue) Lease(worker string, origins []string, want int) (Assignment, er
 			// keeping up.
 			continue
 		}
-		at := q.cursor[origin]
+		// Several probes per origin, not one.
+		//
+		// A single probe was a stall. The cached set is sparse — proofs are
+		// released as they are verified, so what is left is scattered — and
+		// when a run turns out to be leased or in backoff, giving up on the
+		// origin means a worker that declared only that log gets ErrNoWork and
+		// waits for its next request. Each request then advanced the cursor by
+		// one run. With forty cached epochs spread over half a million and a
+		// request every seven seconds, the laptop sat idle for six minutes in
+		// front of work it could do.
+		//
+		// Bounded, because the alternative failure is worse: an unbounded scan
+		// holds the queue while it walks a history looking for something that
+		// may not be there.
 		src := q.Source
-
-		q.mu.Unlock()
-		from, to, found := scanFor(src, origin, at, want)
-		q.mu.Lock()
-
-		if !found {
-			q.quiet[origin] = q.now().Add(quietFor)
-			continue
-		}
-		now = q.now()
-		f, t2, free, _ := q.trimLeasedLocked(origin, from, to)
-		if free {
-			f, t2, free = q.trimDeferredLocked(origin, f, t2, now)
+		var (
+			f, t2 int64
+			free  bool
+		)
+		at := q.cursor[origin]
+		for probe := 0; probe < maxProbes && !free; probe++ {
+			q.mu.Unlock()
+			from, to, found := scanFor(src, origin, at, want)
+			q.mu.Lock()
+			if !found {
+				q.quiet[origin] = q.now().Add(quietFor)
+				break
+			}
+			now = q.now()
+			var next int64
+			f, t2, free, next = q.trimLeasedLocked(origin, from, to)
+			if free {
+				f, t2, free = q.trimDeferredLocked(origin, f, t2, now)
+			}
+			if free {
+				break
+			}
+			// Leased by somebody else, or serving a backoff. Look past it.
+			if next <= at {
+				next = to + 1
+			}
+			at = next
+			if at > q.cursor[origin] {
+				q.cursor[origin] = at
+			}
 		}
 		if !free {
-			// Somebody took it while the lock was down, or it is in backoff.
-			// Move the cursor past it and let the next request try again rather
-			// than scanning further while holding nothing.
-			if to+1 > q.cursor[origin] {
-				q.cursor[origin] = to + 1
-			}
 			continue
 		}
 		q.cursor[origin] = t2 + 1
