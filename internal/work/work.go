@@ -334,7 +334,19 @@ func (q *Queue) Accept(r Result) error {
 		q.reported[r.AssignmentID] = seen
 	}
 	seen[r.Epoch] = true
-	if int64(len(seen)) == a.To-a.From+1 {
+	// Count the epochs this assignment actually contains, which is not
+	// To-From+1 once assignments count by two.
+	//
+	// Getting this wrong does not fail, it stalls: the range never registers as
+	// finished, the dispatcher waits out the full lease before offering the
+	// worker anything else, and a machine that has done its work sits idle for
+	// twenty minutes looking healthy. Observed exactly that — one assignment,
+	// thirteen epochs, then nothing, with twenty-nine more waiting in the queue.
+	step := a.Step
+	if step < 1 {
+		step = 1
+	}
+	if int64(len(seen)) == (a.To-a.From)/step+1 {
 		delete(q.leased, r.AssignmentID)
 		delete(q.reported, r.AssignmentID)
 	}

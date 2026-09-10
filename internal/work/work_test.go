@@ -1,6 +1,7 @@
 package work
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -248,5 +249,84 @@ func TestABackingOffRetryIsNotCountedAsAvailableWork(t *testing.T) {
 	now = now.Add(2 * retryBase)
 	if pending, _ := q.Stats(); pending != 1 {
 		t.Errorf("pending=%d once the backoff elapsed, want 1", pending)
+	}
+}
+
+// An interleaved assignment finishes when ITS epochs are in, not when a
+// contiguous range's worth would be.
+//
+// The failure this pins is a stall rather than an error. Counting To-From+1
+// when the assignment counts by two means the range never registers as
+// finished: the dispatcher waits out the whole lease before offering that
+// worker anything else, and a machine that has done its work sits idle for
+// twenty minutes while the queue has plenty. Nothing logs, nothing errors, and
+// throughput quietly drops by whatever fraction of the lease was wasted.
+func TestAnInterleavedAssignmentFinishesOnItsOwnEpochs(t *testing.T) {
+	q := NewQueue(time.Minute)
+	q.AddInterleaved("m/kt", 100, 124) // 25 epochs, two halves
+
+	a, err := q.Lease("laptop", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Step != 2 {
+		t.Fatalf("step %d, want 2", a.Step)
+	}
+
+	var count int
+	for e := a.From; e <= a.To; e += a.Step {
+		count++
+		if err := q.Accept(Result{AssignmentID: a.ID, Nonce: a.Nonce, Origin: a.Origin, Epoch: e}); err != nil {
+			t.Fatalf("epoch %d: %v", e, err)
+		}
+	}
+	if count == 25 {
+		t.Fatal("the assignment covered every epoch; interleaving is not in effect")
+	}
+	if !q.Finished(a.ID) {
+		t.Errorf("after all %d of its epochs, the assignment is still held — "+
+			"the worker will wait out its lease with work available", count)
+	}
+}
+
+// The two halves together cover the range exactly once: no epoch verified
+// twice, none skipped.
+func TestInterleavedHalvesCoverTheRangeExactlyOnce(t *testing.T) {
+	q := NewQueue(time.Minute)
+	q.AddInterleaved("m/kt", 100, 124)
+
+	seen := map[int64]int{}
+	for i := 0; i < 2; i++ {
+		a, err := q.Lease(fmt.Sprintf("worker%d", i), nil)
+		if err != nil {
+			t.Fatalf("half %d: %v", i, err)
+		}
+		for e := a.From; e <= a.To; e += a.Step {
+			seen[e]++
+		}
+	}
+	for e := int64(100); e <= 124; e++ {
+		if seen[e] != 1 {
+			t.Errorf("epoch %d covered %d times, want exactly 1", e, seen[e])
+		}
+	}
+}
+
+// A worker is never given both halves, because holding both would hand it every
+// epoch and its neighbour — which is exactly what the interleaving withholds.
+func TestOneWorkerCannotHoldBothHalves(t *testing.T) {
+	q := NewQueue(time.Minute)
+	q.AddInterleaved("m/kt", 100, 124)
+
+	if _, err := q.Lease("greedy", nil); err != nil {
+		t.Fatal(err)
+	}
+	if a, err := q.Lease("greedy", nil); err == nil {
+		t.Errorf("the same worker was given the other half (%s); it can now read "+
+			"every epoch's neighbour and skip the append-only check", a.ID)
+	}
+	// Another machine may still have it.
+	if _, err := q.Lease("other", nil); err != nil {
+		t.Errorf("the second half went unclaimed: %v", err)
 	}
 }
