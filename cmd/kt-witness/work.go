@@ -239,7 +239,6 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 	// The queue drains the cache; the generator fills it. See worksource.go for
 	// why the store is no longer asked here.
 	if prefetch != nil && prefetch.Dir != "" {
-		prefetch.Origins = origins
 		q.Source = cacheSource(prefetch, log)
 		startWorkGenerator(ctx, db, prefetch, resolvers, origins, log)
 	} else {

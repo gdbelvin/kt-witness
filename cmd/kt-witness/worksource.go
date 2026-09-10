@@ -71,3 +71,21 @@ func storeSource(db *store.Store, log *slog.Logger) work.Source {
 		return from, to, true
 	}
 }
+
+// akdOrigins is the logs whose proofs are cached and handed out as work.
+//
+// Duplicated from the work channel's own list deliberately: the prefetcher is
+// built before that runs, and it needs this at construction — see the comment
+// on Prefetcher.Origins for what setting it late cost.
+func akdOrigins(cfg *config) []string {
+	if len(cfg.Work.Origins) > 0 {
+		return cfg.Work.Origins
+	}
+	var out []string
+	for _, l := range cfg.Logs {
+		if l.Type == "akd" {
+			out = append(out, l.Origin)
+		}
+	}
+	return out
+}

@@ -693,7 +693,17 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		var prefetch *audit.Prefetcher
 		if d := cfg.Audit.PrefetchDir; d != "" {
 			prefetch = &audit.Prefetcher{
-				Dir:          d,
+				Dir: d,
+				// Set HERE, at construction, and not later by whoever uses it.
+				//
+				// A cache key hashes the origin, so recovering which log a
+				// cached file belongs to needs the candidate list — and that
+				// happens once, inside init(), on first use. Stats() below is a
+				// first use. Setting Origins afterwards was therefore too late:
+				// 464 adopted files holding 58 GB went unclassified, the queue
+				// saw an empty cache, and the generator could not add to it
+				// because by its own accounting the cache was full.
+				Origins:      akdOrigins(cfg),
 				MaxBytes:     cfg.Audit.PrefetchBytes,
 				Workers:      cfg.Audit.PrefetchWorkers,
 				MinFreeBytes: cfg.Audit.PrefetchMinFreeBytes,
