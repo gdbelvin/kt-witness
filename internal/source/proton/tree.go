@@ -481,10 +481,12 @@ func treeWorkers() int {
 	// extra hardware to the consumer that cannot use it to reduce the backlog.
 	//
 	// But a constant chosen for one box is a hardware fact written down, and
-	// this one went stale within a day. Four was right beside four sidecar
-	// workers on sixteen cores. On thirty-two, eight sidecars leave roughly
-	// seven cores spare and four is simply leaving three idle while the replay
-	// crawls. Set PROTON_TREE_WORKERS to what the box actually has spare.
+	// this one went stale within a day. Four was right beside the four Rust
+	// verifier subprocesses that ran on sixteen cores. On thirty-two that pool
+	// widened to eight, left roughly seven cores spare, and four was simply
+	// leaving three idle while the replay crawled — and the pool it was
+	// balanced against no longer runs at all. Set PROTON_TREE_WORKERS to what
+	// the box actually has spare.
 	const share = 4
 	if n := runtime.NumCPU(); n < share {
 		return maxInt(1, n)

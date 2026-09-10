@@ -6,11 +6,11 @@
 // operator's laptop were killed for low memory while the worker on it was
 // using two of eight permitted cores and reporting itself healthy.
 //
-// The witness has had memory sizing from the start — its sidecar pool is
-// derived from the container's cgroup limit precisely because one verification
-// peaks in gigabytes. The machines lent to it had none of that protection,
-// which is the wrong way round: the server is dedicated to this and the laptop
-// belongs to somebody who is using it.
+// The witness has had memory sizing from the start — its Rust subprocess pool
+// was derived from the container's cgroup limit precisely because one
+// verification there peaked in gigabytes. The machines lent to it had none of
+// that protection, which is the wrong way round: the server is dedicated to
+// this and the laptop belongs to somebody who is using it.
 package hostmem
 
 // Available reports the bytes a new allocation could reasonably use, and

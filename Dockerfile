@@ -1,5 +1,8 @@
-# Two builders, because verification lives in two languages: the witness core is
-# Go, and AKD proof verification is only practical against facebook/akd in Rust.
+# One builder. Verification used to live in two languages — the witness core in
+# Go, and AKD proof replay against facebook/akd in Rust — and the Rust half is
+# gone: internal/akdtree does the same arithmetic in this process, an eighth of
+# the CPU and a fraction of the memory, checked on every epoch against the roots
+# each operator publishes.
 #
 #   docker build --platform linux/amd64 -t kt-witness .
 #
@@ -7,31 +10,6 @@
 # fails under QEMU emulation ("at least one invalid signature was encountered"),
 # so any apt step would break cross-platform builds. Avoiding it entirely is
 # also just less to go wrong.
-
-# Deliberately NOT $BUILDPLATFORM: this must produce a binary for the *target*
-# platform. Building natively on the build host would silently copy, say, an
-# arm64 binary into an amd64 image — which fails only at runtime, and only for
-# tier B. On an amd64 host this stage is native and fast; cross-building from
-# arm64 runs under emulation and is slow.
-#
-# No system packages are needed: the sidecar uses rustls and webpki-roots, so
-# there is no OpenSSL to link and no CA bundle to install.
-FROM rust:1-slim-bookworm AS rust-builder
-WORKDIR /src
-COPY rust/kt-akd-verify/Cargo.toml rust/kt-akd-verify/Cargo.lock ./
-# Prime the dependency cache against a stub so a source-only change does not
-# rebuild the akd tree, which is slow.
-RUN --mount=type=cache,target=/cargoreg,sharing=locked \
-    CARGO_HOME=/cargoreg mkdir src && echo 'fn main() {}' > src/main.rs \
-    && CARGO_HOME=/cargoreg cargo build --release && rm -rf src
-COPY rust/kt-akd-verify/src ./src
-# The registry is cached but /src/target is not, because the final stage copies
-# the binary out of it — a cache mount there would leave nothing to COPY. The
-# stub build above already primes the dependency compile, and the layer holding
-# it only invalidates when Cargo.toml or Cargo.lock changes.
-RUN --mount=type=cache,target=/cargoreg,sharing=locked \
-    CARGO_HOME=/cargoreg touch src/main.rs && CARGO_HOME=/cargoreg cargo build --release
-
 
 # Go cross-compiles cheaply, so this stage runs natively and targets TARGETARCH.
 #
@@ -88,19 +66,16 @@ RUN --mount=type=cache,target=/gocache,sharing=locked \
     go build -trimpath -ldflags="-s -w" -o /out/kt-unblock ./cmd/kt-unblock
 
 
-# Distroless "cc", not "base": the Rust sidecar is dynamically linked and needs
-# libgcc_s.so.1 for unwinding, which base-debian12 does not ship. With base the
-# image builds and the witness runs — only the sidecar fails, at the moment it is
-# first needed, in a log nobody is watching. Verified by executing the sidecar in
-# the built image, which is worth doing rather than assuming.
+# Distroless "static", not "cc".
 #
-# This layer also provides the CA bundle the Go binary reads (it is CGO-free and
-# uses the system pool), and has no shell or package manager.
-FROM gcr.io/distroless/cc-debian12:nonroot
+# It was "cc" because the Rust sidecar was dynamically linked and needed
+# libgcc_s.so.1 for unwinding. Nothing in this image is dynamically linked any
+# more: the Go binaries are CGO-free. "static" still carries the CA bundle they
+# read for the system pool, and has no shell, no package manager and no libc.
+FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=go-builder   /out/kt-witness                    /usr/local/bin/kt-witness
 COPY --from=go-builder   /out/kt-unblock                    /usr/local/bin/kt-unblock
-COPY --from=rust-builder /src/target/release/kt-akd-verify  /usr/local/bin/kt-akd-verify
 
 # State lives here and must be a volume. The signing key IS our published
 # identity, and the database is the record of what we have attested; losing
@@ -113,8 +88,12 @@ WORKDIR /data
 
 EXPOSE 8080
 
-# Tier B streams a ~284 MB proof to a temp file per verified epoch, so /tmp needs
-# real space — run with --tmpfs /tmp:size=1g or a disk-backed mount.
+# Nothing writes a proof to disk any more. Tier B used to stream each ~284 MB
+# proof to a temp file, because the Rust sidecar was a separate process reached
+# through a pipe; that needed a sized /tmp, and the sizing caused two outages the
+# day a widened pool outgrew it. The Go verifier holds the proof in memory, so no
+# tmpfs is required. TMPDIR=/tmp is already Go's default on Linux, so the line
+# below changes nothing; it is kept only so the choice is visible.
 ENV TMPDIR=/tmp
 
 ENTRYPOINT ["/usr/local/bin/kt-witness"]

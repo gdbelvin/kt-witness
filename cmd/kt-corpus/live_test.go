@@ -38,7 +38,7 @@ func TestLiveSignalCaptureAndReplay(t *testing.T) {
 
 	c := NewCorpus(t.TempDir(), 64<<20, 0)
 	fixedFree(c, 1<<40)
-	r, err := NewReplayer(c, "", 2*time.Minute)
+	r, err := NewReplayer(c, 2*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,18 +112,16 @@ func TestLiveSignalCaptureAndReplay(t *testing.T) {
 // Meta by default: its proofs are ~58.5 MB against Meta's ~284 MB, so the test
 // exercises the identical code path for a fifth of the bandwidth.
 //
-// It needs the Rust sidecar, which is a separate build, so it is gated on the
-// binary's path as well as on KT_WITNESS_LIVE.
+// It used to need the Rust subprocess as a separate build and was gated on that
+// binary's path as well as on KT_WITNESS_LIVE. Verification is in this process
+// now, so KT_WITNESS_LIVE is the whole gate — one fewer reason for a test to
+// quietly not run.
 func TestLiveAKDCaptureAndReplay(t *testing.T) {
 	liveOrSkip(t)
-	sidecar := os.Getenv("KT_WITNESS_SIDECAR")
-	if sidecar == "" {
-		t.Skip("set KT_WITNESS_SIDECAR to the kt-akd-verify binary")
-	}
 
 	c := NewCorpus(t.TempDir(), 2<<30, 0)
 	fixedFree(c, 1<<40)
-	r, err := NewReplayer(c, sidecar, 10*time.Minute)
+	r, err := NewReplayer(c, 10*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -52,10 +52,10 @@ func TestShutdownDoesNotConsumeFetchAttempts(t *testing.T) {
 	}
 
 	a := &Auditor{
-		Store:   db,
-		Sidecar: &cancelSidecar{},
-		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Timeout: time.Second,
+		Store:    db,
+		Verifier: &cancelVerifier{},
+		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Timeout:  time.Second,
 	}
 
 	// Three passes, each cancelled the way a shutdown cancels one.
@@ -112,10 +112,10 @@ func TestRefusedFetchStillConsumesAnAttempt(t *testing.T) {
 	}
 
 	a := &Auditor{
-		Store:   db,
-		Sidecar: &refusingSidecar{},
-		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Timeout: time.Second,
+		Store:    db,
+		Verifier: &refusingVerifier{},
+		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Timeout:  time.Second,
 	}
 
 	// A live context: the log refuses, we do not stop.
@@ -139,7 +139,7 @@ func TestRefusedFetchStillConsumesAnAttempt(t *testing.T) {
 }
 
 // staticResolver resolves every epoch successfully; the interesting behaviour is
-// in the sidecars below.
+// in the verifiers below.
 type staticResolver struct{ origin string }
 
 func (s *staticResolver) Origin() string { return s.origin }
@@ -151,29 +151,29 @@ func (s *staticResolver) ResolveEpoch(ctx context.Context, epoch int64) (*EpochR
 	return &EpochRef{LogDirectory: "https://example.invalid", PrevRoot: "aa", CurrRoot: "bb"}, nil
 }
 
-// cancelSidecar stands in for work interrupted by shutdown.
-type cancelSidecar struct{}
+// cancelVerifier stands in for work interrupted by shutdown.
+type cancelVerifier struct{}
 
-func (c *cancelSidecar) Verify(ctx context.Context, _ string, _ int64, _, _ string, _ time.Duration) (*Result, error) {
+func (c *cancelVerifier) Verify(ctx context.Context, _ string, _ int64, _, _ string, _ time.Duration) (*Result, error) {
 	return nil, ctx.Err()
 }
 
-func (c *cancelSidecar) VerifyCached(ctx context.Context, _ string, _ int64, _, _, _ string, _ time.Duration) (*Result, error) {
+func (c *cancelVerifier) VerifyCached(ctx context.Context, _ string, _ int64, _, _, _ string, _ time.Duration) (*Result, error) {
 	return nil, ctx.Err()
 }
 
-func (c *cancelSidecar) Close() {}
+func (c *cancelVerifier) Close() {}
 
-// refusingSidecar stands in for a log that will not serve a proof: a 403, a
+// refusingVerifier stands in for a log that will not serve a proof: a 403, a
 // pruned blob, a hole in the CDN. Not a finding, but it is the log's answer.
-type refusingSidecar struct{}
+type refusingVerifier struct{}
 
-func (r *refusingSidecar) Verify(context.Context, string, int64, string, string, time.Duration) (*Result, error) {
+func (r *refusingVerifier) Verify(context.Context, string, int64, string, string, time.Duration) (*Result, error) {
 	return &Result{OK: false, Kind: "fetch", Error: "HTTP 403"}, nil
 }
 
-func (r *refusingSidecar) VerifyCached(context.Context, string, int64, string, string, string, time.Duration) (*Result, error) {
+func (r *refusingVerifier) VerifyCached(context.Context, string, int64, string, string, string, time.Duration) (*Result, error) {
 	return &Result{OK: false, Kind: "fetch", Error: "HTTP 403"}, nil
 }
 
-func (r *refusingSidecar) Close() {}
+func (r *refusingVerifier) Close() {}

@@ -80,10 +80,12 @@ func parseLoadavg(b []byte) (machineState, bool) {
 // readSelfUsec reports this process's CPU time in microseconds, including the
 // children it has reaped.
 //
-// The children are the point. The Go worker coordinates while the sidecars it
-// spawns do every expensive thing, so counting only RUSAGE_SELF would report a
-// worker saturating a laptop as using almost nothing — and the governor would
-// then cheerfully ask for more.
+// The children mattered more than they do now. The Go worker used to coordinate
+// while Rust subprocesses did every expensive thing, so counting only
+// RUSAGE_SELF reported a worker saturating a laptop as using almost nothing —
+// and the governor then cheerfully asked for more. Verification runs in this
+// process today, but the child terms stay: they cost nothing when there are no
+// children, and are still right for anything this worker does spawn.
 //
 // The path argument is the cgroup file the Linux implementation reads. It has
 // no meaning here.
@@ -95,13 +97,16 @@ func readSelfUsec(_ string) (uint64, bool) {
 	// SELF is this process, CHILDREN is the ones already reaped, and live() is
 	// the ones running right now.
 	//
-	// All three are needed, and the third is the one that matters. Every
-	// expensive thing happens in a sidecar that is still running, so
-	// SELF+CHILDREN reports a worker saturating a laptop as using almost
+	// All three are summed, and live() was once the term that mattered. Every
+	// expensive thing happened in a Rust subprocess that was still running, so
+	// SELF+CHILDREN reported a worker saturating a laptop as using almost
 	// nothing — and a governor computing "what is everyone ELSE using" from
-	// that attributes our own four hashing threads to the machine's owner, sees
-	// them as a busy laptop, and stops asking for work. Which is what it did:
-	// roughly half the time, throttled by its own load.
+	// that attributed our own four hashing threads to the machine's owner, saw
+	// them as a busy laptop, and stopped asking for work. Which is what it did:
+	// roughly half the time, throttled by its own load. Verification now runs
+	// in this process and lands in SELF, so that failure cannot recur the same
+	// way, but the other two terms are kept: they are still correct for any
+	// child this worker spawns.
 	//
 	// The sum stays monotonic across a child exiting: its time moves out of
 	// live() and into CHILDREN in the same step.

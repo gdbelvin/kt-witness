@@ -21,8 +21,9 @@ import (
 // Measured 2026-09-02: epoch 1,216,291, a new epoch every **30 seconds**, and
 // ~58.5 MB per audit blob. That is a fifth of Messenger's blob at four times
 // the rate, so continuous tier B would be ~168 GB/day; at the configured 0.1
-// sample rate, ~17 GB/day. One real proof verifies under the existing sidecar's
-// WhatsAppV1Configuration in 2.7 s, so tier B needs no new code either.
+// sample rate, ~17 GB/day. One real proof verified in 2.7 s under the Rust
+// subprocess's WhatsAppV1Configuration, the verifier in use at the time, so
+// tier B needed no new code either.
 const (
 	WhatsAppV2LogDirectory = "https://d4ttn6vhp3mg0.cloudfront.net"
 	WhatsAppV2Namespace    = "https://plexi.key-transparency.cloudflare.com/namespaces/whatsapp.key-transparency.v2"

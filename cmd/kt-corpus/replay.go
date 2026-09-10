@@ -88,7 +88,7 @@ func (rs *replayServer) handle(w http.ResponseWriter, r *http.Request) {
 
 	// Everything else is an AKD proof addressed exactly as CloudFront addresses
 	// it. path.Clean plus the prefix check keeps a malformed key from escaping
-	// the corpus directory; the sidecar builds these keys itself, but a server
+	// the corpus directory; the verifier builds these keys itself, but a server
 	// that trusts its input is a bad habit even on loopback.
 	clean := path.Clean("/" + strings.TrimPrefix(r.URL.Path, "/"))
 	full := filepath.Join(rs.corpus.Dir, filepath.FromSlash(clean))
@@ -106,27 +106,30 @@ func (rs *replayServer) handle(w http.ResponseWriter, r *http.Request) {
 
 // Replayer re-verifies stored artifacts using the production code paths.
 type Replayer struct {
-	corpus  *Corpus
-	server  *replayServer
-	sidecar *audit.Sidecar
-	timeout time.Duration
+	corpus   *Corpus
+	server   *replayServer
+	verifier audit.Verifier
+	timeout  time.Duration
 }
 
-func NewReplayer(c *Corpus, sidecarPath string, timeout time.Duration) (*Replayer, error) {
+// NewReplayer re-verifies stored artifacts through the production code path.
+//
+// It used to take the path to the Rust verifier binary and do nothing without
+// one. The verifier is in this process now, so replay always works — which is
+// what a corpus is for: an artifact that can only be checked when an external
+// binary happens to be present is one nobody checks.
+func NewReplayer(c *Corpus, timeout time.Duration) (*Replayer, error) {
 	rs, err := newReplayServer(c)
 	if err != nil {
 		return nil, err
 	}
-	r := &Replayer{corpus: c, server: rs, timeout: timeout}
-	if sidecarPath != "" {
-		r.sidecar = audit.NewSidecar(sidecarPath)
-	}
-	return r, nil
+	return &Replayer{corpus: c, server: rs, timeout: timeout,
+		verifier: &audit.GoVerifier{}}, nil
 }
 
 func (r *Replayer) Close() {
-	if r.sidecar != nil {
-		r.sidecar.Close()
+	if r.verifier != nil {
+		r.verifier.Close()
 	}
 	r.server.Close()
 }
@@ -153,15 +156,12 @@ func (r *Replayer) Replay(ctx context.Context, m *Manifest) error {
 }
 
 func (r *Replayer) replayAKD(ctx context.Context, m *Manifest) error {
-	if r.sidecar == nil {
-		return fmt.Errorf("AKD replay needs -sidecar (the kt-akd-verify binary)")
-	}
-	// The sidecar rebuilds the object key from epoch and roots, so pointing it
+	// The verifier rebuilds the object key from epoch and roots, so pointing it
 	// at the corpus's blobs directory makes it fetch exactly the artifact this
 	// manifest describes — and a mismatch between the manifest's roots and the
 	// stored blob's path shows up as a fetch failure rather than a false pass.
 	dir := r.server.URL() + "/" + path.Join(string(KindAKD), slug(m.Origin), "blobs")
-	res, err := r.sidecar.Verify(ctx, dir, m.Seq, m.PrevRoot, m.CurrRoot, r.timeout)
+	res, err := r.verifier.Verify(ctx, dir, m.Seq, m.PrevRoot, m.CurrRoot, r.timeout)
 	if err != nil {
 		return err
 	}

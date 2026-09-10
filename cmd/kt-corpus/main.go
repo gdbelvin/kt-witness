@@ -26,8 +26,8 @@
 // # Usage
 //
 //	kt-corpus -status
-//	kt-corpus -fetch -config deploy/witness.json -sidecar ./kt-akd-verify
-//	kt-corpus -verify -sidecar ./kt-akd-verify
+//	kt-corpus -fetch -config deploy/witness.json
+//	kt-corpus -verify
 //	kt-corpus -gc
 //
 // See docs/corpus.md for the on-disk layout.
@@ -35,7 +35,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -63,7 +62,6 @@ func main() {
 		capBytes   = flag.Int64("cap", defaultCap, "hard total size cap in bytes, across all ecosystems")
 		floorBytes = flag.Int64("floor", defaultFloor, "minimum free space in bytes that must remain after any download")
 		configPath = flag.String("config", "deploy/witness.json", "witness configuration to read log identities from")
-		sidecar    = flag.String("sidecar", "", "path to the kt-akd-verify binary (required for AKD fetch and replay)")
 		timeout    = flag.Duration("timeout", 10*time.Minute, "per-artifact verification timeout")
 
 		doFetch  = flag.Bool("fetch", false, "download proofs into the corpus")
@@ -104,7 +102,7 @@ func main() {
 		}
 	}
 	if *doFetch {
-		if err := fetch(ctx, c, *configPath, *sidecar, *originFilter, *akdCount, *signalCount, *signalInterval, *timeout); err != nil {
+		if err := fetch(ctx, c, *configPath, *originFilter, *akdCount, *signalCount, *signalInterval, *timeout); err != nil {
 			// A limit reached is the expected end of a bounded run, and reporting
 			// it as a failure would train an operator to ignore it.
 			if isLimit(err) {
@@ -115,7 +113,7 @@ func main() {
 		}
 	}
 	if *doVerify {
-		ok, err := verify(ctx, c, *sidecar, *originFilter, *timeout)
+		ok, err := verify(ctx, c, *originFilter, *timeout)
 		if err != nil {
 			fatal(err)
 		}
@@ -135,12 +133,12 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
-func fetch(ctx context.Context, c *Corpus, configPath, sidecarPath, originFilter string, akdCount, signalCount int, signalInterval, timeout time.Duration) error {
+func fetch(ctx context.Context, c *Corpus, configPath, originFilter string, akdCount, signalCount int, signalInterval, timeout time.Duration) error {
 	cfg, err := loadWitnessConfig(configPath)
 	if err != nil {
 		return err
 	}
-	r, err := NewReplayer(c, sidecarPath, timeout)
+	r, err := NewReplayer(c, timeout)
 	if err != nil {
 		return err
 	}
@@ -179,9 +177,6 @@ func fetch(ctx context.Context, c *Corpus, configPath, sidecarPath, originFilter
 		if l.Type != "akd" || (originFilter != "" && l.Origin != originFilter) {
 			continue
 		}
-		if sidecarPath == "" {
-			return errors.New("AKD capture needs -sidecar: an artifact is only admitted once it has verified")
-		}
 		if err := f.FetchAKD(ctx, akd.Config{
 			Origin:            l.Origin,
 			LogDirectory:      l.LogDirectory,
@@ -197,12 +192,12 @@ func fetch(ctx context.Context, c *Corpus, configPath, sidecarPath, originFilter
 //
 // It returns false rather than stopping at the first failure, because the useful
 // output of a regression run is which artifacts broke, not merely that one did.
-func verify(ctx context.Context, c *Corpus, sidecarPath, originFilter string, timeout time.Duration) (bool, error) {
+func verify(ctx context.Context, c *Corpus, originFilter string, timeout time.Duration) (bool, error) {
 	ms, err := c.Manifests()
 	if err != nil {
 		return false, err
 	}
-	r, err := NewReplayer(c, sidecarPath, timeout)
+	r, err := NewReplayer(c, timeout)
 	if err != nil {
 		return false, err
 	}
@@ -212,11 +207,6 @@ func verify(ctx context.Context, c *Corpus, sidecarPath, originFilter string, ti
 	start := time.Now()
 	for _, m := range ms {
 		if originFilter != "" && m.Origin != originFilter {
-			continue
-		}
-		if m.Kind == KindAKD && sidecarPath == "" {
-			fmt.Printf("SKIP  %-24s %-12d no -sidecar\n", m.Origin, m.Seq)
-			skipped++
 			continue
 		}
 		t := time.Now()

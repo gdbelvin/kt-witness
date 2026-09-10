@@ -15,29 +15,46 @@ import (
 	"github.com/gdbsecurity/kt-witness/internal/akdtree"
 )
 
-// GoVerifier replays AKD proofs in this process, without the Rust sidecar.
+// GoVerifier replays AKD proofs in this process.
 //
 // # Why the witness would run this
 //
-// The sidecar is the reference implementation and it is slow for a structural
+// It replaced a Rust subprocess built on facebook/akd — the reference
+// implementation — which was slow for a structural
 // reason: it builds the tree through a storage abstraction meant for a real
 // database, so verifying one Meta epoch performs millions of async map writes
 // and allocates a node object for each. Measured on identical epochs, this
 // package costs about an eighth of the CPU and a fraction of the memory.
 //
-// The memory matters as much as the speed. The sidecar pool is capped at eight
+// The memory mattered as much as the speed. That pool was capped at eight
 // because one Rust verification peaks near 3.7 GB, and that cap — not the
 // machine's 32 cores — has been the binding constraint on this witness's
 // throughput. A verification here holds the proof and a flat array of its
 // nodes, so the ceiling moves from memory to cores, and then to bandwidth.
 //
-// # What it does not change
+// # What justifies trusting it alone
 //
-// The reference stays in the build and stays authoritative wherever it runs.
-// This implementation earns its place from evidence — 104 epochs agreeing with
-// roots Meta and WhatsApp published, 1000 mutation trials, 8.2 million fuzz
-// executions, and a shadow record in production — not from being faster. If it
-// is ever wrong, it is wrong in a way that matters more than being slow.
+// For most of this project's life the answer was "it does not run alone" — the
+// Rust reference decided and this was only observed. That is no longer true, so
+// the evidence has to carry the whole weight, and it is worth being explicit
+// about what it is.
+//
+// The strongest part is not in the test suite. Every epoch this fleet verifies
+// is a check on this code: a worker rebuilds both roots and is never told what
+// they should be, and the witness compares them against what the operator
+// published. An implementation that was wrong would disagree with Meta or
+// WhatsApp on the first epoch it touched. That is continuous, unsampled, and
+// against an independent party — which no second implementation of ours could
+// be.
+//
+// Behind that: 104 epochs agreeing with published roots, 1000 mutation trials
+// and 8.2 million fuzz executions requiring that a single flipped bit is
+// rejected, and a period of running beside the reference and agreeing.
+//
+// A verifier wrong in the accepting direction approves a forged proof; one
+// wrong in the rejecting direction accuses an honest operator of forking a key
+// transparency log, publicly and permanently. Both are worse than being slow,
+// which is why the speed was never the argument.
 type GoVerifier struct {
 	// Concurrent bounds how many verifications run at once. Zero derives it
 	// from the machine.
@@ -55,7 +72,7 @@ func (g *GoVerifier) init() {
 	g.once.Do(func() {
 		n := g.Concurrent
 		if n <= 0 {
-			// One per core, less two. Unlike the sidecar pool this is a CPU
+			// One per core, less two. Unlike the old process pool this is a CPU
 			// bound rather than a memory one: a verification here holds the
 			// proof plus a flat node array — hundreds of megabytes, not
 			// gigabytes — so cores run out first.
@@ -159,7 +176,8 @@ func (g *GoVerifier) VerifyCached(ctx context.Context, logDirectory string, epoc
 // This is what the distributed audit runs on, and the witness's own local
 // worker needs it for the same reason every remote worker does: a machine that
 // is handed the published roots and answers yes or no has been told the answer.
-// The local worker used to call the sidecar — whose whole API is that yes/no —
+// The local worker used to call the Rust reference — whose whole API is that
+// yes/no —
 // and then report the PUBLISHED current root as both of its computed roots. Its
 // every success therefore came back as a mismatch against the published
 // previous root, was recorded unverified, and was re-queued.

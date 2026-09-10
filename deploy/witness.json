@@ -21,9 +21,6 @@
   "max_sign_delay": "120s",
   "refresh_interval": "1h",
   "audit": {
-    "sidecar_path": "/usr/local/bin/kt-akd-verify",
-    "verifier": "go",
-    "shadow_verify": false,
     "prefetch_dir": "/data/proof-cache",
     "prefetch_bytes": 68719476736,
     "prefetch_workers": 8,

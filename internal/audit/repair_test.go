@@ -43,10 +43,10 @@ func TestHolesAreRetriedAfterBackoff(t *testing.T) {
 	}
 
 	a := &Auditor{
-		Store:   db,
-		Sidecar: &okSidecar{},
-		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Timeout: time.Second,
+		Store:    db,
+		Verifier: &okVerifier{},
+		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Timeout:  time.Second,
 	}
 
 	res, err := a.RunRepair(context.Background(), &staticResolver{origin: origin}, 4)
@@ -96,10 +96,10 @@ func TestHolesWaitForTheirBackoff(t *testing.T) {
 	}
 
 	a := &Auditor{
-		Store:   db,
-		Sidecar: &okSidecar{},
-		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Timeout: time.Second,
+		Store:    db,
+		Verifier: &okVerifier{},
+		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Timeout:  time.Second,
 	}
 	res, err := a.RunRepair(context.Background(), &staticResolver{origin: origin}, 4)
 	if err != nil {
@@ -200,15 +200,15 @@ func TestVerifiedRegionHandlesEpochZero(t *testing.T) {
 	}
 }
 
-// okSidecar verifies everything it is asked about.
-type okSidecar struct{}
+// okVerifier verifies everything it is asked about.
+type okVerifier struct{}
 
-func (o *okSidecar) Verify(context.Context, string, int64, string, string, time.Duration) (*Result, error) {
+func (o *okVerifier) Verify(context.Context, string, int64, string, string, time.Duration) (*Result, error) {
 	return &Result{OK: true, Bytes: 1, VerifyMS: 1}, nil
 }
 
-func (o *okSidecar) VerifyCached(context.Context, string, int64, string, string, string, time.Duration) (*Result, error) {
+func (o *okVerifier) VerifyCached(context.Context, string, int64, string, string, string, time.Duration) (*Result, error) {
 	return &Result{OK: true, Bytes: 1, VerifyMS: 1}, nil
 }
 
-func (o *okSidecar) Close() {}
+func (o *okVerifier) Close() {}

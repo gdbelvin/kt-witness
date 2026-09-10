@@ -24,8 +24,8 @@ import (
 //
 // What differs between participants is only the three functions below: where
 // assignments come from, what verifies an epoch, and where verdicts go. In the
-// witness those are a queue, a sidecar and a store. On a laptop they are a gRPC
-// stream, a sidecar and the same stream back.
+// witness those are a queue, a verifier and a store. On a laptop they are a
+// gRPC stream, a verifier and the same stream back.
 type Runner struct {
 	// Next blocks until an assignment is available, or returns ErrNoWork to be
 	// asked again after Idle.

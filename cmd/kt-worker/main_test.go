@@ -24,7 +24,7 @@ func (s stubVerifier) verify(context.Context, string, int64, string) (string, st
 
 // TestTheBudgetIsSplitByWhatAVerificationActuallyCosts pins the fix for a bug
 // that ran in production for a day: a literal 4 cores per epoch, measured
-// against a Rust sidecar the worker no longer runs, divided every machine's
+// against a Rust subprocess the worker no longer runs, divided every machine's
 // budget by four. A ten-core laptop verified two epochs at a time instead of
 // eight, and a thirty-two core box four instead of thirty.
 //

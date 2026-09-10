@@ -27,7 +27,7 @@ import (
 // as parallelism. That is the one place the witness differs from a laptop, and
 // it differs in the parameter rather than in the pattern.
 func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *work.Queue,
-	g *pace.Governor, sidecar audit.Verifier, resolvers []audit.Resolver, timeout time.Duration,
+	g *pace.Governor, verifier audit.Verifier, resolvers []audit.Resolver, timeout time.Duration,
 	n int, log *slog.Logger) {
 	if n < 1 {
 		n = 1
@@ -36,9 +36,9 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 	for _, r := range resolvers {
 		byOrigin[r.Origin()] = r
 	}
-	if len(byOrigin) == 0 || sidecar == nil {
+	if len(byOrigin) == 0 || verifier == nil {
 		log.Warn("no local worker: nothing here can verify an epoch",
-			"resolvers", len(byOrigin), "sidecar", sidecar != nil)
+			"resolvers", len(byOrigin), "verifier", verifier != nil)
 		return
 	}
 
@@ -62,7 +62,7 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 		// consult this governor and can hold the machine indefinitely, so
 		// permits sit at their floor and the gate would never open.
 		// The origin makes no difference here. This worker runs the Rust
-		// sidecars, whose pool size is the bound, and the governor is already
+		// verifications, whose concurrency is the bound, and the governor is already
 		// measuring what the box can afford — so the answer is about the
 		// machine rather than about the log.
 		Parallel: func(string) int {
@@ -92,7 +92,7 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 			// one every remote worker runs, and internal/akdtree's mutation
 			// trials and fuzzing are what establish that it rejects a bad
 			// proof.
-			return verifyEpochHere(ctx, byOrigin[origin], sidecar, origin, epoch, timeout)
+			return verifyEpochHere(ctx, byOrigin[origin], verifier, origin, epoch, timeout)
 		},
 		Report: func(ctx context.Context, res work.Result) error {
 			if err := q.Accept(res); err != nil {
@@ -143,12 +143,12 @@ func originsOf(m map[string]audit.Resolver) []string {
 }
 
 // verifyEpochHere resolves one epoch and replays its proof through the shared
-// sidecar pool.
+// verifier.
 //
 // Two things here are load-bearing, and the first version of this file got both
-// wrong by spawning the sidecar binary directly.
+// wrong by calling the verifier directly.
 //
-// An epoch cannot be verified from its number alone. The sidecar needs the log
+// An epoch cannot be verified from its number alone. The verifier needs the log
 // directory and the two roots the operator published, and those come from the
 // object key in the operator's own listing — which is the point: the proof is
 // checked against the roots the log published, not against anything we derived.
@@ -160,10 +160,21 @@ func originsOf(m map[string]audit.Resolver) []string {
 // spawner beside it means the bound is the sum of two numbers nobody wrote
 // down, and being wrong is an OOM kill of the whole witness rather than a
 // slowdown.
-func verifyEpochHere(ctx context.Context, r audit.Resolver, sidecar audit.Verifier,
+func verifyEpochHere(ctx context.Context, r audit.Resolver, v audit.Verifier,
 	origin string, epoch int64, timeout time.Duration) (string, string, error) {
 	if r == nil {
 		return "", "", fmt.Errorf("no resolver for %s", origin)
+	}
+	g, ok := v.(*audit.GoVerifier)
+	if !ok {
+		// Nothing else can answer this question. A verifier that reports a
+		// verdict — "here are two roots, do they hold" — has no computed root
+		// to hand back, and the caller compares computed against published. The
+		// Rust reference was exactly that shape, and rather than say so this
+		// function used to return the PUBLISHED current root as both of its
+		// computed roots: every successful verification came back as a mismatch
+		// on the previous root, was recorded unverified, and was re-queued.
+		return "", "", fmt.Errorf("this worker's verifier does not report computed roots")
 	}
 	ref, err := r.ResolveEpoch(ctx, epoch)
 	if err != nil {
@@ -171,31 +182,12 @@ func verifyEpochHere(ctx context.Context, r audit.Resolver, sidecar audit.Verifi
 	}
 	// The roots are computed, not echoed.
 	//
-	// This used to call the sidecar, whose API is "here are two roots, do they
-	// hold" — and then, on success, return the PUBLISHED current root as BOTH
-	// computed roots. The caller compares computed against published, so every
-	// successful verification came back as a mismatch on the previous root: the
-	// epoch was recorded unverified, re-queued, verified again, and recorded
-	// unverified again. The witness's own Meta auditing produced nothing but
-	// false negatives, and spent the bandwidth that is the actual scarce
-	// resource doing it.
-	//
-	// It also broke the property the whole design rests on. A machine handed
-	// the published roots and answering yes or no has been told the answer;
-	// this local worker is held to the same standard as the borrowed ones, and
-	// so it computes.
+	// A machine handed the published roots and answering yes or no has been
+	// told the answer; this local worker is held to the same standard as the
+	// borrowed ones, so it computes and lets the caller compare.
 	//
 	// ref.PrevRoot and ref.CurrRoot still go in, and only to address the
 	// operator's directory — that is how the proof URL is formed. They take no
 	// part in what comes out.
-	if g, ok := sidecar.(*audit.GoVerifier); ok {
-		return g.ComputeRoots(ctx, ref.LogDirectory, epoch, ref.PrevRoot, ref.CurrRoot, "", timeout)
-	}
-	// The Rust sidecar cannot answer this question — it compares and reports a
-	// verdict, and there is no computed root to get out of it. Rather than
-	// inventing one, say so: an assignment reported with an error is retried and
-	// eventually verified by the sweep, which is honest, where a fabricated root
-	// is a false negative recorded as fact.
-	return "", "", fmt.Errorf("this worker has no verifier that reports computed roots; " +
-		"the reference sidecar answers yes or no and cannot be asked what it built")
+	return g.ComputeRoots(ctx, ref.LogDirectory, epoch, ref.PrevRoot, ref.CurrRoot, "", timeout)
 }

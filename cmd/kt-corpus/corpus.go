@@ -26,7 +26,7 @@ import (
 //
 // # Why the layout is shaped like a URL
 //
-// The AKD verifier is a Rust sidecar that fetches its own proof over HTTP from
+// The AKD verifier fetches its proof over HTTP from
 // `{log_directory}/{epoch}/{prev_root}/{curr_root}`, and Signal's verifier is a
 // method on an internal Source that only reaches its response through an HTTP
 // endpoint. Neither can be handed bytes directly without changing code we do

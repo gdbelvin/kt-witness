@@ -83,7 +83,7 @@ func TestGovernorHoldsWhenBlind(t *testing.T) {
 	}
 }
 
-// TestGovernorNeverExceedsPoolSize: permits above the sidecar pool buy nothing
+// TestGovernorNeverExceedsPoolSize: permits above the verifier pool buy nothing
 // and would wind the controller up against a limit it cannot reach.
 func TestGovernorNeverExceedsPoolSize(t *testing.T) {
 	g := &Governor{ReserveCores: 1, MaxConcurrent: 3}

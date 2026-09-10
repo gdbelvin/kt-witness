@@ -1,9 +1,9 @@
 package server
 
 import (
-	"fmt"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sort"

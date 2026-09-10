@@ -204,7 +204,7 @@ func TestUnconfiguredOriginsAreNotReportedAsLive(t *testing.T) {
 // construction audited lives in the audit record. Computing the effective tier
 // from the source alone meant B+ could never be reached by the logs that are
 // actually audited — the AKD adapter reports A+ while its tier-B evidence comes
-// from the sidecar.
+// from the proofs the verifier replayed.
 func TestEffectiveTierComesFromTheAuditRecord(t *testing.T) {
 	s := testServer(t)
 	const origin = "example.org/log"

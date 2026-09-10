@@ -86,9 +86,9 @@ func TestExpiredLeasesReturnToTheQueue(t *testing.T) {
 	}
 }
 
-// A worker is only given work it says it can do. A worker without the AKD
-// sidecar handed AKD epochs would report every one of them unavailable, which
-// looks exactly like the log being down.
+// A worker is only given work it says it can do. A worker with no AKD verifier
+// handed AKD epochs would report every one of them unavailable, which from the
+// witness's side looks exactly like the log being down.
 func TestWorkersOnlyGetOriginsTheyDeclared(t *testing.T) {
 	q, _ := fixedQueue(t, time.Minute)
 	q.Add("meta.messenger.kt/v1", 1, 10)

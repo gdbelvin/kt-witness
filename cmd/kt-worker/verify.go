@@ -40,7 +40,7 @@ type verifier interface {
 	// width is how many logical CPUs one verification occupies.
 	//
 	// Declared by the thing that does the work rather than guessed by the thing
-	// that schedules it. The guess was four — measured against a Rust sidecar
+	// that schedules it. The guess was four — measured against a Rust subprocess
 	// this worker no longer runs — and it divided the CPU budget by that, so
 	// every machine in the fleet ran at a quarter of its width for a day.
 	width() int
@@ -53,8 +53,9 @@ type verifier interface {
 
 // akdVerifier replays a Meta or WhatsApp audit proof.
 //
-// In-process rather than through the Rust sidecar, and that follows from the
-// above: the sidecar compares against roots it is handed and answers yes or no,
+// In-process rather than through the Rust subprocess it replaced, and that
+// follows from the above: that program compared against roots it was handed and
+// answered yes or no,
 // which is exactly the shape this design is getting away from. Reporting
 // computed roots means computing them, and internal/akdtree does — validated
 // against 104 epochs of roots Meta and WhatsApp published, 1000 mutation trials

@@ -14,8 +14,9 @@ import (
 //
 // Inside a container this reports the HOST's memory, not the cgroup limit. That
 // is deliberate for this caller: a worker's neighbours are on the host, and the
-// thing to avoid is making the machine swap. Where a cgroup limit is the real
-// bound — the witness's own sidecar pool — that is read separately.
+// thing to avoid is making the machine swap. The cgroup limit is read
+// separately and published on its own; it was the real bound back when the
+// witness sized a Rust subprocess pool from it.
 func available() (uint64, bool) {
 	b, err := os.ReadFile("/proc/meminfo")
 	if err != nil {

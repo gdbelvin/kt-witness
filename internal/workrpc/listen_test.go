@@ -33,7 +33,7 @@ func TestOnlyLocalAddressesAreAccepted(t *testing.T) {
 		"104.21.6.56:8090":             "a public address",
 		"8.8.8.8:8090":                 "a public address",
 		"witness.gdbsecurity.com:8090": "a hostname can resolve anywhere, and can change later",
-		"192.168.0.10":                "no port",
+		"192.168.0.10":                 "no port",
 	}
 	for a, why := range bad {
 		for _, contained := range []bool{false, true} {
@@ -89,7 +89,7 @@ func TestAWorkerRefusesToDialOffThisNetwork(t *testing.T) {
 		"https://witness.gdbsecurity.com": "a URL, and a public one — the old default",
 		"104.21.6.56:18090":               "a public address",
 		"8.8.8.8:443":                     "a public address",
-		"192.168.0.10":                   "no port",
+		"192.168.0.10":                    "no port",
 	}
 	for a, why := range bad {
 		if err := CheckDialAddr(a); err == nil {

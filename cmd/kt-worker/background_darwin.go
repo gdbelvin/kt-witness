@@ -42,10 +42,10 @@ const (
 // — but it is the only setting under which a laptop genuinely does not feel
 // slower.
 //
-// The default is a budget instead: a nice level the sidecars inherit, and N-2
-// logical CPUs' worth of threads. Worth being plain about what that does and
-// does not promise — the OS may still run those threads on performance cores,
-// and nice is advisory. What is enforced is the count.
+// The default is a budget instead: a nice level any child process inherits, and
+// N-2 logical CPUs' worth of threads. Worth being plain about what that does
+// and does not promise — the OS may still run those threads on performance
+// cores, and nice is advisory. What is enforced is the count.
 func background(eCoresOnly bool) (string, int, error) {
 	if eCoresOnly {
 		if err := syscall.Setpriority(prioDarwinProcess, 0, prioDarwinBG); err != nil {
@@ -58,7 +58,8 @@ func background(eCoresOnly bool) (string, int, error) {
 	}
 	// Nice rather than background QoS: still yields to the owner's work, and
 	// remains eligible for the performance cores the budget below counts on.
-	// Children inherit it, which matters — the sidecars do the actual work.
+	// It applies to this process directly, which is what matters now that the
+	// verification happens here; children inherit it too.
 	if err := syscall.Setpriority(syscall.PRIO_PROCESS, 0, 10); err != nil {
 		return "", cpuBudget(), fmt.Errorf("lowering priority: %w", err)
 	}

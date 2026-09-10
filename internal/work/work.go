@@ -145,7 +145,7 @@ const ProtocolVersion = 2
 // Hello is what a worker sends when it connects.
 type Hello struct {
 	Name string `json:"name"`
-	// Origins the worker is able to verify. A worker without the AKD sidecar
+	// Origins the worker is able to verify. A worker without an AKD verifier
 	// should not be handed AKD epochs.
 	Origins []string `json:"origins"`
 	// Parallel is how many epochs it will work on at once. Advisory: it sizes

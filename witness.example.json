@@ -14,7 +14,6 @@
   "max_sign_delay": "30s",
   "refresh_interval": "1h",
   "audit": {
-    "sidecar_path": "./rust/kt-akd-verify/target/release/kt-akd-verify",
     "prefetch_dir": "/data/proof-cache",
     "prefetch_bytes": 32212254720,
     "prefetch_workers": 6,

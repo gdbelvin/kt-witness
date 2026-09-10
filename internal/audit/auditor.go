@@ -40,10 +40,15 @@ type Resolver interface {
 // Tier A+ assertions continue on their own cadence; tier B results accumulate
 // alongside them, and a failed verification poisons the log for both.
 type Auditor struct {
-	Store   *store.Store
-	Beacon  *Beacon
-	Sidecar Verifier
-	Log     *slog.Logger
+	Store  *store.Store
+	Beacon *Beacon
+	Log    *slog.Logger
+
+	// Verifier replays one epoch's proof. Named for what it does rather than
+	// for how it used to be reached: for most of this project's life it was a
+	// Rust subprocess, and the field kept that name long enough to describe a
+	// process boundary that no longer exists.
+	Verifier Verifier
 
 	// Prefetch, if set, downloads proofs ahead of verification so the link and
 	// the CPU are busy at the same time instead of taking turns.
@@ -64,9 +69,9 @@ type Auditor struct {
 	// long backlog does not monopolise a single round.
 	MaxEpochsPerRound int64
 
-	// Concurrency is bounded by the sidecar pool rather than by a lock here.
+	// Concurrency is bounded by the verifier rather than by a lock here.
 	// An earlier version held a mutex across every verification because one
-	// process could only do one at a time; that is the sidecar's protocol, not
+	// process could only do one at a time; that was a subprocess protocol, not
 	// the auditor's concern, and encoding it here meant the forward sweep and
 	// the backwards sweep could starve each other. The pool's size is now the
 	// only thing that decides how many run at once.
@@ -201,7 +206,7 @@ func (a *Auditor) Run(ctx context.Context, r Resolver) error {
 
 		a.Log.Info("auditing epoch", "origin", origin, "epoch", epoch,
 			"strategy", strategy, "rate", rate, "age", age, "attempt", ar.Attempts)
-		res, err := a.Sidecar.Verify(ctx, ref.LogDirectory, epoch, ref.PrevRoot, ref.CurrRoot, a.Timeout)
+		res, err := a.Verifier.Verify(ctx, ref.LogDirectory, epoch, ref.PrevRoot, ref.CurrRoot, a.Timeout)
 		if err != nil {
 			return a.unavailable(ar, epoch, "fetch", err)
 		}
@@ -250,7 +255,7 @@ func (a *Auditor) Run(ctx context.Context, r Resolver) error {
 		// contributing looks like a log that got slower.
 		metrics.Inc(MetricByWorker, map[string]string{"worker": "witness-live", "origin": origin})
 		metrics.Add("kt_witness_audit_bytes_total", lbl, float64(ar.Bytes))
-		// The sidecar fetches proofs over its own HTTP stack, outside any
+		// The verifier fetches proofs over its own HTTP stack, outside any
 		// transport we wrap, so without this the single largest consumer of
 		// bandwidth in the system would not appear in the bandwidth metric.
 		netmeter.Add(origin, ar.Bytes)

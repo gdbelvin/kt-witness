@@ -13,9 +13,6 @@
 # cmd/kt-witness source directory.
 /kt-witness
 
-# Rust sidecar build output (284MB proof temp files, target dir).
-rust/**/target/
-
 # Cloudflare Tunnel credentials authenticate the tunnel to Cloudflare. The
 # config beside them is public; these are not.
 /deploy/cloudflared/*.json

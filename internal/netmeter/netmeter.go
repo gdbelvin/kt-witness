@@ -7,9 +7,9 @@
 // built; measuring it is how the model gets checked.
 //
 // Counting happens in the transport rather than at call sites because the call
-// sites are spread across five adapters, a Rust sidecar and a tile fetcher, and
-// any of them could grow a new request that nobody remembered to instrument. A
-// RoundTripper sees all of it by construction.
+// sites are spread across five adapters, the audit verifier and a tile fetcher,
+// and any of them could grow a new request that nobody remembered to
+// instrument. A RoundTripper sees all of it by construction.
 package netmeter
 
 import (
@@ -131,7 +131,7 @@ func Snapshot() map[string]Stats {
 }
 
 // Add records bytes moved outside any HTTP transport we control — notably the
-// Rust audit sidecar, which downloads its own proofs and reports the size back.
+// audit verifier, which downloads its own proofs and reports the size back.
 // Without this the largest single consumer of bandwidth in the whole system
 // would be invisible in its own bandwidth metric.
 func Add(origin string, bytesIn int64) { record(origin, bytesIn, 0, 0) }

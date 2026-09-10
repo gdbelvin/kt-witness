@@ -82,9 +82,9 @@ type Governor struct {
 	// not yield forever.
 	MinPermits float64
 
-	// MaxConcurrent caps permits however much headroom appears. The sidecar
-	// pool is the real ceiling — permits above it buy nothing and would let the
-	// controller wind up against a limit it cannot reach.
+	// MaxConcurrent caps permits however much headroom appears. The verifier's
+	// own concurrency limit is the real ceiling — permits above it buy nothing
+	// and would let the controller wind up against a limit it cannot reach.
 	MaxConcurrent int
 
 	Log *slog.Logger

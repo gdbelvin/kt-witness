@@ -82,7 +82,7 @@ const (
 	fetchWorkers = 4
 
 	// More than the governor's permits, deliberately. Permits bound CPU; these
-	// workers also spend time handing proofs to the sidecar and releasing cache
+	// workers also spend time handing proofs to the verifier and releasing cache
 	// entries, so a couple of spares keep every permit occupied.
 	verifyWorkers = 8
 )
@@ -156,7 +156,7 @@ func (a *Auditor) sweepStream(ctx context.Context, r Resolver, cursor, earliest,
 						j.ref.PrevRoot, j.ref.CurrRoot)
 					j.cached = a.Prefetch.Path(origin, j.epoch)
 				}
-				// A miss is not fatal: the sidecar can still fetch it itself.
+				// A miss is not fatal: the verifier can still fetch it itself.
 				// That path costs a permit, which is why it is the exception.
 				send(ctx, fetched, j)
 			}

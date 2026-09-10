@@ -113,30 +113,33 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Split the CPU budget into epochs and threads.
+	// Split the CPU budget into concurrent epochs.
 	//
-	// One epoch is not one core. The sidecar runs a multi-threaded runtime and
-	// takes ~3.7 cores on its own for a WhatsApp proof, so counting epochs as
-	// cores would overshoot the budget by nearly four times — the first version
-	// of this would have run four epochs at once on a budget of eight and used
-	// closer to fifteen.
+	// One epoch is one core, and the arithmetic is that simple because the
+	// verifier is internal/akdtree: no goroutine anywhere in the package, so a
+	// verification occupies exactly one. The width is asked of the verifier
+	// rather than assumed — see epochsAtOnce — so if that ever stops being true
+	// the division follows it.
 	//
-	// Fewer, wider processes rather than many narrow ones: a proof is held in
-	// memory while it is checked (40 MB for WhatsApp, gigabytes for Meta), so
-	// concurrency costs memory in a way threads inside one process do not, and
-	// finishing an epoch sooner also returns it to the queue sooner.
-	// The budget is a HARD ceiling on threads: epochs times threads-per-epoch
-	// never exceeds it.
+	// It was not always this simple, and the history is worth keeping because
+	// every version of it was wrong in a way that only showed up on somebody's
+	// laptop. Verification used to be a Rust subprocess with a multi-threaded
+	// runtime that took ~3.7 cores of its own for a WhatsApp proof, so counting
+	// epochs as cores overshot the budget nearly fourfold: four epochs on a
+	// budget of eight used closer to fifteen.
 	//
-	// An earlier version divided the budget by what an epoch was measured to
-	// cost — 2.3 cores against a 4-thread cap — reasoning that a proof spends
-	// real time arriving before there is anything to hash, so the threads sit
-	// idle for part of it. That measurement was taken on ONE epoch running
-	// alone, and it does not survive concurrency: with three in flight, one
-	// epoch's download overlaps another's hashing, every thread becomes
-	// runnable, and the machine sees the full twelve. Observed on this laptop —
-	// two sidecars at 401% and 226% of a core, a load average of 9 on ten
-	// cores, and an owner who noticed.
+	// Then the budget was divided by what an epoch was MEASURED to cost — 2.3
+	// cores against a 4-thread cap — reasoning that a proof spends real time
+	// arriving before there is anything to hash, so the threads sit idle for
+	// part of it. That measurement was taken on ONE epoch running alone and
+	// does not survive concurrency: with three in flight, one epoch's download
+	// overlaps another's hashing, every thread becomes runnable, and the
+	// machine sees the full twelve. Observed on this laptop — two verifier
+	// processes at 401% and 226% of a core, a load average of 9 on ten cores,
+	// and an owner who noticed.
+	//
+	// The budget is a HARD ceiling: epochs times cores-per-epoch never exceeds
+	// it.
 	//
 	// An average is the wrong shape for a promise about somebody's laptop. The
 	// promise was two cores left free; only a ceiling keeps it.
@@ -185,7 +188,8 @@ func main() {
 		}
 	}
 	if len(w.origins) == 0 && !*dry {
-		log.Error("no verifiers configured", "hint", "set -akd-bin or -proton-bin, or use -dry-run")
+		log.Error("no verifiers configured",
+			"hint", "set -akd-origins (verification is in this binary), or -proton-bin, or use -dry-run")
 		os.Exit(2)
 	}
 
@@ -252,9 +256,9 @@ type pacer interface {
 // epochsAtOnce splits a CPU budget into concurrent verifications, asking the
 // things that do the work how wide each one is.
 //
-// This was a literal 4, measured against a Rust sidecar this worker no longer
-// runs, and it divided the budget — so every machine in the fleet ran at a
-// quarter of its width until somebody noticed a laptop sitting idle.
+// This was a literal 4, measured against a Rust subprocess this worker no
+// longer runs, and it divided the budget — so every machine in the fleet ran
+// at a quarter of its width until somebody noticed a laptop sitting idle.
 // internal/akdtree is single-threaded, so the answer is now one, and asking
 // rather than assuming means it changes with the implementation instead of
 // going stale beside it.
@@ -476,7 +480,8 @@ func (w *worker) run(ctx context.Context) error {
 	// The background QoS class decides WHERE threads run; this decides whether
 	// to take on more work at all. They are different questions: a laptop
 	// pinned to its efficiency cores can still make itself unpleasant if it
-	// keeps several sidecar processes resident while somebody is using it.
+	// holds several hundred-megabyte proofs resident while somebody is using
+	// it.
 	//
 	// The budget is machine-wide, and deliberately generous about everybody
 	// else: half the laptop's logical cores, measured across all of them rather

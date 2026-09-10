@@ -3,12 +3,12 @@
 //
 // # Why a second implementation exists
 //
-// The witness already verifies these proofs with a Rust sidecar built on
-// Meta's own `akd` crate, which is the reference and stays the authority. This
-// package is not here to replace that judgement. It is here because the
-// reference is slow in a way that is structural rather than incidental, and
-// because the backlog it has to chew through is measured in hundreds of
-// thousands of epochs.
+// The witness used to verify these proofs with a Rust subprocess built on
+// Meta's own `akd` crate — the reference implementation, and still the
+// definition of what a correct answer is. This package was not written to
+// dispute that definition. It was written because the reference is slow in a
+// way that is structural rather than incidental, and because the backlog it
+// had to chew through is measured in hundreds of thousands of epochs.
 //
 // The reference builds the tree through a generic storage abstraction meant for
 // a real database: every node is an object, written through an async in-memory
@@ -22,16 +22,20 @@
 // So the arithmetic here is identical and the data structure is not: one sorted
 // array, recursion over index ranges, no per-node allocation, no map.
 //
-// # What this must never be trusted to do alone
+// # What it cost to be trusted alone
 //
 // A verifier that is wrong in the accepting direction approves a forged proof;
 // one that is wrong in the rejecting direction accuses an honest operator of a
 // fork, publicly and permanently. Both failures are worse than being slow.
 //
-// This runs alongside the reference, not instead of it. The witness compares
-// the two and the reference decides, until this one has a long enough clean
-// record to be worth arguing about. There is precedent: the Proton GPU rebuild
-// shipped the same way, racing the GPU against the CPU and trusting agreement.
+// So this ran alongside the reference first, not instead of it: the witness
+// compared the two and the reference decided, until the clean record was long
+// enough to argue from. It is the only verifier left now, and the evidence it
+// was promoted on is set out on internal/audit.GoVerifier — 104 epochs
+// agreeing with roots Meta and WhatsApp published, 1000 mutation trials, 8.2
+// million fuzz executions, and a shadow record in production. There is
+// precedent for the shape of that promotion: the Proton GPU rebuild shipped
+// the same way, racing the GPU against the CPU and trusting agreement.
 //
 // # The algorithm, as the reference defines it
 //

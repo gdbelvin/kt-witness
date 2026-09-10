@@ -27,7 +27,6 @@ import (
 	"github.com/gdbsecurity/kt-witness/internal/audit"
 	"github.com/gdbsecurity/kt-witness/internal/cosig"
 	"github.com/gdbsecurity/kt-witness/internal/export"
-	"github.com/gdbsecurity/kt-witness/internal/hostmem"
 	"github.com/gdbsecurity/kt-witness/internal/metrics"
 	"github.com/gdbsecurity/kt-witness/internal/server"
 	"github.com/gdbsecurity/kt-witness/internal/source"
@@ -91,7 +90,7 @@ type config struct {
 	ExportDir string `json:"export_dir"`
 
 	// Audit configures tier B: replaying construction proofs for a sampled
-	// subset of epochs. Disabled unless sidecar_path is set.
+	// subset of epochs. Runs whenever a configured log can resolve an epoch.
 	// ProtonAudit runs Proton's construction audit inside this process. It
 	// retains a ~13.6 GB tree between epochs, which is what makes each step a
 	// 3 MB job rather than a 13.6 GB one. Empty dir disables it.
@@ -176,30 +175,6 @@ type config struct {
 	} `json:"work"`
 
 	Audit struct {
-		SidecarPath string `json:"sidecar_path"`
-
-		// SidecarWorkers is how many verifications may run at once. Each peaks
-		// near 3.7 GB RSS, so this is a statement about the host's memory, not
-		// about how fast auditing ought to go. Defaults to 1.
-		SidecarWorkers int `json:"sidecar_workers"`
-
-		// ShadowVerify runs the Go verifier beside the Rust reference and
-		// records whether they agree. The reference still decides; this only
-		// builds the record that would one day justify trusting the faster
-		// one. Defaults to on, and costs about an eighth of a verification on
-		// epochs whose proof is already cached — it never downloads anything
-		// a second time to check our own arithmetic.
-		//
-		// ShadowEvery samples it: 1 (or 0) shadows everything, 10 shadows one
-		// epoch in ten.
-		// Verifier selects which implementation does the witness's own
-		// verification: "go" for internal/akdtree, "rust" for the reference
-		// sidecar. The reference is the authority wherever it runs; this
-		// chooses which one runs in the hot path.
-		Verifier string `json:"verifier"`
-
-		ShadowVerify *bool `json:"shadow_verify"`
-		ShadowEvery  int   `json:"shadow_every"`
 
 		// GoConcurrent bounds in-process verifications. Zero derives it from
 		// the machine's cores.
@@ -625,7 +600,21 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 	// exists; the verifier is built before the channel it serves.
 	var auditInterval time.Duration
 	var resolvers []audit.Resolver
-	if cfg.Audit.SidecarPath != "" {
+	// Tier B runs when there is a log that can be audited.
+	//
+	// The gate used to be a path to a Rust verifier binary, which made
+	// construction auditing conditional on an external build being present —
+	// so the way to turn off the strongest check this witness performs was to
+	// mistype a filename, and nothing would say so. There is no external binary
+	// now, and the honest precondition was always this one: a source that can
+	// resolve an epoch to its published roots.
+	auditable := 0
+	for _, src := range sources {
+		if _, ok := src.(audit.Resolver); ok {
+			auditable++
+		}
+	}
+	if auditable > 0 {
 		if auditInterval, err = time.ParseDuration(orDefault(cfg.Audit.Interval, "20s")); err != nil {
 			return fmt.Errorf("audit.interval: %w", err)
 		}
@@ -637,95 +626,25 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		if rate <= 0 {
 			rate = 0.1
 		}
-		// Derived from the memory this container may use, unless set. A pool is
-		// bounded by memory rather than cores because a verification is already
-		// multi-threaded, and because overrunning memory is an OOM kill while
-		// overrunning CPU is merely slow — and the governor corrects slow.
-		workers := cfg.Audit.SidecarWorkers
-		if workers < 1 {
-			workers = audit.DefaultWorkers()
-		}
-		pool := audit.NewPool(cfg.Audit.SidecarPath, workers)
-		var sidecar audit.Verifier = pool
-
-		// The Go verifier in the hot path, with the reference kept for the
-		// shadow and the canary.
+		// One verifier, in this process.
 		//
-		// The sidecar pool is capped at eight because one Rust verification
-		// peaks near 3.7 GB, and that cap — not this machine's thirty-two
-		// cores — has been what bounds throughput. A verification in Go holds
-		// the proof and a flat array of nodes, so the ceiling moves off memory
-		// and onto cores.
-		// usesSidecarFiles records whether anything in this chain leaves a proof
-		// on disk. Only the Rust sidecar does, and only it needs the scratch
-		// filesystem, the retention flag and the thing that deletes the file.
-		usesSidecarFiles := !strings.EqualFold(cfg.Audit.Verifier, "go")
-
-		var goVerifier *audit.GoVerifier
-		if strings.EqualFold(cfg.Audit.Verifier, "go") {
-			goVerifier = &audit.GoVerifier{Concurrent: cfg.Audit.GoConcurrent}
-			sidecar = goVerifier
-			log.Info("verifying in-process with the Go implementation",
-				"concurrent", goVerifier.Size(),
-				"shadow", cfg.Audit.ShadowVerify == nil || *cfg.Audit.ShadowVerify)
-		}
-
-		// Check the scratch space, but only if anything is going to use it.
+		// This was a pool of Rust subprocesses, sized from the container's
+		// memory limit because each peaked near 3.7 GB — and that cap, not the
+		// machine's thirty-two cores, was what bounded this witness for months.
+		// A verification here holds the proof and a flat array of its nodes, so
+		// the ceiling moved off memory and onto cores, and then onto bandwidth,
+		// which is where it belongs: Meta publishes 284 MB per epoch and there
+		// is one connection.
 		//
-		// Nothing does when the Go verifier is in the hot path: it holds the
-		// proof in memory and hands the bytes straight to the canary, so there
-		// is no download to a file, no retention, and nothing to delete. This
-		// check applies to the sidecar, which is the only thing here that needs
-		// a filesystem to do arithmetic.
-		//
-		// The sidecar writes each proof to a temporary file before replaying
-		// it — ~284 MB for Meta — and in the container that is a tmpfs sized in
-		// the compose file. That number was chosen when one verification ran at
-		// a time and did not move when the pool widened to eight, so the
-		// witness spent days reporting "unverifiable (fetch): No space left on
-		// device" on a host with 568 GB free, re-queueing each epoch it had
-		// just failed to fetch. Coverage fell and nothing named the cause.
-		//
-		// This cannot fix it — a process cannot resize its own tmpfs — so it
-		// says the true thing once, at startup, where somebody is reading,
-		// rather than an errno per epoch forever. A warning rather than a
-		// refusal: a witness that verifies some epochs is worth more than one
-		// that will not start, and WhatsApp proofs are small enough to fit
-		// regardless.
-		if free, ok := hostmem.Scratch(os.TempDir()); ok && usesSidecarFiles {
-			const largestProof = 300 << 20 // Meta, and it grows
-			need := uint64(workers) * largestProof
-			if free < need {
-				log.Warn("scratch space is smaller than the sidecar pool needs",
-					"dir", os.TempDir(),
-					"free_gb", float64(free)/(1<<30),
-					"need_gb", float64(need)/(1<<30),
-					"pool", workers,
-					"note", "each verification writes a proof here before replaying it; "+
-						"short of this the symptom is per-epoch fetch errors and re-queued "+
-						"work, not anything that mentions disk. Raise KT_TMPFS_SIZE.")
-			}
-		}
-
-		if cfg.Audit.ShadowVerify != nil && *cfg.Audit.ShadowVerify {
-			// The shadow reads the bytes the reference downloaded rather than
-			// fetching them again, so it asks the pool to leave the file — and
-			// the Reaper, outside it, is what deletes it afterwards. That
-			// ownership is explicit because it was lost once: Shadow used to be
-			// the only deleter, something else was switched off, and the witness
-			// filled a 12 GB tmpfs in forty epochs.
-			//
-			// This whole branch is the last thing in the process that needs a
-			// filesystem. The Go verifier holds the proof in memory.
-			pool.KeepProofs()
-			usesSidecarFiles = true
-			sidecar = &audit.Shadow{Primary: sidecar, Log: log, Every: cfg.Audit.ShadowEvery}
-			sidecar = &audit.Reaper{Primary: sidecar, Log: log}
-			log.Info("shadow verification enabled",
-				"note", "the Rust reference decides; the Go verifier is only observed",
-				"every", max(1, cfg.Audit.ShadowEvery))
-		}
-		defer sidecar.Close()
+		// GoConcurrent overrides; zero derives N-2, the same budget every part
+		// of this project uses.
+		goVerifier := &audit.GoVerifier{Concurrent: cfg.Audit.GoConcurrent}
+		var verifier audit.Verifier = goVerifier
+		log.Info("verifying append-only proofs in this process",
+			"concurrent", goVerifier.Size(),
+			"note", "correctness is checked continuously against the roots each "+
+				"operator publishes, on every epoch, rather than by a second implementation")
+		defer verifier.Close()
 		// Pace the backlog against measured CPU rather than a fixed budget. A
 		// constant is wrong the moment the hardware or the proof sizes change:
 		// the previous value was chosen when a verification took 94 s on four
@@ -735,16 +654,15 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		if cfg.Audit.Pace || cfg.Audit.TargetCores > 0 || cfg.Audit.ReserveCores > 0 {
 			// The ceiling has to match whatever is actually verifying.
 			//
-			// It was the sidecar pool's size, because that was the only thing
-			// that could run concurrently. With the Go verifier in the hot path
-			// the limit is cores rather than the 3.7 GB a Rust verification
-			// peaks at — and leaving the old number here would have quietly
-			// held the box at eight while thirty were available, which is the
-			// same mistake as the pool cap, one layer up.
-			maxConcurrent := workers
-			if strings.EqualFold(cfg.Audit.Verifier, "go") {
-				maxConcurrent = (&audit.GoVerifier{Concurrent: cfg.Audit.GoConcurrent}).Size()
-			}
+			// Cores, not a process pool's size.
+			//
+			// That number existed because a Rust verification peaked near
+			// 3.7 GB and memory was the binding constraint. It is not any more:
+			// a verification here holds the proof and a flat array of its
+			// nodes, so what bounds concurrency is how many cores there are —
+			// and leaving the old figure would have held a thirty-two core box
+			// at eight.
+			maxConcurrent := goVerifier.Size()
 			governor = &pace.Governor{
 				ReserveCores:  cfg.Audit.ReserveCores,
 				TargetCores:   cfg.Audit.TargetCores,
@@ -770,7 +688,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		}
 		auditor = &audit.Auditor{
 			Store: db, Beacon: audit.NewBeacon(cfg.Audit.BeaconURL),
-			Sidecar: sidecar, Log: log, Rate: rate, Timeout: auditTimeout,
+			Verifier: goVerifier, Log: log, Rate: rate, Timeout: auditTimeout,
 			MaxEpochsPerRound: maxEpochsPerRound(cfg.Audit.MaxEpochsPerRound),
 			Governor:          governor,
 			Prefetch:          prefetch,
@@ -780,14 +698,11 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 				resolvers = append(resolvers, r)
 			}
 		}
-		log.Info("tier B auditing enabled", "sidecar", cfg.Audit.SidecarPath,
+		log.Info("tier B auditing enabled",
 			"sample_rate", rate, "logs", len(resolvers), "interval", auditInterval.String(),
-			"workers", pool.Size(),
-			"threads_each", pool.Threads(),
-			"threads_total", pool.Size()*pool.Threads(),
+			"concurrent", goVerifier.Size(),
 			"machine_cores", runtime.NumCPU(),
-			"workers_derived", cfg.Audit.SidecarWorkers < 1,
-			"peak_memory_estimate_gb", float64(pool.Size())*3.7)
+			"concurrency_derived", cfg.Audit.GoConcurrent < 1)
 	}
 
 	peers, err := cosig.NewVerifier(cfg.PeerWitnesses)
@@ -835,17 +750,17 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		// bounds concurrent replays. Passing them rather than letting the local
 		// worker build its own is what keeps the memory bound a single number.
 		var (
-			wSidecar   audit.Verifier
+			wVerifier  audit.Verifier
 			wResolvers []audit.Resolver
 			wTimeout   = 5 * time.Minute
 		)
 		if auditor != nil {
-			wSidecar, wResolvers = auditor.Sidecar, resolvers
+			wVerifier, wResolvers = auditor.Verifier, resolvers
 			if auditor.Timeout > 0 {
 				wTimeout = auditor.Timeout
 			}
 		}
-		w, err := startWorkChannel(ctx, cfg, db, governorFor(auditor), wSidecar, wResolvers, wTimeout, log)
+		w, err := startWorkChannel(ctx, cfg, db, governorFor(auditor), wVerifier, wResolvers, wTimeout, log)
 		if err != nil {
 			// Refusing to start is the point. A work channel that silently did
 			// not come up would leave the witness looking healthy while the
@@ -1009,7 +924,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		go func() {
 			for {
 				// Audits across ecosystems are independent and dominated by
-				// download time, so they overlap. The sidecar itself is the
+				// download time, so they overlap. Verification itself is the
 				// serialisation point for CPU, which is what we want: memory
 				// peaks at ~3.7 GB per verification and running several at once
 				// would blow the container limit.
@@ -1045,14 +960,14 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		// completeness metric that silently stops moving is worse than one that
 		// is honestly slow.
 		//
-		// Priority is now enforced where it actually belongs — the sidecar
+		// Priority is now enforced where it actually belongs — the verifier
 		// mutex — so the two sweeps interleave one verification at a time
 		// instead of one starving the other. Memory stays bounded because only
 		// one verification ever runs.
 		go func() {
 			for {
 				// Across origins in parallel, like the forward sweep. The
-				// sidecar pool is what bounds real concurrency, so fanning out
+				// verifier's concurrency is what bounds real work, so fanning out
 				// here costs nothing when the pool is small and uses the whole
 				// pool when it is not.
 				var hwg sync.WaitGroup

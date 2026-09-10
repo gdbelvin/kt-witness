@@ -56,26 +56,14 @@ services:
     # the history-coverage metric counts against a range frozen in the past.
     command: ["-config", "/config/witness.json", "-backfill"]
 
-    # Scratch space for the Rust reference sidecar, which is NOT in the path by
-    # default and so does not normally use any of this.
+    # No tmpfs. Nothing writes to disk during a verification any more.
     #
-    # The sidecar is a separate process reached through a pipe, so a 284 MB
-    # proof has to become a file: it downloads to /tmp before replaying. The Go
-    # verifier holds the proof in memory and writes nothing, and it is what
-    # audit.verifier: "go" selects.
-    #
-    # The size is kept because the sidecar remains a supported configuration and
-    # getting it wrong is expensive in a way that names nothing: at 1g, sized
-    # when one verification ran at a time, a widened pool produced
-    # "unverifiable (fetch): No space left on device" on a host with 568 GB
-    # free, five times per epoch, until each was recorded permanently unverified
-    # and skipped. The rule is concurrency times the largest proof — the sidecar
-    # pool is 8 here — and the witness checks it at startup when, and only when,
-    # something is going to use it.
-    #
-    # tmpfs is page-backed, so an unused 12g occupies nothing.
-    tmpfs:
-      - /tmp:size=${KT_TMPFS_SIZE:-12g}
+    # There was a /tmp sized in gigabytes because the Rust sidecar was a
+    # separate process reached through a pipe, so a 284 MB proof had to become a
+    # file before it could be replayed. That sizing caused two outages in one
+    # day — at 1g, chosen when one verification ran at a time, a widened pool
+    # produced "unverifiable (fetch): No space left on device" on a host with
+    # 568 GB free, and named nothing. The Go verifier holds the proof in memory.
 
     # One ports list, because two keys in the same mapping is not a merge — YAML
     # rejects the duplicate, and a parser that tolerates it silently keeps one
@@ -114,25 +102,20 @@ services:
       # which turns the check into a lookup table.
       - "${KT_WITNESS_LAN_IP:?set KT_WITNESS_LAN_IP in .env — see deploy/infra.example.env}:18091:8091"
 
-    # One AKD verification peaks around 3.7 GB RSS. The limit is above that with
-    # headroom, and deliberately not far above: exceeding it should kill the
+    # Memory, and what it is now for.
+    #
+    # This was 44g because the pool ran eight Rust verifications at ~3.7 GB
+    # each, and audit.DefaultWorkers derived the pool size from this number — so
+    # the limit was the throughput knob. It is not any more. A verification in
+    # this process holds the proof and a flat array of its nodes: roughly three
+    # times the proof, so under a gigabyte for Meta's largest, and concurrency
+    # is bounded by cores instead.
+    #
+    # The limit stays generous and stays a limit. Proton's replay memory-maps a
+    # 13.6 GB tree and reads it end to end, so page cache is the difference
+    # between a step that streams and one that thrashes — working memory that
+    # belongs to the kernel rather than to us. Exceeding this should kill the
     # container loudly rather than drive the host into swap.
-    # Three sidecar workers, each peaking near 3.7 GB on a Meta proof, so the
-    # working set is ~11 GB. The limit is above that with headroom and
-    # deliberately not far above: exceeding it should kill the container loudly
-    # rather than drive the host into swap. Raise this and sidecar_workers
-    # together — one without the other is either wasted memory or an OOM kill.
-    # 44g of the VM's 64g. The sidecar pool is sized from this limit
-    # (see audit.DefaultWorkers), so raising it buys workers: 44 * 0.75 / 4 = 8.
-    #
-    # The remaining 20g is not slack. Proton's replay memory-maps a 13.6 GB tree
-    # and reads it end to end, so page cache is the difference between a step
-    # that streams and one that thrashes; it is working memory that simply
-    # belongs to the kernel rather than to us.
-    #
-    # Safe to set ahead of the VM resize: DefaultWorkers takes the smaller of
-    # this limit and what the machine physically has, so on the old 31g box it
-    # still computes four workers rather than eight and an OOM kill.
     mem_limit: 44g
 
     # The monitoring endpoint is the product. If it stops serving, the witness is

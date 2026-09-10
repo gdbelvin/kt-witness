@@ -150,7 +150,7 @@ func Init(version, commit, built string) {
 	d(MProcHeapBytes, metrics.Gauge, "Go heap in use. Excludes memory-mapped files, which is most of what Proton's replay touches.")
 	d(MProcSysBytes, metrics.Gauge, "Memory obtained from the OS by the Go runtime.")
 	d(MCgroupMemBytes, metrics.Gauge, "Container memory in use, including page cache.")
-	d(MCgroupMemLimit, metrics.Gauge, "Container memory limit. The sidecar pool is derived from this, so it decides throughput as much as core count does.")
+	d(MCgroupMemLimit, metrics.Gauge, "Container memory limit. It bounded throughput more than core count did while verification ran in a Rust subprocess pool sized from it — one such verification peaked near 3.7 GB. The in-process verifier is sized by cores instead, so this is now a ceiling on the container rather than on the work.")
 	d(MCgroupMemEvents, metrics.Counter, "cgroup memory.events by kind. ALERT ON `max`: it counts how often the container hit its ceiling and had to reclaim, which is not an error and never appears in a log, but sustained growth means time spent evicting and re-faulting pages instead of working. It reached 30,596 during a six-hour stall that nothing else surfaced. `oom_kill` is the same signal after it stops being survivable.")
 	d(MCgroupCPUMax, metrics.Gauge, "Container CPU quota, or absent when unlimited.")
 	d(MMachineMemBytes, metrics.Gauge, "Total machine memory. Published so a limit larger than the machine is visible rather than discovered by an OOM.")

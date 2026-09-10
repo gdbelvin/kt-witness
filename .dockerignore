@@ -1,5 +1,4 @@
 # Build output and local state must never enter the image.
-rust/**/target/
 data/
 *.db
 *.key

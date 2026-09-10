@@ -150,7 +150,7 @@ func (a *Auditor) verifyResolved(ctx context.Context, origin string, epoch int64
 		br.canceled = true
 		return br
 	}
-	res, err := a.Sidecar.VerifyCached(ctx, ref.LogDirectory, epoch,
+	res, err := a.Verifier.VerifyCached(ctx, ref.LogDirectory, epoch,
 		ref.PrevRoot, ref.CurrRoot, cached, a.Timeout)
 	a.Governor.Release()
 	if cached != "" {
@@ -173,7 +173,7 @@ func (a *Auditor) verifyResolved(ctx context.Context, origin string, epoch int64
 		br.verified = true
 
 		lbl := map[string]string{"origin": origin}
-		// The sidecar reports its own phases; keep them. Deciding whether this
+		// The verifier reports its own phases; keep them. Deciding whether this
 		// verification could be moved to other hardware is a question about
 		// which phase dominates, and until now the history path measured the
 		// split and then threw it away.
@@ -193,7 +193,7 @@ func (a *Auditor) verifyResolved(ctx context.Context, origin string, epoch int64
 		// sum.
 		metrics.Inc("kt_witness_history_verified_total", lbl)
 		metrics.Add("kt_witness_audit_bytes_total", lbl, float64(res.Bytes))
-		// The sidecar fetches over its own stack, so without this the largest
+		// The verifier fetches over its own stack, so without this the largest
 		// consumer of bandwidth would not appear in the bandwidth metric. A
 		// prefetched proof was already counted when it was downloaded.
 		if cached == "" {

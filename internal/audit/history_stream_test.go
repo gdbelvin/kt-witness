@@ -22,10 +22,10 @@ import (
 func streamAuditor(t *testing.T, db *store.Store, v Verifier) *Auditor {
 	t.Helper()
 	return &Auditor{
-		Store:   db,
-		Sidecar: v,
-		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Timeout: 5 * time.Second,
+		Store:    db,
+		Verifier: v,
+		Log:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Timeout:  5 * time.Second,
 	}
 }
 
@@ -45,19 +45,19 @@ func streamStore(t *testing.T, name, origin string, from, to int64) *store.Store
 	return db
 }
 
-// gapSidecar refuses exactly one epoch and verifies everything else, with
+// gapVerifier refuses exactly one epoch and verifies everything else, with
 // randomised delays so results arrive in an order unrelated to epoch order.
-type gapSidecar struct {
+type gapVerifier struct {
 	refuse int64
 	mu     sync.Mutex
 	seen   []int64
 }
 
-func (g *gapSidecar) Verify(context.Context, string, int64, string, string, time.Duration) (*Result, error) {
+func (g *gapVerifier) Verify(context.Context, string, int64, string, string, time.Duration) (*Result, error) {
 	return nil, nil
 }
 
-func (g *gapSidecar) VerifyCached(_ context.Context, _ string, epoch int64, _, _, _ string, _ time.Duration) (*Result, error) {
+func (g *gapVerifier) VerifyCached(_ context.Context, _ string, epoch int64, _, _, _ string, _ time.Duration) (*Result, error) {
 	// Jitter, so completion order is genuinely not epoch order.
 	time.Sleep(time.Duration(rand.Intn(8)) * time.Millisecond)
 	g.mu.Lock()
@@ -69,7 +69,7 @@ func (g *gapSidecar) VerifyCached(_ context.Context, _ string, epoch int64, _, _
 	return &Result{OK: true, Bytes: 1, VerifyMS: 1}, nil
 }
 
-func (g *gapSidecar) Close() {}
+func (g *gapVerifier) Close() {}
 
 // The cursor must never step past an epoch that is not settled, however the
 // results happen to arrive.
@@ -80,7 +80,7 @@ func (g *gapSidecar) Close() {}
 func TestCursorNeverPassesAGapUnderReordering(t *testing.T) {
 	const origin = "meta.test/v1"
 	db := streamStore(t, "gap.db", origin, 1, 1000)
-	a := streamAuditor(t, db, &gapSidecar{refuse: 990})
+	a := streamAuditor(t, db, &gapVerifier{refuse: 990})
 
 	if _, err := a.RunHistory(context.Background(), &staticResolver{origin: origin}, 32); err != nil {
 		t.Fatal(err)
@@ -110,7 +110,7 @@ func TestCursorNeverPassesAGapUnderReordering(t *testing.T) {
 func TestWorkBehindAGapIsStillRecorded(t *testing.T) {
 	const origin = "meta.test/v1"
 	db := streamStore(t, "behind.db", origin, 1, 1000)
-	a := streamAuditor(t, db, &gapSidecar{refuse: 995})
+	a := streamAuditor(t, db, &gapVerifier{refuse: 995})
 
 	if _, err := a.RunHistory(context.Background(), &staticResolver{origin: origin}, 32); err != nil {
 		t.Fatal(err)
@@ -142,7 +142,7 @@ func TestWorkBehindAGapIsStillRecorded(t *testing.T) {
 func TestRefusedEpochSpendsExactlyOneAttemptPerPass(t *testing.T) {
 	const origin = "meta.test/v1"
 	db := streamStore(t, "attempts.db", origin, 1, 1000)
-	a := streamAuditor(t, db, &gapSidecar{refuse: 999})
+	a := streamAuditor(t, db, &gapVerifier{refuse: 999})
 
 	for pass := 1; pass <= 2; pass++ {
 		if _, err := a.RunHistory(context.Background(), &staticResolver{origin: origin}, 16); err != nil {
@@ -169,7 +169,7 @@ func TestRefusedEpochSpendsExactlyOneAttemptPerPass(t *testing.T) {
 func TestCancelledPipelineRecordsNothing(t *testing.T) {
 	const origin = "meta.test/v1"
 	db := streamStore(t, "cancel-stream.db", origin, 1, 1000)
-	a := streamAuditor(t, db, &cancelSidecar{})
+	a := streamAuditor(t, db, &cancelVerifier{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -193,7 +193,7 @@ func TestCancelledPipelineRecordsNothing(t *testing.T) {
 func TestCleanRunAdvancesOverTheWholeBudget(t *testing.T) {
 	const origin = "meta.test/v1"
 	db := streamStore(t, "clean.db", origin, 1, 1000)
-	a := streamAuditor(t, db, &gapSidecar{refuse: -1}) // refuse nothing
+	a := streamAuditor(t, db, &gapVerifier{refuse: -1}) // refuse nothing
 
 	out, err := a.RunHistory(context.Background(), &staticResolver{origin: origin}, 32)
 	if err != nil {

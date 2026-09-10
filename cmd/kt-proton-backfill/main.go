@@ -90,9 +90,9 @@ type result struct {
 type outcome int
 
 const (
-	verifiedByGPU outcome = iota // GPU matched the signed root; nothing else to do
-	gpuWrong                     // GPU disagreed, CPU matched: a bug here, not a finding
-	constructionFailed           // GPU and CPU both disagree with what Proton signed
+	verifiedByGPU      outcome = iota // GPU matched the signed root; nothing else to do
+	gpuWrong                          // GPU disagreed, CPU matched: a bug here, not a finding
+	constructionFailed                // GPU and CPU both disagree with what Proton signed
 )
 
 // classify decides what a disagreement means, and is separated from the loop

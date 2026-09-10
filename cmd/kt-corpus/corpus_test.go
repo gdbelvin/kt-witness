@@ -172,7 +172,7 @@ func TestReplayFailsOnCorruptedArtifact(t *testing.T) {
 		t.Fatal("a flipped bit must fail the integrity check")
 	}
 
-	r, err := NewReplayer(c, "", time.Minute)
+	r, err := NewReplayer(c, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestReplayRunsTheRealVerifier(t *testing.T) {
 	if err := c.checkBlob(m); err != nil {
 		t.Fatalf("artifact should be intact: %v", err)
 	}
-	r, err := NewReplayer(c, "", time.Minute)
+	r, err := NewReplayer(c, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,18 +221,23 @@ func TestReplayRunsTheRealVerifier(t *testing.T) {
 	}
 }
 
-// An AKD artifact cannot be replayed without the sidecar, and a missing verifier
-// must be reported rather than quietly counted as a pass.
-func TestAKDReplayRequiresSidecar(t *testing.T) {
+// A stored blob that is not a valid proof must fail replay, and must fail with
+// a verification error rather than being quietly counted as a pass.
+//
+// This test used to assert that replay failed when the Rust subprocess was absent,
+// which was a statement about a missing binary rather than about the artifact.
+// The verifier is always present now, so the thing worth asserting is the one
+// that was always the point: garbage does not replay.
+func TestAKDReplayRejectsAnArtifactThatIsNotAProof(t *testing.T) {
 	c := newTestCorpus(t, 1<<30, 0)
 	m := store(t, c, KindAKD, "meta.messenger.kt/v1", 5, []byte("proof"))
-	r, err := NewReplayer(c, "", time.Minute)
+	r, err := NewReplayer(c, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer r.Close()
 	if err := r.Replay(context.Background(), m); err == nil {
-		t.Fatal("replay without a sidecar must fail, not pass")
+		t.Fatal("five bytes that are not a proof replayed successfully")
 	}
 }
 

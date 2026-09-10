@@ -261,7 +261,7 @@ func (s *Server) buildStatus() (*statusView, error) {
 		// log is ALSO construction audited is decided by the auditor and lives
 		// in the record, not in the source: the AKD adapter reports A+ because
 		// root-chain continuity is what it proves on its own, while tier B for
-		// the same log comes from proofs the sidecar replayed.
+		// the same log comes from proofs the verifier replayed.
 		//
 		// So the effective tier is computed here, from what was actually done.
 		// An earlier version asked the source whether it was tier B, which meant

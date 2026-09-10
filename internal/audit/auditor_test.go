@@ -2,10 +2,8 @@ package audit
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -14,22 +12,38 @@ import (
 	"golang.org/x/mod/sumdb/tlog"
 )
 
-// fakeSidecar writes a shell script that speaks the sidecar's line protocol, so
-// the auditor's decision logic can be tested without a 284 MB download.
-func fakeSidecar(t *testing.T, response string) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "fake-sidecar")
-	script := fmt.Sprintf(`#!/bin/sh
-while IFS= read -r line; do
-  epoch=$(printf '%%s' "$line" | sed -n 's/.*"epoch":\([0-9]*\).*/\1/p')
-  printf '%s\n' "$epoch"
-done
-`, response)
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return path
+// stubVerifier answers with a canned verdict, so the auditor's decision logic
+// can be tested without a 284 MB download.
+//
+// This was a shell script speaking the Rust subprocess's line protocol over a
+// pipe. With the verifier in this process it is a struct, which is the whole
+// change in miniature: a fixture that had to be a program, an exec and a wire
+// format is now four lines and cannot drift from the interface it stands in
+// for.
+type stubVerifier struct{ res Result }
+
+func (v stubVerifier) Verify(ctx context.Context, dir string, epoch int64, prev, curr string, to time.Duration) (*Result, error) {
+	return v.VerifyCached(ctx, dir, epoch, prev, curr, "", to)
 }
+
+func (v stubVerifier) VerifyCached(_ context.Context, _ string, epoch int64, _, _, _ string, _ time.Duration) (*Result, error) {
+	r := v.res
+	r.Epoch = epoch
+	return &r, nil
+}
+
+func (stubVerifier) Close() {}
+
+// verified and forked are the two answers that matter: the log's tree is
+// sound, or it demonstrably is not. "fetch" and "decode" are a third thing —
+// we could not check — and must never become an accusation.
+var (
+	verified = stubVerifier{res: Result{OK: true}}
+	forked   = stubVerifier{res: Result{OK: false, Kind: "verify",
+		Error: "the proof does not rebuild the roots the operator published"}}
+	unreachable = stubVerifier{res: Result{OK: false, Kind: "fetch",
+		Error: "cannot reach the log"}}
+)
 
 type stubResolver struct{ origin string }
 
@@ -38,7 +52,7 @@ func (s *stubResolver) ResolveEpoch(context.Context, int64) (*EpochRef, error) {
 	return &EpochRef{LogDirectory: "https://example.invalid", PrevRoot: "aa", CurrRoot: "bb"}, nil
 }
 
-func newTestAuditor(t *testing.T, sidecarPath string, rate float64) (*Auditor, *store.Store) {
+func newTestAuditor(t *testing.T, v Verifier, rate float64) (*Auditor, *store.Store) {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "a.db"))
 	if err != nil {
@@ -46,11 +60,10 @@ func newTestAuditor(t *testing.T, sidecarPath string, rate float64) (*Auditor, *
 	}
 	t.Cleanup(func() { db.Close() })
 
-	sc := NewSidecar(sidecarPath)
-	t.Cleanup(sc.Close)
+	t.Cleanup(v.Close)
 
 	return &Auditor{
-		Store: db, Beacon: NewBeacon(""), Sidecar: sc,
+		Store: db, Beacon: NewBeacon(""), Verifier: v,
 		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Rate:    rate,
 		Timeout: 30 * time.Second,
@@ -79,8 +92,8 @@ func seed(t *testing.T, db *store.Store, origin string, size int64) {
 // observation, so it permanently poisons the log.
 func TestVerificationFailurePoisonsTheLog(t *testing.T) {
 	origin := "meta.test/v1"
-	sc := fakeSidecar(t, `{"ok":false,"epoch":%s,"error":"root mismatch","kind":"verify"}`)
-	a, db := newTestAuditor(t, sc, 1.0) // sample everything
+	verifier := forked
+	a, db := newTestAuditor(t, verifier, 1.0) // sample everything
 	seed(t, db, origin, 100)
 
 	err := a.Run(context.Background(), &stubResolver{origin: origin})
@@ -103,8 +116,8 @@ func TestUnverifiableEpochDoesNotAccuse(t *testing.T) {
 	for _, kind := range []string{"fetch", "decode"} {
 		t.Run(kind, func(t *testing.T) {
 			origin := "meta.test/v1"
-			sc := fakeSidecar(t, `{"ok":false,"epoch":%s,"error":"boom","kind":"`+kind+`"}`)
-			a, db := newTestAuditor(t, sc, 1.0)
+			verifier := stubVerifier{res: Result{OK: false, Kind: kind, Error: "boom"}}
+			a, db := newTestAuditor(t, verifier, 1.0)
 			seed(t, db, origin, 100)
 
 			if err := a.Run(context.Background(), &stubResolver{origin: origin}); err == nil {
@@ -122,8 +135,8 @@ func TestUnverifiableEpochDoesNotAccuse(t *testing.T) {
 
 func TestSuccessfulAuditAdvancesProgress(t *testing.T) {
 	origin := "meta.test/v1"
-	sc := fakeSidecar(t, `{"ok":true,"epoch":%s,"download_ms":10,"decode_ms":20,"verify_ms":30,"bytes":1048576}`)
-	a, db := newTestAuditor(t, sc, 1.0)
+	verifier := stubVerifier{res: Result{OK: true, DownloadMS: 10, DecodeMS: 20, VerifyMS: 30, Bytes: 1 << 20}}
+	a, db := newTestAuditor(t, verifier, 1.0)
 	seed(t, db, origin, 100)
 
 	if err := a.Run(context.Background(), &stubResolver{origin: origin}); err != nil {
@@ -153,9 +166,10 @@ func TestSuccessfulAuditAdvancesProgress(t *testing.T) {
 // checked by anyone.
 func TestDeclinedEpochsAreRecorded(t *testing.T) {
 	origin := "meta.test/v1"
-	// Rate 0 means the sidecar is never invoked; point at a path that would
-	// fail if it were, so the test also proves we skip the expensive work.
-	a, db := newTestAuditor(t, "/nonexistent/sidecar", 0)
+	// Rate 0 means the verifier is never invoked; hand it one whose answer
+	// would show up in the records asserted below, so the test also proves we
+	// skip the expensive work.
+	a, db := newTestAuditor(t, unreachable, 0)
 	seed(t, db, origin, 100)
 
 	if err := a.Run(context.Background(), &stubResolver{origin: origin}); err != nil {
@@ -175,7 +189,7 @@ func TestDeclinedEpochsAreRecorded(t *testing.T) {
 // A poisoned log is not audited further; there is nothing left to establish.
 func TestForkedLogIsNotAudited(t *testing.T) {
 	origin := "meta.test/v1"
-	a, db := newTestAuditor(t, "/nonexistent/sidecar", 1.0)
+	a, db := newTestAuditor(t, unreachable, 1.0)
 	seed(t, db, origin, 100)
 	if err := db.RecordFork(&store.Fork{Origin: origin, Reason: "earlier", DetectedAt: time.Now()}); err != nil {
 		t.Fatal(err)
@@ -191,8 +205,8 @@ func TestForkedLogIsNotAudited(t *testing.T) {
 // the same livelock shape fixed in the witness catch-up path.
 func TestPermanentlyUnfetchableEpochIsSkippedNotRetriedForever(t *testing.T) {
 	origin := "meta.test/v1"
-	sc := fakeSidecar(t, `{"ok":false,"epoch":%s,"error":"HTTP 404","kind":"fetch"}`)
-	a, db := newTestAuditor(t, sc, 1.0)
+	verifier := unreachable
+	a, db := newTestAuditor(t, verifier, 1.0)
 	seed(t, db, origin, 100)
 
 	start, _ := db.AuditProgress(origin)

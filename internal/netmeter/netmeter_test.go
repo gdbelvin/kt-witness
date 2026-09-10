@@ -51,12 +51,13 @@ func TestUnwrapExposesTheWrappedTransport(t *testing.T) {
 	}
 }
 
-// The sidecar downloads outside any transport we control, so its bytes are
-// reported explicitly.
+// Not every download goes through a transport we wrap — the audit prefetcher
+// streams proof blobs on a plain client of its own — so those bytes are
+// reported explicitly instead.
 func TestAddRecordsOutOfBandBytes(t *testing.T) {
-	Add("sidecar.example/log", 1234)
-	Add("sidecar.example/log", 766)
-	if got := Snapshot()["sidecar.example/log"].BytesIn; got != 2000 {
+	Add("akd.example/log", 1234)
+	Add("akd.example/log", 766)
+	if got := Snapshot()["akd.example/log"].BytesIn; got != 2000 {
 		t.Errorf("out-of-band bytes = %d, want 2000", got)
 	}
 }
