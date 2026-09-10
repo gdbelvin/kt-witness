@@ -125,7 +125,33 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 			proofBase = cfg.Work.ProofHost
 		}
 		if proofBase == "" {
-			proofBase = bound
+			// Falling back to the bound address is only sane when that address
+			// is one a worker could dial. It is not: this listens on 0.0.0.0
+			// inside a container — deliberately, because the host's LAN address
+			// does not exist in that namespace — so the fallback advertises
+			// "0.0.0.0:8091", which every worker resolves to its own loopback.
+			//
+			// The result would be a witness that starts, logs that it is
+			// serving proofs, hands out work, and fails every single fetch:
+			// each epoch recorded unverified, coverage corrupted in the one
+			// direction that matters, and the canaries never firing. That is
+			// not a hypothetical failure shape — stale workers wrote 3,300
+			// false unverified epochs this way yesterday.
+			//
+			// So it is only a fallback when it could work, and otherwise this
+			// refuses to start. The address now lives in .env rather than the
+			// repository, which means "somebody forgot the env file" is a
+			// realistic Tuesday and must not be survivable.
+			if host, _, err := net.SplitHostPort(bound); err == nil {
+				if ip := net.ParseIP(host); ip != nil && !ip.IsUnspecified() {
+					proofBase = bound
+				}
+			}
+		}
+		if proofBase == "" {
+			return nil, fmt.Errorf("work.proof_listen is set but no address workers can dial: "+
+				"set KT_PROOF_HOST (see deploy/infra.example.env) or work.proof_host. "+
+				"The listener is on %s, which a worker would resolve to its own loopback", bound)
 		}
 		proofBase = "http://" + proofBase + "/proof"
 		log.Info("serving proofs to workers", "addr", bound, "workers_dial", proofBase,
