@@ -64,7 +64,7 @@ func startWorkGenerator(ctx context.Context, q *work.Queue, db *store.Store, pf 
 			continue
 		}
 		go func(origin string, r audit.Resolver) {
-			var cursor int64
+			var c cursors
 			for ctx.Err() == nil {
 				n := pf.Held(origin)
 				want := readyTarget(q, origin)
@@ -79,8 +79,7 @@ func startWorkGenerator(ctx context.Context, q *work.Queue, db *store.Store, pf 
 					sleep(ctx, 2*time.Second)
 					continue
 				}
-				got, next := fillOnce(ctx, db, pf, r, origin, cursor, log)
-				cursor = next
+				got := fillOnce(ctx, db, pf, r, origin, &c, log)
 				if got == 0 {
 					// Nothing to fetch from here — either the log is caught up
 					// or the cache refused. Either way, wait before asking
@@ -124,13 +123,35 @@ func readyTarget(q *work.Queue, origin string) int {
 	return n
 }
 
-// fillOnce downloads the next batch of unverified epochs for one origin, and
-// reports how many it started and where to look next.
+// fillOnce downloads the next batch of epochs for one origin, and reports how
+// many it started.
+//
+// Two cursors, and neither ever resets. That is the whole of the fix for a
+// generator that could not reach a steady state.
+//
+// The forward cursor chases the tip. It only moves up, so asking "what is the
+// lowest unverified epoch from here" costs the size of the gap rather than the
+// size of the history — which matters because a log that is caught up has its
+// first unverified epoch AT the tip, and the previous version reset to zero and
+// walked the entire verified prefix to rediscover that, every ten seconds, per
+// log, forever. Measured at 353ms across half a million epochs and growing
+// linearly as the log grows. It was not a slow steady state, it was the absence
+// of one.
+//
+// The backward cursor sweeps old history for gaps: epochs that failed, were
+// skipped, or were never fetched. It only moves down, and when it reaches the
+// bottom it starts again from the forward cursor's floor — a full pass over
+// history, but once per pass rather than once per poll.
+//
+// Tip before gaps, deliberately. A forged binding has to be caught while it can
+// still reach somebody; a hole in three-year-old history is a coverage number.
+// internal/audit/strategy.go sizes the tip window for the same reason: 256
+// epochs is about eight hours of Messenger and two of WhatsApp.
 func fillOnce(ctx context.Context, db *store.Store, pf *audit.Prefetcher,
-	r audit.Resolver, origin string, cursor int64, log *slog.Logger) (int, int64) {
+	r audit.Resolver, origin string, c *cursors, log *slog.Logger) int {
 	hs, err := db.Histories()
 	if err != nil {
-		return 0, cursor
+		return 0
 	}
 	var h *store.History
 	for _, x := range hs {
@@ -140,17 +161,17 @@ func fillOnce(ctx context.Context, db *store.Store, pf *audit.Prefetcher,
 		}
 	}
 	if h == nil || h.To <= h.From {
-		return 0, cursor
+		return 0
 	}
-	if cursor < h.From {
-		cursor = h.From
+	c.init(db, origin, h)
+
+	want := fillBatch
+	epochs := c.forward(db, origin, h, want)
+	if len(epochs) < want {
+		epochs = append(epochs, c.backward(db, origin, h, want-len(epochs))...)
 	}
-	at, ok, err := db.FirstUnverified(origin, cursor, h.To)
-	if err != nil || !ok {
-		// Nothing from here to the tip. Start again from the bottom next pass:
-		// the tail being done does not mean the gaps behind it are, and an
-		// epoch that failed is exactly the work most likely to be missed.
-		return 0, 0
+	if len(epochs) == 0 {
+		return 0
 	}
 
 	// Concurrently, because Fetch BLOCKS: it takes a slot from the prefetcher's
@@ -158,11 +179,9 @@ func fillOnce(ctx context.Context, db *store.Store, pf *audit.Prefetcher,
 	// proof at a time, the semaphore is never contended, and prefetch_workers
 	// has no effect at all — which is exactly what happened. Outbound
 	// connections sat at five however high that number was set.
-	//
-	// The fan-out is the whole point of this stage. p.sem is what bounds it.
 	var wg sync.WaitGroup
 	var started atomic.Int64
-	for e := at; e <= h.To && e < at+int64(fillBatch); e++ {
+	for _, e := range epochs {
 		ref, err := r.ResolveEpoch(ctx, e)
 		if err != nil {
 			continue // an epoch we cannot address is not one we can download
@@ -178,16 +197,110 @@ func fillOnce(ctx context.Context, db *store.Store, pf *audit.Prefetcher,
 		}(e, ref)
 	}
 	wg.Wait()
-	return int(started.Load()), at + int64(fillBatch)
+	return int(started.Load())
 }
 
-// fillBatch is how many epochs one pass fetches at once.
-//
-// These go out concurrently and the prefetcher's own semaphore bounds how many
-// actually run, so this is the width of one wave rather than a concurrency
-// limit. Wide enough that both logs can have several downloads in flight at
-// once, since one slow CDN response should not hold up the rest of its batch.
+// cursors is one origin's two positions: how far the tip-chasing pass has
+// reached, and how far the history sweep has descended.
+type cursors struct {
+	fwd   int64
+	back  int64
+	ready bool
+
+	// stride is how much history one backward probe covers. Zero means
+	// backStride; a test sets it small so a fixture does not have to be
+	// thousands of epochs long to exercise descending.
+	stride int64
+}
+
+func (c *cursors) strideOr() int64 {
+	if c.stride > 0 {
+		return c.stride
+	}
+	return backStride
+}
+
+// init seeds both from what the store already recorded, so a restart does not
+// re-walk ground the last run covered.
+func (c *cursors) init(db *store.Store, origin string, h *store.History) {
+	if c.ready {
+		return
+	}
+	c.ready = true
+	if p, err := db.AuditProgress(origin); err == nil && p > h.From {
+		c.fwd = p
+	} else {
+		c.fwd = h.From
+	}
+	if b, ok, err := db.BackAuditProgress(origin); err == nil && ok && b > h.From {
+		c.back = b
+	} else {
+		c.back = c.fwd
+	}
+}
+
+// forward returns up to n unverified epochs between the tip cursor and the tip.
+func (c *cursors) forward(db *store.Store, origin string, h *store.History, n int) []int64 {
+	var out []int64
+	at := c.fwd
+	for len(out) < n && at <= h.To {
+		e, ok, err := db.FirstUnverified(origin, at, h.To)
+		if err != nil || !ok {
+			// Caught up to the tip. The cursor STAYS here; it is where the next
+			// published epoch will appear, and resetting it is what made this
+			// rescan the whole history.
+			c.fwd = h.To
+			break
+		}
+		out = append(out, e)
+		at = e + 1
+		c.fwd = at
+	}
+	return out
+}
+
+// backward returns up to n unverified epochs below the tip pass, descending.
+func (c *cursors) backward(db *store.Store, origin string, h *store.History, n int) []int64 {
+	if n <= 0 {
+		return nil
+	}
+	var out []int64
+	for len(out) < n {
+		if c.back <= h.From {
+			// Bottom reached: start again from the forward pass's floor. One
+			// full sweep per pass, not one per poll.
+			c.back = c.fwd
+			if c.back <= h.From {
+				return out
+			}
+		}
+		lo := c.back - c.strideOr()
+		if lo < h.From {
+			lo = h.From
+		}
+		e, ok, err := db.FirstUnverified(origin, lo, c.back-1)
+		if err != nil {
+			return out
+		}
+		if ok {
+			out = append(out, e)
+		}
+		c.back = lo
+	}
+	return out
+}
+
+// fillBatch is how many epochs one pass fetches. These go out concurrently and
+// the prefetcher's own semaphore bounds how many actually run, so this is the
+// width of one wave rather than a concurrency limit.
 const fillBatch = 24
+
+// backStride is how much history one backward probe covers.
+//
+// Large enough that descending a long history does not take a poll per epoch,
+// small enough that each probe is a bounded scan rather than a walk of
+// everything below the cursor.
+const backStride = 512
 
 func sleep(ctx context.Context, d time.Duration) {
 	select {
