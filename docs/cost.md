@@ -264,10 +264,15 @@ otherwise:
 | Need | Size |
 |---|---|
 | Database and published file mirror | <1 GB, growing ~1 GB/yr |
-| Tier-B scratch, one proof in flight | 0 — the verifier holds the proof in memory and never writes it |
+| Tier-B scratch, one proof in flight | 0 — the verifier holds the proof in memory; nothing is staged to `/tmp` |
 | Proton tree, once the audit is in the loop | ~40 GB |
 | Static CT | ~0 — no tile cache |
 | **Total** | **~45 GB**, comfortably 100 GB with headroom |
+
+This table does not count `audit.prefetch_dir`, which is a deliberate cache of
+proofs downloaded ahead of verification and is bounded by `prefetch_bytes` — 64
+GiB in the deployed config. It is a dial, not a requirement: set it to nothing
+and the numbers above stand.
 
 **Audit proofs are verified and discarded, never retained.** That is the
 assumption that would change the answer: keeping Meta's and WhatsApp's proofs

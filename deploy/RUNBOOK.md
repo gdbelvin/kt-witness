@@ -375,9 +375,10 @@ Measured; the full model is in [docs/cost.md](../docs/cost.md).
 - **Disk**: **~45 GB**, of which ~40 GB is Proton's retained tree once the
   incremental audit is wired (not yet — see TODO). Without it, a few GB. There
   is no tile cache, so the 80 CT logs need no disk. Audit proofs are verified
-  and discarded, never retained, and nothing writes them down on the way — the
-  verifier holds the proof in memory, so there is no tmpfs and the container
-  needs no writable `/tmp`.
+  and discarded, never retained. The verifier holds the proof in memory rather
+  than staging it, so there is no tmpfs and the container needs no writable
+  `/tmp`; the prefetch cache under `/data` is the one place a proof lands on
+  disk, and it is bounded by `audit.prefetch_bytes`.
 
 ## Before anyone relies on this
 
@@ -457,7 +458,7 @@ exceeds it. Eight of ten on an M-series laptop, and it says so at startup:
 
 ```
 scheduling="nice 10, 8 of 10 logical CPUs (N-2; this machine has 6 efficiency and 4 performance)"
-cpu budget logical_cpus=8 epochs_at_once=2 threads_per_epoch=4 threads_total=8
+time=... level=INFO msg="cpu budget" logical_cpus=8 epochs_at_once=8 cores_per_epoch=1
 ```
 
 A ceiling, not an average — that distinction cost a laptop. Sizing
@@ -486,13 +487,19 @@ our threads on performance cores, and nice is advisory. Two dials:
                            # only mode where placement is actually guaranteed.
 ```
 
-**One epoch is not one core.** The Rust sidecar built a runtime sized from the
-machine and took 3.7 cores by itself, so counting epochs as cores overshot
-nearly fourfold. Measured then on WhatsApp epoch 1,000,000: uncapped 10.7 s
-CPU / 3.4 s wall; capped at four threads, 7.9 s / 3.5 s — same throughput for a
-quarter less CPU. That is why the worker still divides its budget into
-epochs × threads rather than into epochs alone, and where `threads_per_epoch`
-in the log above comes from.
+**One epoch is one core — now, and the worker asks rather than assumes.**
+`internal/akdtree` starts no goroutine of its own, so a verification occupies
+exactly one core and `cores_per_epoch` is 1. The width is asked of the
+verifier, so it follows the implementation instead of going stale beside it.
+
+That is worth the machinery because it was not always one. The Rust sidecar
+built a runtime sized from the machine and took 3.7 cores by itself, so counting
+epochs as cores overshot nearly fourfold. Measured then on WhatsApp epoch
+1,000,000: uncapped 10.7 s CPU / 3.4 s wall; capped at four threads, 7.9 s /
+3.5 s — same throughput for a quarter less CPU. The four then outlived the
+subprocess as a literal constant that still divided the budget, and every
+machine in the fleet ran at a quarter of its width until a laptop was noticed
+sitting idle.
 
 The governor then decides only *when to ask for more work*, and says so both
 ways in the log:

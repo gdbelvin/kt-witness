@@ -169,5 +169,6 @@ Which has already happened once. The hundred-to-one the ratio found was
 allocation inside the `akd` crate, not arithmetic — and `internal/akdtree` was
 written to remove exactly that, which is why AKD verification is now Go in this
 process and the Rust sidecar, `ratio.rs` with it, is gone. Anyone asking the GPU
-question again has to write the tool's equivalent first, and measure the hash
-rate the same way it did.
+question again has to rebuild the tool's equivalent first; the hash-rate half of
+it survives as `BenchmarkHash64` in `internal/akdtree`, taken in-process on the
+machine under test for exactly this reason.

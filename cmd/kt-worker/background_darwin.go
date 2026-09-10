@@ -42,8 +42,10 @@ const (
 // — but it is the only setting under which a laptop genuinely does not feel
 // slower.
 //
-// The default is a budget instead: a nice level any child process inherits, and
-// N-2 logical CPUs' worth of threads. Worth being plain about what that does
+// The default is a budget instead: a nice level on this process, and N-2
+// logical CPUs' worth of threads. It used to be worth saying that children
+// inherited the nice level, because the work was done by verifier subprocesses;
+// there are none now, so it applies to the threads doing the hashing directly. Worth being plain about what that does
 // and does not promise — the OS may still run those threads on performance
 // cores, and nice is advisory. What is enforced is the count.
 func background(eCoresOnly bool) (string, int, error) {

@@ -88,13 +88,14 @@ WORKDIR /data
 
 EXPOSE 8080
 
-# Nothing writes a proof to disk any more. Tier B used to stream each ~284 MB
-# proof to a temp file, because the Rust sidecar was a separate process reached
-# through a pipe; that needed a sized /tmp, and the sizing caused two outages the
-# day a widened pool outgrew it. The Go verifier holds the proof in memory, so no
-# tmpfs is required. TMPDIR=/tmp is already Go's default on Linux, so the line
-# below changes nothing; it is kept only so the choice is visible.
-ENV TMPDIR=/tmp
+# No writable /tmp is required. Tier B used to stream each ~284 MB proof to a
+# temp file, because the verifier was a separate process reached through a pipe;
+# that needed a sized tmpfs, and the sizing caused two outages the day a widened
+# pool outgrew it. The Go verifier holds the proof in memory.
+#
+# The prefetch cache under /data is a different thing and still writes: that one
+# is deliberate, budgeted, and the reason the link and the CPU are busy at once
+# rather than taking turns.
 
 ENTRYPOINT ["/usr/local/bin/kt-witness"]
 CMD ["-config", "/data/witness.json"]

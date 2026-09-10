@@ -47,9 +47,8 @@ The on-disk layout **is** the providers' URL layout, and that is the whole
 design. Neither verifier can be handed a slice of bytes: the AKD verifier fetches
 its own proof over HTTP, and Signal's response verification is an unexported step
 inside `Source.Fetch`. Rather than fork either — at which point a passing replay
-would prove nothing about production — replay
-starts a loopback HTTP server over the corpus and points the real, unmodified
-code at it.
+would prove nothing about production — replay starts a loopback HTTP server over
+the corpus and points the real, unmodified code at it.
 
 ```
 <corpus>/

@@ -280,9 +280,9 @@ hardware, because publishing is what invites people to depend on it.
       does not accuse on unsigned evidence.
 - [x] **WhatsApp.** Done — `whatsapp.key-transparency.v2` is Online with a
       public log directory and needed no code at all. v1 stays untouched
-      (`Disabled`). Tier B verified feasible: one real proof through the
-      sidecar as it then was in 2.7 s. Cost differs from Messenger — 30 s epochs at
-      ~58.5 MB, so ~17 GB/day at the 0.1 sample rate.
+      (`Disabled`). Tier B verified feasible: one real proof through the Rust
+      sidecar of the time in 2.7 s. Cost differs from Messenger — 30 s epochs
+      at ~58.5 MB, so ~17 GB/day at the 0.1 sample rate.
 - [x] **Witness the static CT logs.** Done — `cmd/kt-ctconfig` generates the
       config from Google's list and verifies each checkpoint signature before
       including it. 80 tiled logs → **69 witnessed**, 11 excluded (5 `rejected`,

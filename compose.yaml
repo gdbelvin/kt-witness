@@ -56,7 +56,13 @@ services:
     # the history-coverage metric counts against a range frozen in the past.
     command: ["-config", "/config/witness.json", "-backfill"]
 
-    # No tmpfs. Nothing writes to disk during a verification any more.
+    # No tmpfs, because nothing needs a writable /tmp any more.
+    #
+    # Not the same as "nothing writes to disk": the prefetcher still caches
+    # proofs under /data/proof-cache, deliberately and with a 64 GiB budget, so
+    # the link and the CPU are busy at once instead of taking turns. What is
+    # gone is the SCRATCH write — a 284 MB proof landing in /tmp purely so a
+    # subprocess could read it back.
     #
     # There was a /tmp sized in gigabytes because the Rust sidecar was a
     # separate process reached through a pipe, so a 284 MB proof had to become a

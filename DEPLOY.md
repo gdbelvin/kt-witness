@@ -92,8 +92,10 @@ Watch for:
   Rust verifier — the Go one costs about an eighth. Either way it parallelises,
   and on a single core it would miss the 120 s epoch cadence, so tier B needs
   real cores.
-- **Disk**: nothing at all during a verification. The proof is held in memory,
-  verified and discarded, so the container needs no writable `/tmp`.
+- **Disk**: no writable `/tmp`. A verification holds the proof in memory and
+  writes nothing on the way; the only proofs that touch disk are the ones
+  `audit.prefetch_dir` deliberately caches under `/data` ahead of time, bounded
+  by `prefetch_bytes`.
 
 ## Building on arm64
 
