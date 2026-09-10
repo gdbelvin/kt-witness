@@ -43,11 +43,13 @@ const (
 // slower.
 //
 // The default is a budget instead: a nice level on this process, and N-2
-// logical CPUs' worth of threads. It used to be worth saying that children
-// inherited the nice level, because the work was done by verifier subprocesses;
-// there are none now, so it applies to the threads doing the hashing directly. Worth being plain about what that does
-// and does not promise — the OS may still run those threads on performance
-// cores, and nice is advisory. What is enforced is the count.
+// logical CPUs' worth of threads. This used to say the nice level was inherited
+// by children, because the work was done by verifier subprocesses; there are
+// none now, so it applies directly to the threads doing the hashing.
+//
+// Worth being plain about what that does and does not promise — the OS may
+// still run those threads on performance cores, and nice is advisory. What is
+// enforced is the count.
 func background(eCoresOnly bool) (string, int, error) {
 	if eCoresOnly {
 		if err := syscall.Setpriority(prioDarwinProcess, 0, prioDarwinBG); err != nil {
