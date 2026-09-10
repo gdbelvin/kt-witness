@@ -38,13 +38,29 @@ echo "stamping: $(sed -n 's/^commit=//p' .build-info)"
 # they live only on the server and are never touched.
 ssh "$HOST" "cd ~/$DEST && rm -rf cmd internal proto docs deploy cuda rust/kt-akd-verify/src"
 
-# --exclude patterns are matched against every path component by bsdtar, so any
-# pattern containing witness.json would also match deploy/witness.json. Do not
-# add one; the config is copied explicitly below.
-# *.log: run logs from a worker started in this directory. They are the local
-# machine's output, they can be hundreds of megabytes, and shipping them to the
-# server puts one host's noise in another host's working directory.
-tar czf - --exclude='.git' --exclude='data' --exclude='*.key' --exclude='*.log' . \
+# Ship exactly the files git would, plus the stamp.
+#
+# This used to tar the working tree with a handful of --exclude patterns, and
+# sent 237 MB over the wire every time — 620 MB of rust/kt-akd-verify/target,
+# which .dockerignore then excluded from the build context anyway, plus a 28 MB
+# bin/ the server has no use for. The repository itself is 2.6 MB. Every deploy
+# in a session paid for a Cargo build directory that was never going to be read.
+#
+# `--cached --others --exclude-standard` is tracked files plus untracked ones
+# that are not ignored, so a work-in-progress file still ships and anything
+# .gitignore names does not. That means the rule stays right as the repository
+# grows instead of being a list of exclusions somebody has to remember to
+# extend — which is how the target directory got in.
+#
+# -T - and a NUL-delimited list, because a filename with a space would otherwise
+# arrive as two truncated paths.
+#
+# .build-info is ignored by git and required by the Dockerfile, so it is named
+# explicitly. deploy/witness.json is tracked and ships here; it is ALSO scp'd
+# below, because that copy is the one the operator edits and the check after it
+# is what proves the two agree.
+{ git ls-files --cached --others --exclude-standard -z; printf '.build-info\0'; } \
+  | tar czf - --null -T - \
   | ssh "$HOST" "cd ~/$DEST && tar xzf -"
 
 scp -q deploy/witness.json "$HOST:~/$DEST/deploy/witness.json"

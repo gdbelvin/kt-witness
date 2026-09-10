@@ -21,9 +21,16 @@ WORKDIR /src
 COPY rust/kt-akd-verify/Cargo.toml rust/kt-akd-verify/Cargo.lock ./
 # Prime the dependency cache against a stub so a source-only change does not
 # rebuild the akd tree, which is slow.
-RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release && rm -rf src
+RUN --mount=type=cache,target=/cargoreg,sharing=locked \
+    CARGO_HOME=/cargoreg mkdir src && echo 'fn main() {}' > src/main.rs \
+    && CARGO_HOME=/cargoreg cargo build --release && rm -rf src
 COPY rust/kt-akd-verify/src ./src
-RUN touch src/main.rs && cargo build --release
+# The registry is cached but /src/target is not, because the final stage copies
+# the binary out of it — a cache mount there would leave nothing to COPY. The
+# stub build above already primes the dependency compile, and the layer holding
+# it only invalidates when Cargo.toml or Cargo.lock changes.
+RUN --mount=type=cache,target=/cargoreg,sharing=locked \
+    CARGO_HOME=/cargoreg touch src/main.rs && CARGO_HOME=/cargoreg cargo build --release
 
 
 # Go cross-compiles cheaply, so this stage runs natively and targets TARGETARCH.
@@ -36,7 +43,8 @@ FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS go-builder
 ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/gomodcache,sharing=locked \
+    GOMODCACHE=/gomodcache go mod download
 COPY . .
 # What software is actually running.
 #
@@ -48,8 +56,22 @@ COPY . .
 # a version.
 ARG GIT_COMMIT=""
 ARG BUILD_DATE=""
-RUN COMMIT="${GIT_COMMIT:-$(sed -n 's/^commit=//p' .build-info 2>/dev/null)}"; \
+#
+# The compiler cache is mounted rather than rebuilt.
+#
+# Without it every deploy recompiles the whole module and its dependencies from
+# nothing, because `COPY . .` invalidates the layer whenever any file changes —
+# which on a deploy is always. gRPC, protobuf and blake3 do not change between
+# one edit and the next, and compiling them again is the bulk of this stage.
+#
+# sharing=locked rather than the default: two builds at once would otherwise
+# write the same cache concurrently, and the Go build cache is not safe under
+# that.
+RUN --mount=type=cache,target=/gocache,sharing=locked \
+    --mount=type=cache,target=/gomodcache,sharing=locked \
+    COMMIT="${GIT_COMMIT:-$(sed -n 's/^commit=//p' .build-info 2>/dev/null)}"; \
     BUILT="${BUILD_DATE:-$(sed -n 's/^date=//p' .build-info 2>/dev/null)}"; \
+    GOCACHE=/gocache GOMODCACHE=/gomodcache \
     CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w \
       -X main.gitCommit=${COMMIT:-unknown} \
@@ -59,7 +81,10 @@ RUN COMMIT="${GIT_COMMIT:-$(sed -n 's/^commit=//p' .build-info 2>/dev/null)}"; \
 # Shipped in the image rather than left as a thing to run by hand, because a
 # conclusion nobody revisits is exactly what it was written to prevent — and it
 # had itself gone unscheduled since it was written.
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
+RUN --mount=type=cache,target=/gocache,sharing=locked \
+    --mount=type=cache,target=/gomodcache,sharing=locked \
+    GOCACHE=/gocache GOMODCACHE=/gomodcache \
+    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/kt-unblock ./cmd/kt-unblock
 
 
