@@ -25,6 +25,19 @@ date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 INFO
 echo "stamping: $(sed -n 's/^commit=//p' .build-info)"
 
+# Clear the source trees before extracting, because tar only ADDS.
+#
+# A file deleted here used to stay on the server forever, and Go compiles
+# whatever is in the package directory: removing internal/work/canary.go
+# locally left the server building against a version referencing struct fields
+# that no longer existed. The build broke because the server had MORE code than
+# the repository, which is not where anybody looks first.
+#
+# Only directories the repository owns entirely are cleared. data/, import/ and
+# secrets/ hold the witness key, its database, the proof cache and the tokens —
+# they live only on the server and are never touched.
+ssh "$HOST" "cd ~/$DEST && rm -rf cmd internal proto docs deploy cuda rust/kt-akd-verify/src"
+
 # --exclude patterns are matched against every path component by bsdtar, so any
 # pattern containing witness.json would also match deploy/witness.json. Do not
 # add one; the config is copied explicitly below.

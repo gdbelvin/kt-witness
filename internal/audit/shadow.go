@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"sync"
@@ -46,7 +47,15 @@ import (
 // than quietly ignored.
 type Shadow struct {
 	Primary Verifier
-	Log     *slog.Logger
+	// Second is the other implementation, run on the same bytes and compared.
+	//
+	// Which one is which is a deployment choice, and the comparison is the same
+	// either way: the reference in the hot path with Go watching, or Go in the
+	// hot path with the reference watching. What must never happen is both
+	// being the same implementation, which would compare a thing to itself and
+	// report perfect agreement forever.
+	Second Verifier
+	Log    *slog.Logger
 
 	// Every, if above 1, shadows only one epoch in Every. The full rate is the
 	// right default while the record is being built; a busy operator who wants
@@ -92,7 +101,16 @@ func (s *Shadow) VerifyCached(ctx context.Context, logDirectory string, epoch in
 		}()
 	}
 	if read == "" {
-		metrics.Inc("kt_witness_shadow_skipped_total", map[string]string{"reason": "no proof to read"})
+		// Say which of the two ways this happened, because they have different
+		// fixes and "no proof to read" covered both: a primary that was handed
+		// a cached file and then had nothing to retain, versus one that
+		// downloaded and did not keep it. Guessing between them from a single
+		// counter wasted a round trip.
+		reason := "sidecar kept nothing"
+		if !res.OK {
+			reason = "primary rejected, nothing retained"
+		}
+		metrics.Inc("kt_witness_shadow_skipped_total", map[string]string{"reason": reason})
 		return res, err
 	}
 	if !res.OK && res.Kind != "verify" {
@@ -113,7 +131,13 @@ func (s *Shadow) VerifyCached(ctx context.Context, logDirectory string, epoch in
 	}
 
 	start := time.Now()
-	agreed, shadowErr := s.check(read, epoch, prevRoot, currRoot, res.OK)
+	var agreed bool
+	var shadowErr error
+	if s.Second != nil {
+		agreed, shadowErr = s.checkWith(ctx, s.Second, logDirectory, epoch, prevRoot, currRoot, read, timeout, res.OK)
+	} else {
+		agreed, shadowErr = s.check(read, epoch, prevRoot, currRoot, res.OK)
+	}
 	took := time.Since(start)
 
 	switch {
@@ -174,5 +198,24 @@ func (s *Shadow) check(proofPath string, epoch int64, prevRoot, currRoot string,
 	}
 	return ok == referenceOK, nil
 }
+
+// checkWith runs the other implementation over a proof already on disk.
+func (s *Shadow) checkWith(ctx context.Context, second Verifier, logDirectory string,
+	epoch int64, prevRoot, currRoot, proofPath string, timeout time.Duration, primaryOK bool) (bool, error) {
+	res, err := second.VerifyCached(ctx, logDirectory, epoch, prevRoot, currRoot, proofPath, timeout)
+	if err != nil {
+		return false, err
+	}
+	if res == nil {
+		return false, errNoResult
+	}
+	if !res.OK && res.Kind == "fetch" {
+		// The second opinion could not be reached. That is not a disagreement.
+		return false, errNoResult
+	}
+	return res.OK == primaryOK, nil
+}
+
+var errNoResult = errors.New("the second verifier reached no verdict")
 
 func (s *Shadow) Close() { s.Primary.Close() }

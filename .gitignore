@@ -47,3 +47,6 @@ rust/**/target/
 # was scattered through compose files, flag defaults, tests and runbooks before
 # this. Template and rationale in deploy/infra.example.env.
 /.env
+
+# Worktrees for parallel sessions are not part of the repository.
+.claude/worktrees/

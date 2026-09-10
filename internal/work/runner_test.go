@@ -33,7 +33,7 @@ func TestPacingGatesRequestsForWorkRatherThanEpochs(t *testing.T) {
 			}
 			return Assignment{ID: "a", Origin: "m/kt", From: 1, To: 6}, nil
 		},
-		Verify: func(context.Context, string, int64) (string, string, error) {
+		Verify: func(context.Context, string, int64, string) (string, string, error) {
 			atomic.AddInt32(&verifies, 1)
 			return "aa", "aa", nil
 		},
@@ -72,7 +72,7 @@ func TestABusyHostStopsAskingButFinishesWhatItHolds(t *testing.T) {
 			t.Error("work was requested while the host was refusing")
 			return Assignment{}, ErrNoWork
 		},
-		Verify: func(context.Context, string, int64) (string, string, error) { return "aa", "aa", nil },
+		Verify: func(context.Context, string, int64, string) (string, string, error) { return "aa", "aa", nil },
 		Report: func(context.Context, Result) error { return nil },
 	}
 	if err := r.Run(ctx); err != context.Canceled {
@@ -97,7 +97,7 @@ func TestAnUnavailableEpochIsReportedRatherThanDropped(t *testing.T) {
 	r := &Runner{
 		Name:     "t",
 		Parallel: Fixed(1),
-		Verify: func(_ context.Context, _ string, e int64) (string, string, error) {
+		Verify: func(_ context.Context, _ string, e int64, _ string) (string, string, error) {
 			if e == 2 {
 				return "", "", errors.New("404 from the operator")
 			}
@@ -121,10 +121,10 @@ func TestAnUnavailableEpochIsReportedRatherThanDropped(t *testing.T) {
 		switch {
 		case res.Epoch == 2 && res.Err == "":
 			t.Error("the unavailable epoch came back with no error")
-		case res.Epoch == 2 && res.Verified:
-			t.Error("an epoch that could not be fetched was reported verified")
-		case res.Epoch != 2 && !res.Verified:
-			t.Errorf("epoch %d should have verified", res.Epoch)
+		case res.Epoch == 2 && res.ComputedCurr != "":
+			t.Error("an epoch that could not be fetched reported a root anyway")
+		case res.Epoch != 2 && res.ComputedCurr == "":
+			t.Errorf("epoch %d reported no computed root", res.Epoch)
 		}
 	}
 }
@@ -138,7 +138,7 @@ func TestEpochsWithinAnAssignmentRunInParallel(t *testing.T) {
 	r := &Runner{
 		Name:     "t",
 		Parallel: Fixed(par),
-		Verify: func(context.Context, string, int64) (string, string, error) {
+		Verify: func(context.Context, string, int64, string) (string, string, error) {
 			n := atomic.AddInt32(&live, 1)
 			mu.Lock()
 			if n > peak {
@@ -180,7 +180,7 @@ func TestWorkStopsAtTheLeaseDeadline(t *testing.T) {
 	r := &Runner{
 		Name:     "t",
 		Parallel: Fixed(2),
-		Verify:   func(context.Context, string, int64) (string, string, error) { return "aa", "aa", nil },
+		Verify:   func(context.Context, string, int64, string) (string, string, error) { return "aa", "aa", nil },
 		Report: func(_ context.Context, res Result) error {
 			mu.Lock()
 			defer mu.Unlock()
@@ -211,7 +211,7 @@ func TestParallelismIsAskedPerAssignment(t *testing.T) {
 	r := &Runner{
 		Name:     "t",
 		Parallel: func() int { return int(atomic.LoadInt32(&width)) },
-		Verify: func(context.Context, string, int64) (string, string, error) {
+		Verify: func(context.Context, string, int64, string) (string, string, error) {
 			n := atomic.AddInt32(&live, 1)
 			mu.Lock()
 			if len(peaks) > 0 && n > peaks[len(peaks)-1] {
@@ -257,7 +257,7 @@ func TestAFailedReportAbandonsTheRestOfTheRange(t *testing.T) {
 	r := &Runner{
 		Name:     "t",
 		Parallel: Fixed(1),
-		Verify: func(context.Context, string, int64) (string, string, error) {
+		Verify: func(context.Context, string, int64, string) (string, string, error) {
 			mu.Lock()
 			verified++
 			mu.Unlock()

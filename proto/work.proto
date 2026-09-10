@@ -67,10 +67,60 @@ message Hello {
   // Free-text, for the operator's own benefit when something looks wrong.
   string version = 4;
   string platform = 5;
+
+  // The protocol this worker speaks. A session whose protocol differs from the
+  // witness's is refused, loudly, rather than served.
+  //
+  // This exists because a stale worker is not a worker that fails: protobuf
+  // fields are positional, so an old build's `root` arrives in the field now
+  // called `computed_prev_root` and the witness records the resulting mismatch
+  // as a fact about the LOG. Two workers running a build one commit old wrote
+  // roughly 3,300 false "unverified" epochs that way, which is a false hole in
+  // the coverage — the one number this witness must not get wrong in that
+  // direction. Refusing the session costs a restart; accepting it corrupts the
+  // record silently.
+  int32 protocol = 6;
 }
 
 // Assignment is a contiguous range of epochs on one log.
 message Assignment {
+  // Where to fetch the proof, when the witness wants to choose.
+  //
+  // Normally empty: a worker builds the URL from the operator's log directory
+  // and fetches from the operator, which is the arrangement that makes its
+  // verdict worth having — it checks the proof against roots it resolved
+  // itself, from the source, not against anything this witness asserted.
+  //
+  // When the witness serves proofs, this is set on EVERY assignment, and the
+  // worker fetches {base}/proof/{origin}/{epoch}. One proof in a hundred that
+  // it serves has a bit flipped, and the worker must reject those — which only
+  // tests anything because it cannot tell which ones they are.
+  //
+  // An earlier version set this only for the corrupted ones, which labelled
+  // them: a worker had merely to refuse anything coming from the witness to
+  // score perfectly while verifying nothing. A test the subject can identify
+  // is not a test.
+  //
+  // The roots are still resolved by the worker from the operator, never taken
+  // from here. Serving the bytes lets the witness test a worker; it does not
+  // let it make one agree.
+  string proof_base = 7;
+
+  // Epochs in this assignment are from..to counting by step.
+  //
+  // Step is 2, not 1, and that is a security property rather than a
+  // scheduling one. A worker holding epoch E and epoch E+1 can answer for E
+  // without checking anything: the published roots chain, so curr_E equals
+  // prev_{E+1} equals Root(unchanged_{E+1}) — computable from the neighbour's
+  // proof alone, with the commitment never applied and the merged tree never
+  // built. Interleaving denies it the neighbour.
+  int32 step = 8;
+
+  // Block groups the interleaved halves of one range. A worker is never leased
+  // two assignments from the same block, because holding both would hand it
+  // the neighbours the step exists to withhold.
+  string block = 9;
+
   string id = 1;
   string origin = 2;
   int64 from = 3;
@@ -89,12 +139,20 @@ message Result {
   string origin = 3;
   int64 epoch = 4;
 
-  bool verified = 5;
-  // What the worker computed, and what the operator signed. Both are sent
-  // because the witness decides what a disagreement means, and cannot do that
-  // from a boolean.
-  string root = 6;
-  string signed_root = 7;
+  // The two roots the worker COMPUTED from the proof, and nothing else.
+  //
+  // It is never told what the operator published, and it does not report a
+  // verdict. That is not a division of labour, it is what makes the answer
+  // worth having: a worker that does not know the expected value cannot report
+  // it without doing the work, so fabrication stops being something to sample
+  // for and becomes something that cannot happen.
+  //
+  // The witness holds the published roots and does the comparison. A worker
+  // that computes wrong roots produces a mismatch, which the witness resolves
+  // by re-verifying the epoch itself — it can waste our time, and it cannot
+  // make us believe anything.
+  string computed_prev_root = 6;
+  string computed_curr_root = 7;
 
   string worker = 8;
   int64 duration_ms = 9;

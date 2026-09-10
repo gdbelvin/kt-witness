@@ -22,12 +22,13 @@
   "refresh_interval": "1h",
   "audit": {
     "sidecar_path": "/usr/local/bin/kt-akd-verify",
+    "verifier": "go",
+    "shadow_verify": false,
     "prefetch_dir": "/data/proof-cache",
     "prefetch_bytes": 68719476736,
     "prefetch_workers": 8,
     "prefetch_min_free_bytes": 5368709120,
     "pace_backlog": true,
-    "reserve_cores": 1,
     "sample_rate": 0.1,
     "interval": "20s",
     "timeout": "10m"
@@ -514,6 +515,8 @@
   ],
   "work": {
     "listen": "0.0.0.0:8090",
+    "proof_listen": "0.0.0.0:8091",
+    "proof_host": "192.168.0.10:18091",
     "token_env": "KT_WORK_TOKEN",
     "lease": "20m"
   }

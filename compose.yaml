@@ -82,6 +82,13 @@ services:
       # publishes the work channel on every interface instead of one LAN
       # address. Compose must refuse to start rather than do that quietly.
       - "${KT_WITNESS_LAN_IP:?set KT_WITNESS_LAN_IP in .env — see deploy/infra.example.env}:18090:8090"
+      # Canary proofs, on the same boundary and for a related reason: the
+      # corrupted proof is not a secret, but which epochs are canaries is
+      # exactly what a worker must not be able to learn. Same `:?` guard, and
+      # for a sharper reason than the channel above — a canary endpoint
+      # published on every interface is one an untrusted worker could enumerate,
+      # which turns the check into a lookup table.
+      - "${KT_WITNESS_LAN_IP:?set KT_WITNESS_LAN_IP in .env — see deploy/infra.example.env}:18091:8091"
 
     # One AKD verification peaks around 3.7 GB RSS. The limit is above that with
     # headroom, and deliberately not far above: exceeding it should kill the

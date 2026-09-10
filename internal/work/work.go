@@ -61,6 +61,28 @@ type Assignment struct {
 	// worker past it should stop: its results will be refused, and continuing
 	// wastes the one resource this whole design exists to conserve.
 	Deadline time.Time `json:"deadline"`
+
+	// Step is the gap between epochs in this assignment: 2, so that a worker
+	// never holds two adjacent epochs. See LeasedBy for why that matters.
+	Step int64 `json:"step,omitempty"`
+
+	// Block groups the interleaved halves of one range, so a worker can be
+	// refused the other half.
+	Block string `json:"block,omitempty"`
+
+	// Worker is who currently holds this lease. Set on lease, empty while
+	// pending. It is what lets the proof server answer "may this machine read
+	// this epoch", which is the check that closes the root-chaining bypass.
+	Worker string `json:"worker,omitempty"`
+
+	// ProofBase, when set, is where to fetch proofs instead of the operator's
+	// store: the worker asks for {base}/proof/{origin}/{epoch}.
+	//
+	// Set on EVERY assignment or on none. An earlier version set it only for
+	// canaries, which labelled them — a worker had merely to refuse anything
+	// coming from the witness to score perfectly while verifying nothing. A
+	// test the subject can identify is not a test.
+	ProofBase string `json:"proof_base,omitempty"`
 }
 
 // Result is a worker's verdict on one epoch.
@@ -70,9 +92,16 @@ type Result struct {
 	Origin       string `json:"origin"`
 	Epoch        int64  `json:"epoch"`
 
-	Verified   bool   `json:"verified"`
-	Root       string `json:"root"`
-	SignedRoot string `json:"signed_root"`
+	// ComputedPrev and ComputedCurr are the roots the worker rebuilt from the
+	// proof. It is not told what the operator published and does not report a
+	// verdict: a worker that does not know the expected answer cannot report it
+	// without doing the work.
+	ComputedPrev string `json:"computed_prev"`
+	ComputedCurr string `json:"computed_curr"`
+
+	// Verified is filled in by the WITNESS, after comparing the above against
+	// the roots the operator published. It is never set by a worker.
+	Verified bool `json:"verified"`
 
 	// Worker names who did it, and DurationMS how long they took. Published in
 	// the audit record, because a conclusion reached on somebody else's
@@ -105,6 +134,13 @@ type Capacity struct {
 	LoadCores   float64
 	BudgetCores float64
 }
+
+// ProtocolVersion is bumped whenever a change would make an older worker's
+// messages mean something different rather than fail.
+//
+// 2: workers report the roots they computed instead of a verdict, and fetch
+// proofs from the witness rather than the operator.
+const ProtocolVersion = 2
 
 // Hello is what a worker sends when it connects.
 type Hello struct {
@@ -177,6 +213,34 @@ func NewQueue(lease time.Duration) *Queue {
 	}
 }
 
+func (q *Queue) holdsBlockLocked(worker, block string) bool {
+	for _, a := range q.leased {
+		if a.Worker == worker && a.Block == block {
+			return true
+		}
+	}
+	return false
+}
+
+// AddInterleaved queues one range as two assignments that skip each other's
+// epochs, so no worker can hold two adjacent ones.
+func (q *Queue) AddInterleaved(origin string, from, to int64) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.nextSeq++
+	block := fmt.Sprintf("%s#%d", origin, q.nextSeq)
+	for offset := int64(0); offset < 2; offset++ {
+		start := from + offset
+		if start > to {
+			continue
+		}
+		q.pending = append(q.pending, Assignment{
+			ID:     fmt.Sprintf("%s.%d", block, offset),
+			Origin: origin, From: start, To: to, Step: 2, Block: block,
+		})
+	}
+}
+
 // Add queues a range for dispatch.
 func (q *Queue) Add(origin string, from, to int64) {
 	q.mu.Lock()
@@ -210,10 +274,18 @@ func (q *Queue) Lease(worker string, origins []string) (Assignment, error) {
 		if !a.notBefore.IsZero() && now.Before(a.notBefore) {
 			continue // a retry whose backoff has not elapsed
 		}
+		if a.Block != "" && q.holdsBlockLocked(worker, a.Block) {
+			// This worker already has the other half of this range. Handing it
+			// both would give it every epoch and its neighbour, which is the
+			// arrangement the interleaving exists to prevent.
+			continue
+		}
+
 		q.pending = append(q.pending[:i], q.pending[i+1:]...)
 		a.Nonce = newNonce()
 		a.notBefore = time.Time{}
 		a.Deadline = now.Add(q.lease)
+		a.Worker = worker
 		q.leased[a.ID] = a
 		q.reported[a.ID] = map[int64]bool{}
 		return a, nil
@@ -395,7 +467,7 @@ func (q *Queue) reclaimLocked() {
 }
 
 func stripLease(a Assignment) Assignment {
-	a.Nonce, a.Deadline = "", time.Time{}
+	a.Nonce, a.Deadline, a.Worker = "", time.Time{}, ""
 	return a
 }
 
@@ -407,4 +479,44 @@ func newNonce() string {
 		panic("work: no randomness for an assignment nonce: " + err.Error())
 	}
 	return hex.EncodeToString(b[:])
+}
+
+// LeasedBy reports whether this worker currently holds a lease covering one
+// epoch.
+//
+// It is the authorisation check for handing over a proof, and the reason it
+// exists is a bypass that authorisation closes. The published roots chain —
+// curr_E equals prev_{E+1}, which this witness itself enforces — so a worker
+// that can fetch epoch E+1's proof can answer for epoch E without ever checking
+// the append-only property: report Root(unchanged_E) as the previous root and
+// Root(unchanged_{E+1}) as the current one, and both match what the operator
+// published. The commitment is never applied, the merged tree is never built,
+// and the one property this witness exists to audit goes unexamined.
+//
+// The values are public and derivable two ways, so no amount of asking for a
+// different number closes it. What closes it is denying the second proof: a
+// worker may read exactly the epochs it has been asked about, and nothing else.
+func (q *Queue) LeasedBy(worker, origin string, epoch int64) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.reclaimLocked()
+	for _, a := range q.leased {
+		if a.Worker != worker || a.Origin != origin {
+			continue
+		}
+		if epoch < a.From || epoch > a.To {
+			continue
+		}
+		// Membership, not just range: an assignment counting by two contains
+		// every other epoch, and the ones it skips are exactly the neighbours
+		// that would let this worker avoid the append-only check.
+		step := a.Step
+		if step < 1 {
+			step = 1
+		}
+		if (epoch-a.From)%step == 0 {
+			return true
+		}
+	}
+	return false
 }

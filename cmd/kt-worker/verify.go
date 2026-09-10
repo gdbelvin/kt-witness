@@ -2,152 +2,133 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"os"
+	"io"
+	"net/http"
 	"os/exec"
 	"strings"
 
-	"github.com/gdbsecurity/kt-witness/internal/source/akd"
+	"github.com/gdbsecurity/kt-witness/internal/akdtree"
 )
 
-// A verifier turns one epoch into a verdict, on whatever hardware this worker
-// happens to be.
+// A verifier turns one epoch into two computed roots, on whatever hardware this
+// worker happens to be.
 //
-// The point of the interface is that the GPU box and a laptop are the same kind
-// of participant. Before this, Proton's rebuild ran from a cron job writing a
-// results file that was scp'd to the witness and imported from disk, while AKD
-// verification ran inside the witness itself — two mechanisms, two failure
-// modes, and one of them silently stopped for two days because nobody had
-// scheduled it. One channel, and the witness knows what is outstanding because
-// it handed it out.
+// # What a worker is given, and what it is not
+//
+// It is given the proof — served by the witness — and the epoch. It is not
+// given the roots the operator published, does not resolve them, and does not
+// decide whether anything verified.
+//
+// That is the whole security argument for this channel. A worker that knows the
+// expected answer can report it without doing the work: the operator's roots
+// are public, so an idle machine can produce a correct-looking verdict forever,
+// and no amount of cross-checking against valid proofs will show it. A worker
+// that does NOT know the answer has only one way to produce it. Fabrication
+// stops being something to sample for and becomes something that cannot happen.
+//
+// The consequence is that a worker needs no internet access at all. Everything
+// it verifies arrives over the LAN from the witness, which is a smaller attack
+// surface and a much simpler machine to lend somebody.
 type verifier interface {
-	// verify returns the root it computed and the root the operator signed.
-	// Deciding what a disagreement means is the witness's job, not this one's.
-	verify(ctx context.Context, origin string, epoch int64) (root, signed string, err error)
+	// verify rebuilds the previous and current roots from the proof. It reports
+	// no verdict, because it has nothing to compare against.
+	verify(ctx context.Context, origin string, epoch int64, proofBase string) (computedPrev, computedCurr string, err error)
 }
 
-// akdVerifier replays a Meta or WhatsApp audit proof with the Rust sidecar.
+// akdVerifier replays a Meta or WhatsApp audit proof.
 //
-// Stateless: any worker can verify any epoch, in any order, without holding
-// anything from a previous one. That is what makes AKD work well here — a
-// laptop can be handed epochs 400,000 to 400,100 and needs nothing else from
-// the witness but the numbers.
+// In-process rather than through the Rust sidecar, and that follows from the
+// above: the sidecar compares against roots it is handed and answers yes or no,
+// which is exactly the shape this design is getting away from. Reporting
+// computed roots means computing them, and internal/akdtree does — validated
+// against 104 epochs of roots Meta and WhatsApp published, 1000 mutation trials
+// and 8.2 million fuzz executions.
 //
-// # It resolves the epoch itself
-//
-// The sidecar cannot verify an epoch from its number. It needs the log
-// directory and the two roots the transition runs between, and those come from
-// the operator's own object listing — the roots are in the object key. The
-// first version of this sent {origin, epoch} and would have had every
-// assignment refused as malformed.
-//
-// The worker does that lookup itself rather than being told the answer, which
-// is also the more honest arrangement: it checks the proof against roots it
-// fetched from the operator, not against roots the witness asserted. The
-// witness is asking for a second opinion, and an opinion formed from the
-// asker's own evidence is worth less.
-type akdVerifier struct {
-	bin string
-	src map[string]*akd.Source // by origin
-	// threads caps the sidecar's runtime. Without it the sidecar sizes itself
-	// from the machine's core count and ignores this worker's budget entirely
-	// — one epoch took 3.7 cores on a laptop that had promised to use eight in
-	// total across four of them.
-	threads int
-}
+// The reference implementation still runs, on the witness, where the comparison
+// happens and where being wrong would matter.
+type akdVerifier struct{}
 
-func (v akdVerifier) verify(ctx context.Context, origin string, epoch int64) (string, string, error) {
-	s := v.src[origin]
-	if s == nil {
-		return "", "", fmt.Errorf("no log directory configured for %s", origin)
+func (akdVerifier) verify(ctx context.Context, origin string, epoch int64, proofBase string) (string, string, error) {
+	if proofBase == "" {
+		return "", "", fmt.Errorf("no proof source: this worker does not fetch from the operator")
 	}
-	ref, err := s.ResolveEpoch(ctx, epoch)
+	// The base already carries this session's token; the worker simply uses the
+	// URL it was given.
+	url := fmt.Sprintf("%s/%s/%d", strings.TrimSuffix(proofBase, "/"), origin, epoch)
+	data, err := fetchProof(ctx, url)
 	if err != nil {
-		return "", "", fmt.Errorf("resolving %s epoch %d: %w", origin, epoch, err)
+		return "", "", fmt.Errorf("fetching the proof: %w", err)
 	}
 
-	req, _ := json.Marshal(map[string]any{
-		"log_directory": ref.LogDirectory,
-		"epoch":         epoch,
-		"prev_root":     ref.PrevRoot,
-		"curr_root":     ref.CurrRoot,
-	})
-	cmd := exec.CommandContext(ctx, v.bin)
-	cmd.Stdin = strings.NewReader(string(req))
-	if v.threads > 0 {
-		cmd.Env = append(os.Environ(), fmt.Sprintf("KT_AKD_THREADS=%d", v.threads))
-	}
-	out, err := cmd.Output()
+	inserted, unchanged, err := akdtree.Decode(data)
 	if err != nil {
-		return "", "", fmt.Errorf("%s: %w", v.bin, err)
+		return "", "", fmt.Errorf("decoding the proof: %w", err)
 	}
-	var r struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
+
+	// The previous root comes from the unchanged nodes alone; the current one
+	// from those plus the inserted nodes, each committed to this epoch. Which
+	// is what an append-only proof asserts.
+	akdtree.Sort(unchanged)
+	prev, err := akdtree.Root(unchanged)
+	if err != nil {
+		return "", "", fmt.Errorf("rebuilding the previous root: %w", err)
 	}
-	if err := json.Unmarshal(out, &r); err != nil {
-		return "", "", fmt.Errorf("sidecar output was not JSON: %s", strings.TrimSpace(string(out)))
+
+	both := make([]akdtree.Element, 0, len(unchanged)+len(inserted))
+	both = append(both, unchanged...)
+	for _, e := range inserted {
+		e.Value = akdtree.HashLeafWithCommitment(e.Value, uint64(epoch))
+		both = append(both, e)
 	}
-	if !r.OK {
-		if r.Error != "" {
-			return "", "", fmt.Errorf("%s", r.Error)
-		}
-		// The proof did not rebuild the root the operator published. Reported
-		// as a disagreement, never as a finding: an empty computed root against
-		// a published one. What that means is the witness's to decide, and this
-		// worker does not get to accuse anybody.
-		return "", ref.CurrRoot, nil
+	akdtree.Sort(both)
+	curr, err := akdtree.Root(both)
+	if err != nil {
+		return "", "", fmt.Errorf("rebuilding the current root: %w", err)
 	}
-	return ref.CurrRoot, ref.CurrRoot, nil
+
+	return hexOf(prev), hexOf(curr), nil
 }
 
-// akdSourcesFromConfig builds a resolver per AKD log named in the witness's
-// config file.
+func hexOf(d akdtree.Digest) string {
+	const hexdigits = "0123456789abcdef"
+	out := make([]byte, 64)
+	for i, b := range d {
+		out[2*i] = hexdigits[b>>4]
+		out[2*i+1] = hexdigits[b&0x0f]
+	}
+	return string(out)
+}
+
+// fetchProof reads a proof from the witness into memory.
 //
-// The same file the witness runs from, so a worker cannot be checking a
-// different log directory than the one it is reporting about — the failure that
-// would produce is a confident verdict on the wrong data.
-func akdSourcesFromConfig(path string) (map[string]*akd.Source, error) {
-	b, err := os.ReadFile(path)
+// To memory rather than a temp file: nothing else needs the bytes, the decoder
+// reads them once, and a worker writing hundreds of megabytes to disk per epoch
+// wears out somebody's laptop for no reason.
+func fetchProof(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	var cfg struct {
-		Logs []struct {
-			Type         string `json:"type"`
-			Origin       string `json:"origin"`
-			LogDirectory string `json:"log_directory"`
-		} `json:"logs"`
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
 	}
-	if err := json.Unmarshal(b, &cfg); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET %s: HTTP %s", url, resp.Status)
 	}
-	out := map[string]*akd.Source{}
-	for _, l := range cfg.Logs {
-		if l.Type != "akd" || l.LogDirectory == "" {
-			continue
-		}
-		s, err := akd.New(akd.Config{Origin: l.Origin, LogDirectory: l.LogDirectory})
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", l.Origin, err)
-		}
-		out[l.Origin] = s
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("%s names no akd logs", path)
-	}
-	return out, nil
+	return io.ReadAll(resp.Body)
 }
 
 // protonGPUVerifier rebuilds a Proton tree on the GPU.
 //
-// STATEFUL, and that is the one place this architecture does not simply
-// generalise. An epoch is verified by applying its diff to the tree for the
-// epoch before it, so this worker can only do epoch N if it already holds the
-// tree for N-1. Ranges must therefore be contiguous, in order, and pinned to
-// the worker that holds the tree — a laptop cannot pick up where the GPU box
-// left off without first downloading 13 GB.
+// STATEFUL, and the one place this architecture does not simply generalise. An
+// epoch is verified by applying its diff to the tree for the epoch before it,
+// so this worker can only do epoch N if it already holds the tree for N-1.
+// Ranges must be contiguous, in order, and pinned to the worker holding the
+// tree — a laptop cannot pick up where the GPU box left off without first
+// downloading 13 GB.
 //
 // The queue does not model that affinity yet. Until it does, Proton ranges must
 // only be offered to this worker, which the origins filter achieves by
@@ -157,19 +138,16 @@ type protonGPUVerifier struct {
 	dir string // where the retained tree and diffs live
 }
 
-func (v protonGPUVerifier) verify(ctx context.Context, origin string, epoch int64) (string, string, error) {
+func (v protonGPUVerifier) verify(ctx context.Context, origin string, epoch int64, _ string) (string, string, error) {
 	tree := fmt.Sprintf("%s/epoch_tree_%d.bin", v.dir, epoch)
 	cmd := exec.CommandContext(ctx, v.bin, tree)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", "", fmt.Errorf("%s: %w", v.bin, err)
 	}
-	var r struct {
-		Root   string `json:"root"`
-		Signed string `json:"signed_root"`
-	}
-	if err := json.Unmarshal(out, &r); err != nil {
-		return "", "", fmt.Errorf("%s output was not JSON: %s", v.bin, strings.TrimSpace(string(out)))
-	}
-	return r.Root, r.Signed, nil
+	// Proton's rebuild produces one root, for the epoch it just built. There is
+	// no previous root to report, so the current one is sent twice rather than
+	// inventing a field the witness would have to special-case.
+	root := strings.TrimSpace(string(out))
+	return root, root, nil
 }

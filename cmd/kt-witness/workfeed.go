@@ -36,6 +36,10 @@ const (
 	// Twenty-five is the slow machine's number: ~8 minutes at laptop speed,
 	// ~2 on the witness. The cost of small chunks is queue churn, which is a
 	// few map operations; the cost of large ones is other people's electricity.
+	// A range is handed out as two interleaved assignments, so a chunk of this
+	// many epochs becomes two of half the count — and no worker ever holds two
+	// adjacent epochs. See work.Queue.LeasedBy for why that is a security
+	// property and not a scheduling one.
 	feedChunk    = 25
 	feedInterval = 30 * time.Second
 	feedDepth    = 40 // assignments to keep queued ahead of the workers
@@ -125,7 +129,7 @@ func (f *feeder) topUp() {
 				continue // this origin has nothing left to offer this pass
 			}
 			to := at + feedChunk - 1
-			f.q.Add(origin, at, to)
+			f.q.AddInterleaved(origin, at, to)
 			f.log.Debug("queued work", "origin", origin, "from", at, "to", to)
 			f.next[origin] = to + 1
 			queued++

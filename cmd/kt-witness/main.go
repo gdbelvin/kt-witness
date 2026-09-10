@@ -147,6 +147,22 @@ type config struct {
 	// local refuses to start, and a missing token closes the channel rather
 	// than opening it.
 	Work struct {
+		// ProofListen is where corrupted canary proofs are served, and must be
+		// a LAN address for the same reason the work channel must. Empty
+		// disables canaries for remote workers, which means a worker that
+		// reports the published root without verifying cannot be caught.
+		ProofListen string `json:"proof_listen"`
+		// ProofHost is what a worker should dial to reach it — the host's LAN
+		// address and published port, which is not what the container sees
+		// itself bound to.
+		ProofHost string `json:"proof_host"`
+		// CanaryEvery is how often a proof served to a worker has a bit
+		// flipped: 100 corrupts one in a hundred. Zero means that default.
+		//
+		// Every proof goes through the server, not just these, because a
+		// corrupted proof a worker can identify tests nothing.
+		CanaryEvery int `json:"canary_every"`
+
 		Listen   string `json:"listen"`
 		TokenEnv string `json:"token_env"`
 		Lease    string `json:"lease"`
@@ -175,8 +191,27 @@ type config struct {
 		//
 		// ShadowEvery samples it: 1 (or 0) shadows everything, 10 shadows one
 		// epoch in ten.
+		// Verifier selects which implementation does the witness's own
+		// verification: "go" for internal/akdtree, "rust" for the reference
+		// sidecar. The reference is the authority wherever it runs; this
+		// chooses which one runs in the hot path.
+		Verifier string `json:"verifier"`
+
 		ShadowVerify *bool `json:"shadow_verify"`
 		ShadowEvery  int   `json:"shadow_every"`
+
+		// GoConcurrent bounds in-process verifications. Zero derives it from
+		// the machine's cores.
+		GoConcurrent int `json:"go_concurrent"`
+
+		// CanaryEvery is how often a proof that just verified is corrupted and
+		// re-verified, to prove the verifier can still say no. 100 tests one
+		// epoch in a hundred; 0 means that default; negative disables it.
+		//
+		// There is no good reason to disable it. A verifier that has stopped
+		// checking looks exactly like one that is working, right up until it
+		// is asked to reject something.
+		CanaryEvery int `json:"canary_every"`
 
 		// ReserveCores is how many cores to leave free for everything else. The
 		// backlog sweep's budget is derived from the machine: it drives total
@@ -594,6 +629,9 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 	}
 
 	var auditor *audit.Auditor
+	// Held so the work channel can hand it a verified proof once the queue
+	// exists; the verifier is built before the channel it serves.
+	var canaryV *audit.Canary
 	var auditInterval time.Duration
 	var resolvers []audit.Resolver
 	if cfg.Audit.SidecarPath != "" {
@@ -618,13 +656,46 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		}
 		pool := audit.NewPool(cfg.Audit.SidecarPath, workers)
 		var sidecar audit.Verifier = pool
+
+		// The Go verifier in the hot path, with the reference kept for the
+		// shadow and the canary.
+		//
+		// The sidecar pool is capped at eight because one Rust verification
+		// peaks near 3.7 GB, and that cap — not this machine's thirty-two
+		// cores — has been what bounds throughput. A verification in Go holds
+		// the proof and a flat array of nodes, so the ceiling moves off memory
+		// and onto cores.
+		var goVerifier *audit.GoVerifier
+		if strings.EqualFold(cfg.Audit.Verifier, "go") {
+			goVerifier = &audit.GoVerifier{Concurrent: cfg.Audit.GoConcurrent}
+			sidecar = goVerifier
+			log.Info("verifying in-process with the Go implementation",
+				"concurrent", goVerifier.Size(),
+				"shadow", cfg.Audit.ShadowVerify == nil || *cfg.Audit.ShadowVerify)
+		}
+
+		// A corrupted proof, one epoch in a hundred, that both verifiers must
+		// reject. This is the only check here that can tell a verifier from a
+		// rubber stamp: everything else asks it to agree with a valid proof,
+		// which a verifier that always says yes does perfectly.
+		//
+		// Inside the shadow rather than outside it, so the canary sees the
+		// retained proof before the shadow deletes it.
+		if cfg.Audit.CanaryEvery >= 0 {
+			pool.KeepProofs()
+			canaryV = &audit.Canary{Primary: pool, Log: log, Every: cfg.Audit.CanaryEvery}
+			sidecar = canaryV
+			log.Info("canary verification enabled",
+				"every", canaryEvery(cfg.Audit.CanaryEvery),
+				"note", "a corrupted proof that verifies means every verdict from that verifier is worthless")
+		}
 		if cfg.Audit.ShadowVerify == nil || *cfg.Audit.ShadowVerify {
 			// Ask the sidecar to keep what it downloads, so the shadow checks
 			// the same bytes rather than fetching them again. Without this it
 			// could only see epochs that happened to be in the prefetch cache,
 			// which was two in ten.
 			pool.KeepProofs()
-			sidecar = &audit.Shadow{Primary: pool, Log: log, Every: cfg.Audit.ShadowEvery}
+			sidecar = &audit.Shadow{Primary: sidecar, Log: log, Every: cfg.Audit.ShadowEvery}
 			log.Info("shadow verification enabled",
 				"note", "the Rust reference decides; the Go verifier is only observed",
 				"every", max(1, cfg.Audit.ShadowEvery))
@@ -637,10 +708,22 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		// the backlog still measured months.
 		var governor *pace.Governor
 		if cfg.Audit.Pace || cfg.Audit.TargetCores > 0 || cfg.Audit.ReserveCores > 0 {
+			// The ceiling has to match whatever is actually verifying.
+			//
+			// It was the sidecar pool's size, because that was the only thing
+			// that could run concurrently. With the Go verifier in the hot path
+			// the limit is cores rather than the 3.7 GB a Rust verification
+			// peaks at — and leaving the old number here would have quietly
+			// held the box at eight while thirty were available, which is the
+			// same mistake as the pool cap, one layer up.
+			maxConcurrent := workers
+			if strings.EqualFold(cfg.Audit.Verifier, "go") {
+				maxConcurrent = (&audit.GoVerifier{Concurrent: cfg.Audit.GoConcurrent}).Size()
+			}
 			governor = &pace.Governor{
 				ReserveCores:  cfg.Audit.ReserveCores,
 				TargetCores:   cfg.Audit.TargetCores,
-				MaxConcurrent: workers,
+				MaxConcurrent: maxConcurrent,
 				Log:           log,
 			}
 		}
@@ -1813,4 +1896,11 @@ func governorFor(a *audit.Auditor) *pace.Governor {
 		return nil
 	}
 	return a.Governor
+}
+
+func canaryEvery(n int) int {
+	if n <= 0 {
+		return 100
+	}
+	return n
 }

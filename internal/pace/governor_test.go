@@ -144,14 +144,20 @@ func TestNilGovernorIsInert(t *testing.T) {
 // TestBudgetIsDerivedFromTheMachine is the property that keeps this correct
 // across hardware changes.
 //
-// A fixed number has now been wrong twice here: a per-round budget chosen for a
-// four-core box, then a five-core target on a sixteen-core one. "Leave one core
-// free" survives both.
+// A fixed number has now been wrong three times here: a per-round budget chosen
+// for a four-core box, a five-core target on a sixteen-core one, and a pool cap
+// that held a thirty-two-core machine at eight. "Leave two cores free" survives
+// all of them, and it is the same rule every worker uses — a machine behaves the
+// same way whether it is the witness, a laptop or the GPU box.
+//
+// A count rather than a fraction, deliberately: a fraction reserves more as
+// machines grow, which is the opposite of what a bigger machine is for.
 func TestBudgetIsDerivedFromTheMachine(t *testing.T) {
-	g := &Governor{} // defaults: reserve 1
+	g := &Governor{} // defaults: reserve 2
 	for _, c := range []struct{ cores, want float64 }{
-		{16, 15}, {4, 3}, {64, 63},
+		{16, 14}, {4, 2}, {64, 62}, {32, 30},
 		{1, 1}, // a one-core box still gets to make progress
+		{2, 1}, // and so does a two-core one
 	} {
 		if got := g.BudgetFor(c.cores); got != c.want {
 			t.Errorf("%.0f cores: budget %.1f, want %.1f", c.cores, got, c.want)
@@ -215,15 +221,15 @@ func TestSelfAndMachineConstraintsCannotContradict(t *testing.T) {
 func TestBudgetIgnoresWhatElseThisProcessIsDoing(t *testing.T) {
 	g := &Governor{}
 	want := g.BudgetFor(32)
-	if want != 31 {
-		t.Fatalf("budget %.1f, want 31", want)
+	if want != 30 {
+		t.Fatalf("budget %.1f, want 30", want)
 	}
 	// Whatever else the process is doing, the ceiling for the machine is the
 	// same number. There is no input here for it to depend on, and that is the
 	// property being pinned.
 	for _, cores := range []float64{16, 32, 64} {
-		if got := g.BudgetFor(cores); got != cores-1 {
-			t.Errorf("%.0f cores: budget %.1f, want %.1f", cores, got, cores-1)
+		if got := g.BudgetFor(cores); got != cores-2 {
+			t.Errorf("%.0f cores: budget %.1f, want %.1f", cores, got, cores-2)
 		}
 	}
 }

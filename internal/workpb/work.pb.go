@@ -253,8 +253,20 @@ type Hello struct {
 	// and a worker that overstates it simply misses deadlines.
 	Parallel int32 `protobuf:"varint,3,opt,name=parallel,proto3" json:"parallel,omitempty"`
 	// Free-text, for the operator's own benefit when something looks wrong.
-	Version       string `protobuf:"bytes,4,opt,name=version,proto3" json:"version,omitempty"`
-	Platform      string `protobuf:"bytes,5,opt,name=platform,proto3" json:"platform,omitempty"`
+	Version  string `protobuf:"bytes,4,opt,name=version,proto3" json:"version,omitempty"`
+	Platform string `protobuf:"bytes,5,opt,name=platform,proto3" json:"platform,omitempty"`
+	// The protocol this worker speaks. A session whose protocol differs from the
+	// witness's is refused, loudly, rather than served.
+	//
+	// This exists because a stale worker is not a worker that fails: protobuf
+	// fields are positional, so an old build's `root` arrives in the field now
+	// called `computed_prev_root` and the witness records the resulting mismatch
+	// as a fact about the LOG. Two workers running a build one commit old wrote
+	// roughly 3,300 false "unverified" epochs that way, which is a false hole in
+	// the coverage — the one number this witness must not get wrong in that
+	// direction. Refusing the session costs a restart; accepting it corrupts the
+	// record silently.
+	Protocol      int32 `protobuf:"varint,6,opt,name=protocol,proto3" json:"protocol,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -324,13 +336,54 @@ func (x *Hello) GetPlatform() string {
 	return ""
 }
 
+func (x *Hello) GetProtocol() int32 {
+	if x != nil {
+		return x.Protocol
+	}
+	return 0
+}
+
 // Assignment is a contiguous range of epochs on one log.
 type Assignment struct {
-	state  protoimpl.MessageState `protogen:"open.v1"`
-	Id     string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Origin string                 `protobuf:"bytes,2,opt,name=origin,proto3" json:"origin,omitempty"`
-	From   int64                  `protobuf:"varint,3,opt,name=from,proto3" json:"from,omitempty"`
-	To     int64                  `protobuf:"varint,4,opt,name=to,proto3" json:"to,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Where to fetch the proof, when the witness wants to choose.
+	//
+	// Normally empty: a worker builds the URL from the operator's log directory
+	// and fetches from the operator, which is the arrangement that makes its
+	// verdict worth having — it checks the proof against roots it resolved
+	// itself, from the source, not against anything this witness asserted.
+	//
+	// When the witness serves proofs, this is set on EVERY assignment, and the
+	// worker fetches {base}/proof/{origin}/{epoch}. One proof in a hundred that
+	// it serves has a bit flipped, and the worker must reject those — which only
+	// tests anything because it cannot tell which ones they are.
+	//
+	// An earlier version set this only for the corrupted ones, which labelled
+	// them: a worker had merely to refuse anything coming from the witness to
+	// score perfectly while verifying nothing. A test the subject can identify
+	// is not a test.
+	//
+	// The roots are still resolved by the worker from the operator, never taken
+	// from here. Serving the bytes lets the witness test a worker; it does not
+	// let it make one agree.
+	ProofBase string `protobuf:"bytes,7,opt,name=proof_base,json=proofBase,proto3" json:"proof_base,omitempty"`
+	// Epochs in this assignment are from..to counting by step.
+	//
+	// Step is 2, not 1, and that is a security property rather than a
+	// scheduling one. A worker holding epoch E and epoch E+1 can answer for E
+	// without checking anything: the published roots chain, so curr_E equals
+	// prev_{E+1} equals Root(unchanged_{E+1}) — computable from the neighbour's
+	// proof alone, with the commitment never applied and the merged tree never
+	// built. Interleaving denies it the neighbour.
+	Step int32 `protobuf:"varint,8,opt,name=step,proto3" json:"step,omitempty"`
+	// Block groups the interleaved halves of one range. A worker is never leased
+	// two assignments from the same block, because holding both would hand it
+	// the neighbours the step exists to withhold.
+	Block  string `protobuf:"bytes,9,opt,name=block,proto3" json:"block,omitempty"`
+	Id     string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Origin string `protobuf:"bytes,2,opt,name=origin,proto3" json:"origin,omitempty"`
+	From   int64  `protobuf:"varint,3,opt,name=from,proto3" json:"from,omitempty"`
+	To     int64  `protobuf:"varint,4,opt,name=to,proto3" json:"to,omitempty"`
 	// Echoed in every result for this assignment.
 	Nonce string `protobuf:"bytes,5,opt,name=nonce,proto3" json:"nonce,omitempty"`
 	// Unix seconds. Past it the lease is void: results will be refused and the
@@ -369,6 +422,27 @@ func (x *Assignment) ProtoReflect() protoreflect.Message {
 // Deprecated: Use Assignment.ProtoReflect.Descriptor instead.
 func (*Assignment) Descriptor() ([]byte, []int) {
 	return file_proto_work_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *Assignment) GetProofBase() string {
+	if x != nil {
+		return x.ProofBase
+	}
+	return ""
+}
+
+func (x *Assignment) GetStep() int32 {
+	if x != nil {
+		return x.Step
+	}
+	return 0
+}
+
+func (x *Assignment) GetBlock() string {
+	if x != nil {
+		return x.Block
+	}
+	return ""
 }
 
 func (x *Assignment) GetId() string {
@@ -419,14 +493,22 @@ type Result struct {
 	Nonce        string                 `protobuf:"bytes,2,opt,name=nonce,proto3" json:"nonce,omitempty"`
 	Origin       string                 `protobuf:"bytes,3,opt,name=origin,proto3" json:"origin,omitempty"`
 	Epoch        int64                  `protobuf:"varint,4,opt,name=epoch,proto3" json:"epoch,omitempty"`
-	Verified     bool                   `protobuf:"varint,5,opt,name=verified,proto3" json:"verified,omitempty"`
-	// What the worker computed, and what the operator signed. Both are sent
-	// because the witness decides what a disagreement means, and cannot do that
-	// from a boolean.
-	Root       string `protobuf:"bytes,6,opt,name=root,proto3" json:"root,omitempty"`
-	SignedRoot string `protobuf:"bytes,7,opt,name=signed_root,json=signedRoot,proto3" json:"signed_root,omitempty"`
-	Worker     string `protobuf:"bytes,8,opt,name=worker,proto3" json:"worker,omitempty"`
-	DurationMs int64  `protobuf:"varint,9,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
+	// The two roots the worker COMPUTED from the proof, and nothing else.
+	//
+	// It is never told what the operator published, and it does not report a
+	// verdict. That is not a division of labour, it is what makes the answer
+	// worth having: a worker that does not know the expected value cannot report
+	// it without doing the work, so fabrication stops being something to sample
+	// for and becomes something that cannot happen.
+	//
+	// The witness holds the published roots and does the comparison. A worker
+	// that computes wrong roots produces a mismatch, which the witness resolves
+	// by re-verifying the epoch itself — it can waste our time, and it cannot
+	// make us believe anything.
+	ComputedPrevRoot string `protobuf:"bytes,6,opt,name=computed_prev_root,json=computedPrevRoot,proto3" json:"computed_prev_root,omitempty"`
+	ComputedCurrRoot string `protobuf:"bytes,7,opt,name=computed_curr_root,json=computedCurrRoot,proto3" json:"computed_curr_root,omitempty"`
+	Worker           string `protobuf:"bytes,8,opt,name=worker,proto3" json:"worker,omitempty"`
+	DurationMs       int64  `protobuf:"varint,9,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
 	// Set when the epoch could not be verified. Not a finding: an epoch that
 	// could not be fetched is unavailable, not evidence of anything.
 	Error         string `protobuf:"bytes,10,opt,name=error,proto3" json:"error,omitempty"`
@@ -492,23 +574,16 @@ func (x *Result) GetEpoch() int64 {
 	return 0
 }
 
-func (x *Result) GetVerified() bool {
+func (x *Result) GetComputedPrevRoot() string {
 	if x != nil {
-		return x.Verified
-	}
-	return false
-}
-
-func (x *Result) GetRoot() string {
-	if x != nil {
-		return x.Root
+		return x.ComputedPrevRoot
 	}
 	return ""
 }
 
-func (x *Result) GetSignedRoot() string {
+func (x *Result) GetComputedCurrRoot() string {
 	if x != nil {
-		return x.SignedRoot
+		return x.ComputedCurrRoot
 	}
 	return ""
 }
@@ -761,30 +836,33 @@ const file_proto_work_proto_rawDesc = "" +
 	"assignment\x18\x01 \x01(\v2\x1d.ktwitness.work.v1.AssignmentH\x00R\n" +
 	"assignment\x12*\n" +
 	"\x03ack\x18\x02 \x01(\v2\x16.ktwitness.work.v1.AckH\x00R\x03ackB\x05\n" +
-	"\x03msg\"\x87\x01\n" +
+	"\x03msg\"\xa3\x01\n" +
 	"\x05Hello\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aorigins\x18\x02 \x03(\tR\aorigins\x12\x1a\n" +
 	"\bparallel\x18\x03 \x01(\x05R\bparallel\x12\x18\n" +
 	"\aversion\x18\x04 \x01(\tR\aversion\x12\x1a\n" +
-	"\bplatform\x18\x05 \x01(\tR\bplatform\"\x93\x01\n" +
+	"\bplatform\x18\x05 \x01(\tR\bplatform\x12\x1a\n" +
+	"\bprotocol\x18\x06 \x01(\x05R\bprotocol\"\xdc\x01\n" +
 	"\n" +
-	"Assignment\x12\x0e\n" +
+	"Assignment\x12\x1d\n" +
+	"\n" +
+	"proof_base\x18\a \x01(\tR\tproofBase\x12\x12\n" +
+	"\x04step\x18\b \x01(\x05R\x04step\x12\x14\n" +
+	"\x05block\x18\t \x01(\tR\x05block\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06origin\x18\x02 \x01(\tR\x06origin\x12\x12\n" +
 	"\x04from\x18\x03 \x01(\x03R\x04from\x12\x0e\n" +
 	"\x02to\x18\x04 \x01(\x03R\x02to\x12\x14\n" +
 	"\x05nonce\x18\x05 \x01(\tR\x05nonce\x12#\n" +
-	"\rdeadline_unix\x18\x06 \x01(\x03R\fdeadlineUnix\"\x91\x02\n" +
+	"\rdeadline_unix\x18\x06 \x01(\x03R\fdeadlineUnix\"\x9c\x02\n" +
 	"\x06Result\x12#\n" +
 	"\rassignment_id\x18\x01 \x01(\tR\fassignmentId\x12\x14\n" +
 	"\x05nonce\x18\x02 \x01(\tR\x05nonce\x12\x16\n" +
 	"\x06origin\x18\x03 \x01(\tR\x06origin\x12\x14\n" +
-	"\x05epoch\x18\x04 \x01(\x03R\x05epoch\x12\x1a\n" +
-	"\bverified\x18\x05 \x01(\bR\bverified\x12\x12\n" +
-	"\x04root\x18\x06 \x01(\tR\x04root\x12\x1f\n" +
-	"\vsigned_root\x18\a \x01(\tR\n" +
-	"signedRoot\x12\x16\n" +
+	"\x05epoch\x18\x04 \x01(\x03R\x05epoch\x12,\n" +
+	"\x12computed_prev_root\x18\x06 \x01(\tR\x10computedPrevRoot\x12,\n" +
+	"\x12computed_curr_root\x18\a \x01(\tR\x10computedCurrRoot\x12\x16\n" +
 	"\x06worker\x18\b \x01(\tR\x06worker\x12\x1f\n" +
 	"\vduration_ms\x18\t \x01(\x03R\n" +
 	"durationMs\x12\x14\n" +
