@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 
 	"github.com/gdbsecurity/kt-witness/internal/akdtree"
 )
@@ -34,6 +35,19 @@ type verifier interface {
 	// verify rebuilds the previous and current roots from the proof. It reports
 	// no verdict, because it has nothing to compare against.
 	verify(ctx context.Context, origin string, epoch int64, proofBase string) (computedPrev, computedCurr string, err error)
+
+	// width is how many logical CPUs one verification occupies.
+	//
+	// Declared by the thing that does the work rather than guessed by the thing
+	// that schedules it. The guess was four — measured against a Rust sidecar
+	// this worker no longer runs — and it divided the CPU budget by that, so
+	// every machine in the fleet ran at a quarter of its width for a day.
+	width() int
+
+	// memoryPerEpoch estimates the peak bytes one verification holds, given the
+	// proof sizes seen so far. Zero means nothing has been observed yet and the
+	// caller should not apply a memory cap.
+	memoryPerEpoch() uint64
 }
 
 // akdVerifier replays a Meta or WhatsApp audit proof.
@@ -47,9 +61,37 @@ type verifier interface {
 //
 // The reference implementation still runs, on the witness, where the comparison
 // happens and where being wrong would matter.
-type akdVerifier struct{}
+type akdVerifier struct {
+	// largestProof is the biggest proof this verifier has decoded, per the
+	// whole worker rather than per origin: the cap has to fit the worst case it
+	// is actually being handed.
+	largestProof atomic.Uint64
+}
 
-func (akdVerifier) verify(ctx context.Context, origin string, epoch int64, proofBase string) (string, string, error) {
+// width is one. internal/akdtree is single-threaded — Sort is slices.SortFunc
+// and Root is plain recursion, with no goroutine anywhere in the package — so
+// one epoch occupies one core. This is a fact about the code rather than a
+// tuning constant, which is why it is stated here instead of configured.
+func (*akdVerifier) width() int { return 1 }
+
+// memoryPerEpoch derives the footprint from the largest proof seen and the
+// sizes of the structures built from it, rather than from a number somebody
+// measured once on one machine.
+//
+// A verification holds: the proof bytes, one Element per node, and the merged
+// slice built from them. An Element is 68 bytes and a node occupies roughly 72
+// bytes on the wire, so the elements come to about the proof's own size and the
+// merge to about the same again — call it three times the proof, which is
+// arithmetic from the data structure rather than a guess about hardware.
+func (v *akdVerifier) memoryPerEpoch() uint64 {
+	largest := v.largestProof.Load()
+	if largest == 0 {
+		return 0 // nothing seen yet; the caller applies no cap
+	}
+	return largest * 3
+}
+
+func (v *akdVerifier) verify(ctx context.Context, origin string, epoch int64, proofBase string) (string, string, error) {
 	if proofBase == "" {
 		return "", "", fmt.Errorf("no proof source: this worker does not fetch from the operator")
 	}
@@ -59,6 +101,15 @@ func (akdVerifier) verify(ctx context.Context, origin string, epoch int64, proof
 	data, err := fetchProof(ctx, url)
 	if err != nil {
 		return "", "", fmt.Errorf("fetching the proof: %w", err)
+	}
+
+	// Remember the worst case, so the memory cap follows what this worker is
+	// actually being asked to do rather than what it was told to expect.
+	for {
+		prev := v.largestProof.Load()
+		if uint64(len(data)) <= prev || v.largestProof.CompareAndSwap(prev, uint64(len(data))) {
+			break
+		}
 	}
 
 	inserted, unchanged, err := akdtree.Decode(data)
@@ -137,6 +188,12 @@ type protonGPUVerifier struct {
 	bin string // kt-proton-gpu
 	dir string // where the retained tree and diffs live
 }
+
+// width and memoryPerEpoch for the GPU rebuild: the work happens on the card,
+// so it occupies about one core of this machine to drive it, and its memory is
+// the card's rather than the host's.
+func (protonGPUVerifier) width() int             { return 1 }
+func (protonGPUVerifier) memoryPerEpoch() uint64 { return 0 }
 
 func (v protonGPUVerifier) verify(ctx context.Context, origin string, epoch int64, _ string) (string, string, error) {
 	tree := fmt.Sprintf("%s/epoch_tree_%d.bin", v.dir, epoch)

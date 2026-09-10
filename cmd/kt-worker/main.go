@@ -140,74 +140,40 @@ func main() {
 	//
 	// An average is the wrong shape for a promise about somebody's laptop. The
 	// promise was two cores left free; only a ceiling keeps it.
-	epochThreads := 4
-	if epochThreads > budget {
-		epochThreads = budget
-	}
-	parallel := budget / epochThreads
-	if parallel < 1 {
-		parallel = 1
-		epochThreads = budget
-	}
-	// Cap by memory as well as cores.
-	//
-	// The core budget says nothing about RAM, and a verification is measured in
-	// gigabytes: 0.61 GB for a WhatsApp epoch and about 3.7 GB for a Meta one,
-	// which is why the estimate follows the origins this worker actually
-	// serves. Without this a worker sits inside its core budget while pushing
-	// its host into swap — which it did, killing two of the operator's
-	// background tasks while reporting itself healthy on two of eight cores.
-	//
-	// Half of what is available, because the other half belongs to whoever owns
-	// the machine. If the figure cannot be read at all the cap is not applied:
-	// an unknown is not permission to assume there is room, but neither is it
-	// grounds to refuse to work — the CPU budget still bounds this, and the
-	// worker says out loud that it is flying blind.
-	perEpoch := perEpochMemory(strings.Split(*akdOrigins, ","))
-	if avail, ok := hostmem.Available(); ok {
-		byMem := int(uint64(float64(avail)*0.5) / perEpoch)
-		if byMem < 1 {
-			byMem = 1
-		}
-		if byMem < parallel {
-			log.Info("memory is the tighter constraint, not cores",
-				"available_gb", float64(avail)/(1<<30),
-				"per_epoch_gb", float64(perEpoch)/(1<<30),
-				"epochs_by_cpu", parallel, "epochs_by_memory", byMem)
-			parallel = byMem
-		}
-	} else {
-		log.Warn("cannot read available memory; pacing on cores alone",
-			"note", "a worker within its core budget can still push its host into swap")
-	}
-
-	log.Info("cpu budget", "logical_cpus", budget, "epochs_at_once", parallel,
-		"threads_per_epoch", epochThreads, "threads_total", parallel*epochThreads,
-		"memory_per_epoch_gb", float64(perEpoch)/(1<<30))
-
 	w := &worker{
-		parallel:     parallel,
-		epochThreads: epochThreads,
-		budget:       budget,
-		server:       *server,
-		name:         *name,
-		token:        token,
-		dry:          *dry,
-		log:          log,
+		budget: budget,
+		server: *server,
+		name:   *name,
+		token:  token,
+		dry:    *dry,
+		log:    log,
 	}
 	// Everything this worker needs arrives from the witness: the proof over the
 	// LAN, the epoch in the assignment. No log directories, no config file, no
 	// internet — and no knowledge of the roots it is expected to produce, which
 	// is what makes its answer worth anything.
+	// One verifier shared across origins, so what it learns about proof sizes
+	// applies to the budget as a whole rather than per log.
+	akdv := &akdVerifier{}
 	w.verifiers = map[string]verifier{}
 	for _, o := range strings.Split(*akdOrigins, ",") {
 		if o = strings.TrimSpace(o); o != "" {
-			w.verifiers[o] = akdVerifier{}
+			w.verifiers[o] = akdv
 		}
 	}
 	if *protonBin != "" && *protonDir != "" {
 		w.verifiers["proton.me/kt/v1"] = protonGPUVerifier{bin: *protonBin, dir: *protonDir}
 	}
+	epochWidth, parallel := epochsAtOnce(budget, w.verifiers)
+
+	// The memory cap is applied per assignment rather than once at startup,
+	// because what a verification costs is not known until one has been done.
+	// See parallelNow below.
+	w.parallel = parallel
+	log.Info("cpu budget", "logical_cpus", budget, "epochs_at_once", parallel,
+		"cores_per_epoch", epochWidth,
+		"note", "the verifier declares its own width; memory narrows this per assignment")
+
 	// Declare exactly what we can do. Left empty the witness may hand out
 	// anything, and a worker that reports every epoch unavailable is worse than
 	// one that never connected.
@@ -247,7 +213,6 @@ func main() {
 type worker struct {
 	server, name, token string
 	parallel            int
-	epochThreads        int
 	budget              int // logical CPUs this worker may use
 	origins             []string
 	dry                 bool
@@ -260,6 +225,80 @@ type worker struct {
 	verified atomic.Int64
 }
 
+// epochsAtOnce splits a CPU budget into concurrent verifications, asking the
+// things that do the work how wide each one is.
+//
+// This was a literal 4, measured against a Rust sidecar this worker no longer
+// runs, and it divided the budget — so every machine in the fleet ran at a
+// quarter of its width until somebody noticed a laptop sitting idle.
+// internal/akdtree is single-threaded, so the answer is now one, and asking
+// rather than assuming means it changes with the implementation instead of
+// going stale beside it.
+//
+// The widest verifier sets the divisor. A narrower one then runs more copies
+// than it strictly needs to keep the machine busy, which costs nothing; the
+// other way round oversubscribes the CPU, which is what the promise about
+// leaving cores free exists to prevent.
+func epochsAtOnce(budget int, vs map[string]verifier) (width, parallel int) {
+	width = 1
+	for _, v := range vs {
+		if n := v.width(); n > width {
+			width = n
+		}
+	}
+	if width > budget {
+		width = budget
+	}
+	if width < 1 {
+		width = 1
+	}
+	parallel = budget / width
+	if parallel < 1 {
+		parallel = 1
+	}
+	return width, parallel
+}
+
+// parallelNow is how many epochs to take on right now: the CPU budget decided
+// at startup, narrowed by what the machine currently has spare.
+//
+// Two things move under this worker, and each is measured rather than assumed.
+// Free memory changes because somebody opened a browser. What a verification
+// costs changes because the proofs got bigger — a WhatsApp epoch is a few
+// megabytes and a Meta one is nearly three hundred, and the same worker takes
+// both. So the cost comes from the verifier, which knows the largest proof it
+// has actually decoded, and until one has been decoded there is no cap at all:
+// guessing high would idle the machine and guessing low would swap it.
+//
+// Half of free memory, because this is a background job on somebody's machine
+// and the other half is theirs.
+func (w *worker) parallelNow() int {
+	par := w.parallel
+	free, ok := hostmem.Available()
+	if !ok {
+		return par // unmeasurable; the CPU budget stands alone
+	}
+	var per uint64
+	for _, v := range w.verifiers {
+		if n := v.memoryPerEpoch(); n > per {
+			per = n // the widest has to fit, same rule as the core budget
+		}
+	}
+	if per == 0 {
+		return par // nothing verified yet, so nothing to size against
+	}
+	fits := int(free / 2 / per)
+	if fits < 1 {
+		fits = 1 // one at a time still makes progress, and refusing does not
+	}
+	if fits < par {
+		w.log.Info("memory narrowed the epoch budget", "cpu_allows", par,
+			"memory_allows", fits, "free_bytes", free, "bytes_per_epoch", per)
+		return fits
+	}
+	return par
+}
+
 // run opens one session and works it with the same loop the witness runs.
 //
 // The assignment stream and the result stream are the two ends of one
@@ -270,7 +309,7 @@ func (w *worker) run(ctx context.Context) error {
 	// How many epochs at once, decided in main from this machine's CPU budget:
 	// every efficiency core plus two performance cores, split into processes
 	// wide enough that one epoch actually uses the threads it is given.
-	par := w.parallel
+	par := w.parallelNow()
 
 	creds := insecure.NewCredentials() // the channel is confined to this LAN
 
@@ -408,7 +447,7 @@ func (w *worker) run(ctx context.Context) error {
 			load, budget := gov.Observed()
 			if err := stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Capacity{
 				Capacity: &pb.Capacity{
-					Parallel: int32(par), Cpus: int32(runtime.GOMAXPROCS(0)),
+					Parallel: int32(w.parallelNow()), Cpus: int32(runtime.GOMAXPROCS(0)),
 					LoadCores: load, BudgetCores: budget,
 				}}}); err != nil {
 				w.log.Debug("capacity report failed; the session is going away", "err", err)
@@ -425,7 +464,7 @@ func (w *worker) run(ctx context.Context) error {
 	r := &work.Runner{
 		Name:     w.name,
 		Log:      w.log,
-		Parallel: work.Fixed(par),
+		Parallel: w.parallelNow,
 		// The governor's whole remaining job: decide when to ask for more.
 		//
 		// It asks whether the machine can support the parallelism this worker
@@ -433,7 +472,10 @@ func (w *worker) run(ctx context.Context) error {
 		// stops taking on ranges — while finishing the one it holds, because
 		// abandoning that would strand a lease for no gain.
 		BeforeNext: func(ctx context.Context) error {
-			if !gov.Ready(float64(par)) {
+			// The live figure, not the one from startup: Runner is about to
+			// ask parallelNow how wide to go, and asking the governor about a
+			// different number would gate on work nobody is going to do.
+			if !gov.Ready(float64(w.parallelNow())) {
 				load, budget := gov.Observed()
 				return fmt.Errorf("machine is using %.1f of %.1f cores allowed", load, budget)
 			}
