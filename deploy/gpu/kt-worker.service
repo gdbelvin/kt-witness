@@ -1,0 +1,45 @@
+# A worker as a service, rather than a nohup over ssh.
+#
+# Install once, as the user that owns ~/kt-worker:
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp kt-worker.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now kt-worker
+#   sudo loginctl enable-linger $USER      # so it survives logout and reboot
+#
+# Why this exists. Restarting the worker used to be `pkill; mv; setsid nohup
+# ./kt-worker ... &` inside an ssh command, and that hangs: the backgrounded
+# process keeps the ssh channel's file descriptors, so ssh waits for an EOF that
+# is not coming. It cost ten minutes of a deploy before anyone noticed the
+# worker had actually started fine and only ssh was stuck.
+#
+# It also fixes two things nobody had got to. The worker did not survive a
+# reboot, and a crash left the machine silently absent from the fleet — which
+# from the witness's side is indistinguishable from a lease simply going quiet.
+[Unit]
+Description=kt-witness verification worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/kt-worker
+# KT_WORK_TOKEN, KT_WORK_SERVER and KT_WORK_ORIGINS. The machine carries its own
+# configuration for the same reason the witness host keeps KT_PROOF_HOST in
+# .env: a redeploy must not depend on somebody retyping an address.
+EnvironmentFile=%h/kt-worker/work.env
+ExecStart=%h/kt-worker/kt-worker \
+  -server ${KT_WORK_SERVER} \
+  -akd-origins ${KT_WORK_ORIGINS} \
+  -name %H
+Restart=always
+RestartSec=5
+# The worker is a background job on somebody's machine even when that machine is
+# a server: it yields to whatever else is running, and this says so to the
+# kernel as well as to the governor.
+Nice=19
+StandardOutput=append:%h/kt-worker/worker.log
+StandardError=append:%h/kt-worker/worker.log
+
+[Install]
+WantedBy=default.target

@@ -24,7 +24,7 @@ if [ "$WHAT" = all ] || [ "$WHAT" = witness ]; then
   echo "==> witness: ship"
   "$here/deploy/ship.sh" "$HOST" >/dev/null
   echo "==> witness: build and restart"
-  ssh "$HOST" "cd ~/kt-witness && docker compose build kt-witness >/dev/null && docker compose up -d kt-witness" >/dev/null
+  ssh -n "$HOST" "cd ~/kt-witness && docker compose build kt-witness >/dev/null && docker compose up -d kt-witness" >/dev/null
 fi
 
 if [ "$WHAT" = all ] || [ "$WHAT" = workers ]; then
@@ -34,19 +34,36 @@ if [ "$WHAT" = all ] || [ "$WHAT" = workers ]; then
   ( cd "$here" && GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
       -o /tmp/kt-worker-linux ./cmd/kt-worker )
   scp -q /tmp/kt-worker-linux "$GPU:~/kt-worker/kt-worker.new"
-  # `exit 0` because the backgrounded worker keeps the ssh session's stdout
-  # open otherwise and this hangs until the lease expires.
-  ssh "$GPU" 'cd ~/kt-worker && pkill -f "^\./kt-worker " 2>/dev/null; sleep 3; \
-    mv kt-worker.new kt-worker && chmod +x kt-worker && \
-    set -a && . ./work.env && set +a && \
-    setsid nohup ./kt-worker -server "$KT_WORK_SERVER" -akd-origins "$KT_WORK_ORIGINS" \
-      -name gpu-box > worker.log 2>&1 < /dev/null & disown; exit 0' >/dev/null 2>&1 || true
+
+  # systemd where it is installed (deploy/gpu/kt-worker.service), and every
+  # ssh bounded by a timeout either way.
+  #
+  # The fallback path is `setsid nohup ./kt-worker ... &` inside an ssh command,
+  # and it HANGS: the backgrounded process inherits the ssh channel's file
+  # descriptors, so ssh waits for an EOF that never arrives. The worker starts
+  # fine; only the deploy is stuck, which is the worst shape for a bug like this
+  # because everything downstream looks broken. Ten minutes of a deploy went
+  # into that before it was understood, so the timeout is not belt and braces —
+  # it is the difference between a bounded wait and a wedged script.
+  if ssh -n -o ConnectTimeout=10 "$GPU" 'systemctl --user is-enabled kt-worker' >/dev/null 2>&1; then
+    ssh -n -o ConnectTimeout=10 "$GPU" \
+      'cd ~/kt-worker && mv kt-worker.new kt-worker && chmod +x kt-worker && \
+       systemctl --user restart kt-worker'
+  else
+    echo "    (no systemd unit; using the nohup path — see deploy/gpu/kt-worker.service)"
+    timeout 30 ssh -n -o ConnectTimeout=10 "$GPU" \
+      'cd ~/kt-worker && pkill -f "^\./kt-worker " 2>/dev/null; sleep 3; \
+       mv kt-worker.new kt-worker && chmod +x kt-worker && \
+       set -a && . ./work.env && set +a && \
+       setsid ./kt-worker -server "$KT_WORK_SERVER" -akd-origins "$KT_WORK_ORIGINS" \
+         -name gpu-box < /dev/null > worker.log 2>&1 &' >/dev/null 2>&1 || true
+  fi
 fi
 
 echo "==> settling"
 sleep 12
 
 echo "==> what came back:"
-ssh "$HOST" 'cd ~/kt-witness && docker compose logs --since=30s kt-witness 2>&1 \
+timeout 30 ssh -n "$HOST" 'cd ~/kt-witness && docker compose logs --since=30s kt-witness 2>&1 \
   | grep -E "worker connected|scratch space|level=ERROR" | tail -6' || true
 echo "done. Logs: deploy/loki-tunnel.sh, then query Loki on 127.0.0.1:3100"
