@@ -128,3 +128,49 @@ func TestAFullyAuditedHistoryIsNotRescannedForever(t *testing.T) {
 		t.Error("a fully audited history still reported work to do")
 	}
 }
+
+// TestASlowLogDoesNotStarveAFastOne is the reason a laptop sat at 0% CPU with
+// 7,877 unverified WhatsApp epochs waiting for it.
+//
+// The depth the feed keeps queued was measured across every origin at once.
+// Meta's proofs are 284 MB and the fetch is bandwidth-bound, so its assignments
+// sit pending; they reach the cap; and the feed then returns on its first line
+// without queueing anything, forever — including for WhatsApp, whose worker was
+// idle and whose proofs are a tenth the size.
+//
+// The round-robin the feed already had was written to fix the same shape one
+// level up, and it could not help: it decides the ORDER within a pass, and the
+// pass never happened.
+func TestASlowLogDoesNotStarveAFastOne(t *testing.T) {
+	const slow, fast = "meta.messenger.kt/v1", "whatsapp.kt/v2"
+	f, db, q := newFeeder(t, slow, fast)
+	for _, o := range []string{slow, fast} {
+		if err := db.RecordHistory(&store.History{Origin: o, From: 1, To: 100000,
+			Epochs: 100000, VerifiedAt: time.Now().UTC()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Fill the queue with the slow origin's work and never take any of it —
+	// which is what a bandwidth-bound log looks like from here.
+	for i := 0; i < feedDepth; i++ {
+		q.AddInterleaved(slow, int64(1+i*feedChunk), int64((i+1)*feedChunk))
+	}
+	if p, _ := q.StatsFor(slow); p < feedDepth {
+		t.Fatalf("only %d slow assignments queued; this test needs the cap reached", p)
+	}
+
+	f.topUp()
+
+	p, l := q.StatsFor(fast)
+	if p+l == 0 {
+		t.Fatal("nothing queued for the fast log while the slow one held the " +
+			"whole depth; a worker that can only do the fast log has nothing to take")
+	}
+	t.Logf("fast log has %d assignments queued behind %d slow ones", p+l, feedDepth)
+
+	// And a worker declaring only the fast origin can actually lease one.
+	if _, err := q.Lease("laptop", []string{fast}); err != nil {
+		t.Errorf("a fast-log-only worker could not lease: %v", err)
+	}
+}

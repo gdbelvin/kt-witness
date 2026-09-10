@@ -467,6 +467,41 @@ func (q *Queue) Stats() (pending, leased int) {
 	return pending, len(q.leased)
 }
 
+// StatsFor is Stats for one origin.
+//
+// The feed needs this because the depth it keeps queued has to be per origin.
+// Measured globally, a slow log crowds out a fast one completely: Meta's proofs
+// are 284 MB and bandwidth-bound, so its assignments sit pending, accumulate to
+// the cap, and the feed then declines to queue anything at all — including for
+// a log whose proofs are a tenth the size and whose worker is idle. Observed
+// exactly that: 40 Meta assignments pending, zero WhatsApp, 7,877 unverified
+// WhatsApp epochs, and a laptop at 0% CPU that can only do WhatsApp.
+//
+// The round-robin inside the feed was written to fix the same shape one level
+// up — a loop that queued Meta until the depth limit and never reached
+// WhatsApp. It fixed the ORDER within a pass. It could not fix a limit that is
+// shared.
+func (q *Queue) StatsFor(origin string) (pending, leased int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.reclaimLocked()
+	now := q.now()
+	for _, a := range q.pending {
+		if a.Origin != origin {
+			continue
+		}
+		if a.notBefore.IsZero() || !now.Before(a.notBefore) {
+			pending++
+		}
+	}
+	for _, a := range q.leased {
+		if a.Origin == origin {
+			leased++
+		}
+	}
+	return pending, leased
+}
+
 func (q *Queue) reclaimLocked() {
 	now := q.now()
 	for id, a := range q.leased {

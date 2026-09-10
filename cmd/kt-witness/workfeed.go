@@ -42,7 +42,21 @@ const (
 	// property and not a scheduling one.
 	feedChunk    = 25
 	feedInterval = 30 * time.Second
-	feedDepth    = 40 // assignments to keep queued ahead of the workers
+	// feedDepth is assignments to keep queued ahead of the workers, PER ORIGIN.
+	//
+	// Per origin, because measured globally it lets a slow log starve a fast
+	// one outright. Meta's proofs are 284 MB and the fetch is bandwidth-bound,
+	// so its assignments sit pending; they reach the cap; and the feed then
+	// declines to queue anything at all — including WhatsApp, whose proofs are
+	// a tenth the size and whose worker is sitting idle. Watched it: 40 Meta
+	// pending, zero WhatsApp, 7,877 unverified WhatsApp epochs, and a laptop at
+	// 0% CPU that can only do WhatsApp.
+	//
+	// The round-robin below was written to fix the same shape one level up — a
+	// loop that queued Meta until the limit and never reached WhatsApp. It
+	// fixed the order within a pass, which is not the same as fixing a limit
+	// that is shared.
+	feedDepth = 40
 )
 
 type feeder struct {
@@ -73,10 +87,6 @@ func startWorkFeed(ctx context.Context, db *store.Store, q *work.Queue, origins 
 }
 
 func (f *feeder) topUp() {
-	pending, leased := f.q.Stats()
-	if pending+leased >= feedDepth {
-		return // workers are behind; queueing more would only age the leases
-	}
 	hs, err := f.db.Histories()
 	if err != nil {
 		return
@@ -102,8 +112,10 @@ func (f *feeder) topUp() {
 	for {
 		queued := 0
 		for _, origin := range f.origins {
-			if pending, leased = f.q.Stats(); pending+leased >= feedDepth {
-				return
+			// This origin's own depth. A log that cannot keep up holds back
+			// only its own queue.
+			if pending, leased := f.q.StatsFor(origin); pending+leased >= feedDepth {
+				continue
 			}
 			h := byOrigin[origin]
 			if h == nil || h.To <= h.From {
