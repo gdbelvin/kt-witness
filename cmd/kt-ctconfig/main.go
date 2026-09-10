@@ -219,6 +219,11 @@ func verifyAll(candidates []entry, skips []skipped) ([]entry, []skipped) {
 	}
 	results := make([]result, len(candidates))
 
+	// Eight, and deliberately not derived from the core count. Every one of
+	// these spends its time waiting on a CT log to answer, not on this
+	// machine's CPU — a thirty-two core box would gain nothing from
+	// thirty-two of them and would only look like a scraper to the operators
+	// being asked. This is a politeness limit, so it is a number.
 	const workers = 8
 	var wg sync.WaitGroup
 	ch := make(chan int)

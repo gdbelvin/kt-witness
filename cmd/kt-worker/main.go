@@ -533,27 +533,3 @@ func hostname() string {
 	}
 	return h
 }
-
-// perEpochMemory estimates the peak RSS of one verification, from the logs this
-// worker is configured for.
-//
-// Measured rather than assumed: a WhatsApp epoch peaked at 0.61 GB on an M4,
-// and a Meta epoch at about 3.7 GB on the witness — the difference tracks proof
-// size, 50 MB against 279 MB. A single constant would either strand a
-// WhatsApp-only worker at one epoch or let a Meta worker take six and swap.
-//
-// The larger estimate wins when a worker serves both, because it is the one
-// that has to fit.
-func perEpochMemory(origins []string) uint64 {
-	const (
-		whatsappPeak = 1 << 30               // 0.61 GB measured, rounded up
-		metaPeak     = uint64(4) * (1 << 30) // 3.7 GB measured, rounded up
-	)
-	var peak uint64 = whatsappPeak
-	for _, o := range origins {
-		if strings.Contains(strings.TrimSpace(o), "meta") {
-			peak = metaPeak
-		}
-	}
-	return peak
-}
