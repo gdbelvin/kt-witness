@@ -53,11 +53,19 @@ if [ "$WHAT" = all ] || [ "$WHAT" = workers ] || [ "$WHAT" = mac ]; then
   ( cd "$here" && go build -o bin/kt-worker ./cmd/kt-worker )
   pkill -f "bin/kt-worker -server" 2>/dev/null || true
   sleep 2
+  # Every descriptor closed on the subshell itself, not just on the worker.
+  #
+  # Redirecting only the worker is not enough: the subshell inherits this
+  # script's stdout, and when that is a pipe — `redeploy.sh | tail`, which is
+  # how anyone runs it — the reader waits for an EOF that the still-running
+  # worker is holding open. The script finishes and appears to hang. It is the
+  # same mistake as the ssh one, a process boundary closer to home.
   ( cd "$here" && set -a && . ./secrets/work.env && set +a && \
     nohup ./bin/kt-worker \
       -server "${KT_WORK_SERVER:-$MAC_SERVER}" \
       -akd-origins "${KT_MAC_ORIGINS:-whatsapp.kt/v2}" \
-      -name "${KT_MAC_NAME:-$(hostname -s)}" > worker.log 2>&1 < /dev/null & )
+      -name "${KT_MAC_NAME:-$(hostname -s)}" >> worker.log 2>&1 & \
+  ) < /dev/null > /dev/null 2>&1
 fi
 
 if [ "$WHAT" = gpu ]; then
