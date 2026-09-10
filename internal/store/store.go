@@ -1082,3 +1082,62 @@ func (s *Store) VerifiedRegion(origin string, from, to int64) (lo, hi, run, hole
 	}
 	return bestLo, bestHi, bestLen, holes, nil
 }
+
+// FirstUnverified returns the lowest epoch in [from, to] that this witness has
+// not recorded as verified, and whether there is one.
+//
+// It exists because the work feed was guessing. Probing one epoch per
+// twenty-five and treating a hit as "that whole chunk is done" is cheap and
+// wrong in the case that actually occurs: a range is handed out as two
+// interleaved assignments, so when one half succeeds and the other fails, some
+// epochs in the chunk are verified and some are not. Whichever epochs the probe
+// happened to look at decided the fate of the other twenty-three, and the ones
+// it skipped were never offered again. That left 7,880 unverified WhatsApp
+// epochs behind a work queue reporting nothing to do.
+//
+// One read transaction and a cursor, not one transaction per epoch. Audit keys
+// are "origin|%020d", so they sort numerically within an origin and the whole
+// range is a single ordered walk — the same scan the old version did per chunk,
+// done once and exactly. A missing key counts as unverified, which is the
+// point: an epoch nobody has recorded a decision about is precisely the work.
+func (s *Store) FirstUnverified(origin string, from, to int64) (int64, bool, error) {
+	if from > to {
+		return 0, false, nil
+	}
+	var (
+		found bool
+		at    int64
+	)
+	err := s.db.View(func(tx *bolt.Tx) error {
+		c := tx.Bucket(bucketAudits).Cursor()
+		prefix := []byte(origin + "|")
+		want := from
+		k, v := c.Seek(auditKey(origin, from))
+		for ; k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+			var a Audit
+			if err := json.Unmarshal(v, &a); err != nil {
+				continue
+			}
+			if a.Epoch > to {
+				break
+			}
+			if a.Epoch > want {
+				// A gap: nothing recorded for `want`, so that is the answer.
+				at, found = want, true
+				return nil
+			}
+			if a.Epoch == want {
+				if !a.Verified {
+					at, found = want, true
+					return nil
+				}
+				want++
+			}
+		}
+		if want <= to {
+			at, found = want, true
+		}
+		return nil
+	})
+	return at, found, err
+}

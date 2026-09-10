@@ -113,22 +113,36 @@ func (f *feeder) topUp() {
 			if !seen || at < h.From {
 				at = h.From
 			}
-			// Skip forward over anything already verified. A cheap probe
-			// rather than a full coverage count: scanning every audit record
-			// for an origin costs more than occasionally re-queueing a chunk
-			// somebody already did, and a duplicate overwrites itself.
-			for at+feedChunk <= h.To {
-				if a, err := f.db.GetAudit(origin, at); err == nil && a != nil && a.Verified {
-					at += feedChunk
+			// Skip forward over chunks that are wholly done, then WRAP.
+			//
+			// The wrap is the part that was missing, and its absence is what
+			// left a laptop idle in front of 7,880 unverified WhatsApp epochs
+			// with an empty queue. The cursor only ever moved forward; when it
+			// reached the end of a history it set itself there and every
+			// subsequent pass fell straight through the "nothing left to offer"
+			// branch. Anything that had failed, been rescheduled, or been
+			// skipped was never offered again — not until the process
+			// restarted, which is the only reason this was ever survivable.
+			//
+			// A one-way sweep is the right shape for the FIRST pass over a
+			// history, which is nearly all of the work. It is the wrong shape
+			// for what is left afterwards, and what is left afterwards is
+			// exactly the epochs something went wrong with.
+			at, found := f.nextUnaudited(origin, h, at)
+			if !found {
+				// Nothing from here to the end; start again from the bottom, so
+				// the retries and the gaps get another turn.
+				if at, found = f.nextUnaudited(origin, h, h.From); !found {
+					// Genuinely complete. Park at the top so the next pass
+					// picks up newly published epochs rather than rescanning.
+					f.next[origin] = h.To
 					continue
 				}
-				break
-			}
-			if at+feedChunk > h.To {
-				f.next[origin] = at
-				continue // this origin has nothing left to offer this pass
 			}
 			to := at + feedChunk - 1
+			if to > h.To {
+				to = h.To
+			}
 			f.q.AddInterleaved(origin, at, to)
 			f.log.Debug("queued work", "origin", origin, "from", at, "to", to)
 			f.next[origin] = to + 1
@@ -138,4 +152,22 @@ func (f *feeder) topUp() {
 			return // nothing anywhere is ready to be queued
 		}
 	}
+}
+
+// nextUnaudited returns the first epoch at or after `from` that this witness has
+// not recorded as verified, and whether it found one before the end.
+//
+// It asks the store for an exact answer rather than sampling. The version this
+// replaces probed one epoch per twenty-five and treated a hit as "that whole
+// chunk is done", which is cheap and wrong in the case that actually occurs: a
+// range is handed out as two interleaved assignments, so when one half succeeds
+// and the other fails, some of the chunk is verified and some is not. Whichever
+// epoch the probe happened to look at decided the fate of the other
+// twenty-four.
+func (f *feeder) nextUnaudited(origin string, h *store.History, from int64) (int64, bool) {
+	at, found, err := f.db.FirstUnverified(origin, from, h.To)
+	if err != nil {
+		return h.To, false
+	}
+	return at, found
 }
