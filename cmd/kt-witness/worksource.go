@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log/slog"
 
 	"github.com/gdbsecurity/kt-witness/internal/store"
@@ -88,4 +89,58 @@ func akdOrigins(cfg *config) []string {
 		}
 	}
 	return out
+}
+
+// queueOrigins is the logs the queue covers: those named in work.origins, or
+// every auditable log when it is unset.
+func queueOrigins(cfg *config) []string {
+	if len(cfg.Work.Origins) > 0 {
+		return cfg.Work.Origins
+	}
+	return auditableOrigins(cfg)
+}
+
+// auditableOrigins is every log whose individual epochs this witness can check.
+// Only AKD sources resolve an epoch to the roots the operator published.
+func auditableOrigins(cfg *config) []string {
+	var out []string
+	for _, l := range cfg.Logs {
+		if l.Type == "akd" {
+			out = append(out, l.Origin)
+		}
+	}
+	return out
+}
+
+// checkQueueCoverage refuses a work.origins that leaves an auditable log out.
+//
+// It used to narrow only the WORK CHANNEL: whatever it omitted was still swept
+// by the auditor, so the setting cost dispatch and not coverage. As verification
+// moves onto the queue that stops being true — an omitted log simply goes
+// unaudited, while the witness goes on publishing a coverage figure that does
+// not mention it.
+//
+// A silent hole in coverage is the one error this witness must not make, so the
+// ambiguous configuration is refused rather than interpreted. Naming every
+// auditable log, or removing the setting, both say plainly what was meant.
+func checkQueueCoverage(cfg *config) error {
+	if len(cfg.Work.Origins) == 0 {
+		return nil
+	}
+	named := map[string]bool{}
+	for _, o := range cfg.Work.Origins {
+		named[o] = true
+	}
+	var missing []string
+	for _, o := range auditableOrigins(cfg) {
+		if !named[o] {
+			missing = append(missing, o)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("work.origins omits %v, which this witness can audit — "+
+			"those logs would go unaudited while coverage was still published for "+
+			"them. Name them, or remove work.origins", missing)
+	}
+	return nil
 }

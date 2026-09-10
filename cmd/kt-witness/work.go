@@ -227,14 +227,10 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 	}()
 	// What still needs auditing, asked of the store when somebody wants work.
 	// There is no feeder and no queued list — see worksource.go.
-	origins := cfg.Work.Origins
-	if len(origins) == 0 {
-		for _, l := range cfg.Logs {
-			if l.Type == "akd" {
-				origins = append(origins, l.Origin)
-			}
-		}
+	if err := checkQueueCoverage(cfg); err != nil {
+		return nil, err
 	}
+	origins := queueOrigins(cfg)
 	q.Origins = origins
 	// The queue drains the cache; the generator fills it. See worksource.go for
 	// why the store is no longer asked here.

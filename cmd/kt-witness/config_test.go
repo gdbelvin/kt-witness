@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -47,5 +48,44 @@ func TestShippedConfigsBuild(t *testing.T) {
 			}
 			t.Logf("%d logs build", len(cfg.Logs))
 		})
+	}
+}
+
+// TestWorkOriginsCannotSilentlyNarrowCoverage.
+//
+// work.origins used to narrow only the work channel: anything left out was
+// still swept by the auditor, so the setting cost dispatch and not coverage. As
+// verification moves onto the queue that stops being true — a log left out
+// would go unaudited while the witness went on publishing a coverage figure
+// that did not mention it.
+//
+// A silent hole in coverage is the one error this witness must not make, so the
+// ambiguous configuration is refused rather than interpreted.
+func TestWorkOriginsCannotSilentlyNarrowCoverage(t *testing.T) {
+	cfg := &config{}
+	cfg.Logs = []logConfig{
+		{Origin: "meta.messenger.kt/v1", Type: "akd"},
+		{Origin: "whatsapp.kt/v2", Type: "akd"},
+		{Origin: "some.ct.log", Type: "sumdb"},
+	}
+
+	// Unset: covers every auditable log.
+	if got := queueOrigins(cfg); len(got) != 2 {
+		t.Errorf("unset work.origins covers %v, want both AKD logs", got)
+	}
+	// Naming all of them is fine.
+	cfg.Work.Origins = []string{"meta.messenger.kt/v1", "whatsapp.kt/v2"}
+	if err := checkQueueCoverage(cfg); err != nil {
+		t.Errorf("naming every auditable log was refused: %v", err)
+	}
+	// Naming a subset is refused, and says which log would be dropped.
+	cfg.Work.Origins = []string{"whatsapp.kt/v2"}
+	err := checkQueueCoverage(cfg)
+	if err == nil {
+		t.Fatal("work.origins omitting an auditable log was accepted; that log " +
+			"would go unaudited while coverage was published for it")
+	}
+	if !strings.Contains(err.Error(), "meta.messenger.kt/v1") {
+		t.Errorf("the refusal does not name the dropped log: %v", err)
 	}
 }
