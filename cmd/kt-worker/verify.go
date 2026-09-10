@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/gdbsecurity/kt-witness/internal/akdtree"
@@ -44,10 +45,10 @@ type verifier interface {
 	// every machine in the fleet ran at a quarter of its width for a day.
 	width() int
 
-	// memoryPerEpoch estimates the peak bytes one verification holds, given the
-	// proof sizes seen so far. Zero means nothing has been observed yet and the
-	// caller should not apply a memory cap.
-	memoryPerEpoch() uint64
+	// memoryPerEpoch estimates the peak bytes one verification of this origin
+	// holds, given the proof sizes seen so far. Zero means nothing has been
+	// observed for it yet and the caller should not apply a memory cap.
+	memoryPerEpoch(origin string) uint64
 }
 
 // akdVerifier replays a Meta or WhatsApp audit proof.
@@ -62,10 +63,20 @@ type verifier interface {
 // The reference implementation still runs, on the witness, where the comparison
 // happens and where being wrong would matter.
 type akdVerifier struct {
-	// largestProof is the biggest proof this verifier has decoded, per the
-	// whole worker rather than per origin: the cap has to fit the worst case it
-	// is actually being handed.
-	largestProof atomic.Uint64
+	// largest is the biggest proof decoded, per origin. Per origin because the
+	// logs are not comparable: a WhatsApp epoch is a few megabytes and a Meta
+	// one is nearly three hundred, and one worker takes both. Held in common
+	// they would mean a machine that had seen a single Meta proof sized every
+	// WhatsApp epoch as if it were one, for the rest of its life.
+	largest sync.Map // origin -> *atomic.Uint64
+}
+
+func (v *akdVerifier) largestFor(origin string) *atomic.Uint64 {
+	if n, ok := v.largest.Load(origin); ok {
+		return n.(*atomic.Uint64)
+	}
+	n, _ := v.largest.LoadOrStore(origin, new(atomic.Uint64))
+	return n.(*atomic.Uint64)
 }
 
 // width is one. internal/akdtree is single-threaded — Sort is slices.SortFunc
@@ -83,8 +94,8 @@ func (*akdVerifier) width() int { return 1 }
 // bytes on the wire, so the elements come to about the proof's own size and the
 // merge to about the same again — call it three times the proof, which is
 // arithmetic from the data structure rather than a guess about hardware.
-func (v *akdVerifier) memoryPerEpoch() uint64 {
-	largest := v.largestProof.Load()
+func (v *akdVerifier) memoryPerEpoch(origin string) uint64 {
+	largest := v.largestFor(origin).Load()
 	if largest == 0 {
 		return 0 // nothing seen yet; the caller applies no cap
 	}
@@ -105,9 +116,10 @@ func (v *akdVerifier) verify(ctx context.Context, origin string, epoch int64, pr
 
 	// Remember the worst case, so the memory cap follows what this worker is
 	// actually being asked to do rather than what it was told to expect.
+	seen := v.largestFor(origin)
 	for {
-		prev := v.largestProof.Load()
-		if uint64(len(data)) <= prev || v.largestProof.CompareAndSwap(prev, uint64(len(data))) {
+		prev := seen.Load()
+		if uint64(len(data)) <= prev || seen.CompareAndSwap(prev, uint64(len(data))) {
 			break
 		}
 	}
@@ -192,8 +204,8 @@ type protonGPUVerifier struct {
 // width and memoryPerEpoch for the GPU rebuild: the work happens on the card,
 // so it occupies about one core of this machine to drive it, and its memory is
 // the card's rather than the host's.
-func (protonGPUVerifier) width() int             { return 1 }
-func (protonGPUVerifier) memoryPerEpoch() uint64 { return 0 }
+func (protonGPUVerifier) width() int                   { return 1 }
+func (protonGPUVerifier) memoryPerEpoch(string) uint64 { return 0 }
 
 func (v protonGPUVerifier) verify(ctx context.Context, origin string, epoch int64, _ string) (string, string, error) {
 	tree := fmt.Sprintf("%s/epoch_tree_%d.bin", v.dir, epoch)

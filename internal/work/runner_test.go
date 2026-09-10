@@ -210,7 +210,7 @@ func TestParallelismIsAskedPerAssignment(t *testing.T) {
 
 	r := &Runner{
 		Name:     "t",
-		Parallel: func() int { return int(atomic.LoadInt32(&width)) },
+		Parallel: func(string) int { return int(atomic.LoadInt32(&width)) },
 		Verify: func(context.Context, string, int64, string) (string, string, error) {
 			n := atomic.AddInt32(&live, 1)
 			mu.Lock()
@@ -282,5 +282,36 @@ func TestAFailedReportAbandonsTheRestOfTheRange(t *testing.T) {
 	}
 	if reported < 2 {
 		t.Errorf("reported %d; the failure should have been attempted", reported)
+	}
+}
+
+// TestParallelIsAskedAboutTheOriginItIsAbout pins the argument, because the
+// whole reason it exists is invisible from inside this package: a worker sizes
+// its concurrency from how big the proofs are, and that is a property of the
+// log rather than of the machine. Dropping the argument would compile, and
+// would silently make every log as expensive as the largest one.
+func TestParallelIsAskedAboutTheOriginItIsAbout(t *testing.T) {
+	var asked atomic.Value
+	r := &Runner{
+		Name:     "w",
+		Parallel: func(o string) int { asked.Store(o); return 1 },
+		Next: func(ctx context.Context) (Assignment, error) {
+			return Assignment{ID: "a", Origin: "whatsapp.com/kt/v1", From: 1, To: 1,
+				Deadline: time.Now().Add(time.Minute)}, nil
+		},
+		Verify: func(ctx context.Context, origin string, epoch int64, _ string) (string, string, error) {
+			return "p", "c", nil
+		},
+		Report: func(ctx context.Context, res Result) error { return nil },
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	a, err := r.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.do(ctx, a, time.Minute)
+	if got, _ := asked.Load().(string); got != "whatsapp.com/kt/v1" {
+		t.Errorf("Parallel was asked about %q, want the assignment's own origin", got)
 	}
 }

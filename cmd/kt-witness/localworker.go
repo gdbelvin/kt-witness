@@ -61,7 +61,11 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 		// alternative and would have starved silently: live witnessing does not
 		// consult this governor and can hold the machine indefinitely, so
 		// permits sit at their floor and the gate would never open.
-		Parallel: func() int {
+		// The origin makes no difference here. This worker runs the Rust
+		// sidecars, whose pool size is the bound, and the governor is already
+		// measuring what the box can afford — so the answer is about the
+		// machine rather than about the log.
+		Parallel: func(string) int {
 			w := n
 			if g != nil {
 				switch p := int(g.Spare()); {
@@ -115,7 +119,7 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 		for {
 			load, budget := g.Observed()
 			recordCapacity(name, work.Capacity{
-				Parallel: r.Parallel(), CPUs: runtime.NumCPU(),
+				Parallel: r.Parallel(""), CPUs: runtime.NumCPU(),
 				LoadCores: load, BudgetCores: budget,
 			})
 			select {

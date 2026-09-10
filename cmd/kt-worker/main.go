@@ -272,16 +272,25 @@ func epochsAtOnce(budget int, vs map[string]verifier) (width, parallel int) {
 //
 // Half of free memory, because this is a background job on somebody's machine
 // and the other half is theirs.
-func (w *worker) parallelNow() int {
+func (w *worker) parallelNow(origin string) int {
 	par := w.parallel
 	free, ok := hostmem.Available()
 	if !ok {
 		return par // unmeasurable; the CPU budget stands alone
 	}
 	var per uint64
-	for _, v := range w.verifiers {
-		if n := v.memoryPerEpoch(); n > per {
-			per = n // the widest has to fit, same rule as the core budget
+	if v, ok := w.verifiers[origin]; ok && origin != "" {
+		per = v.memoryPerEpoch(origin)
+	} else {
+		// No origin in hand — the capacity report and the gate before asking
+		// for work, neither of which knows what it is about to be given. The
+		// worst case across the logs this worker serves, because promising the
+		// width of the smallest and being handed the largest is how a machine
+		// swaps.
+		for o, v := range w.verifiers {
+			if n := v.memoryPerEpoch(o); n > per {
+				per = n
+			}
 		}
 	}
 	if per == 0 {
@@ -292,8 +301,9 @@ func (w *worker) parallelNow() int {
 		fits = 1 // one at a time still makes progress, and refusing does not
 	}
 	if fits < par {
-		w.log.Info("memory narrowed the epoch budget", "cpu_allows", par,
-			"memory_allows", fits, "free_bytes", free, "bytes_per_epoch", per)
+		w.log.Debug("memory narrowed the epoch budget", "origin", origin,
+			"cpu_allows", par, "memory_allows", fits,
+			"free_bytes", free, "bytes_per_epoch", per)
 		return fits
 	}
 	return par
@@ -309,7 +319,7 @@ func (w *worker) run(ctx context.Context) error {
 	// How many epochs at once, decided in main from this machine's CPU budget:
 	// every efficiency core plus two performance cores, split into processes
 	// wide enough that one epoch actually uses the threads it is given.
-	par := w.parallelNow()
+	par := w.parallelNow("")
 
 	creds := insecure.NewCredentials() // the channel is confined to this LAN
 
@@ -447,7 +457,7 @@ func (w *worker) run(ctx context.Context) error {
 			load, budget := gov.Observed()
 			if err := stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Capacity{
 				Capacity: &pb.Capacity{
-					Parallel: int32(w.parallelNow()), Cpus: int32(runtime.GOMAXPROCS(0)),
+					Parallel: int32(w.parallelNow("")), Cpus: int32(runtime.GOMAXPROCS(0)),
 					LoadCores: load, BudgetCores: budget,
 				}}}); err != nil {
 				w.log.Debug("capacity report failed; the session is going away", "err", err)
@@ -475,7 +485,7 @@ func (w *worker) run(ctx context.Context) error {
 			// The live figure, not the one from startup: Runner is about to
 			// ask parallelNow how wide to go, and asking the governor about a
 			// different number would gate on work nobody is going to do.
-			if !gov.Ready(float64(w.parallelNow())) {
+			if !gov.Ready(float64(w.parallelNow(""))) {
 				load, budget := gov.Observed()
 				return fmt.Errorf("machine is using %.1f of %.1f cores allowed", load, budget)
 			}

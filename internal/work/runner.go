@@ -60,8 +60,15 @@ type Runner struct {
 	// half-finished assignment sitting on a lease while the machine idled.
 	BeforeNext func(ctx context.Context) error
 
-	// Parallel reports how many epochs to verify at once, consulted once per
-	// assignment. Nil means N-2.
+	// Parallel reports how many epochs of this origin to verify at once,
+	// consulted once per assignment. Nil means N-2.
+	//
+	// The origin is an argument because a proof's size is a fact about the log,
+	// not about the machine. A WhatsApp epoch is a few megabytes and a Meta one
+	// is nearly three hundred, and the same worker takes both; a single answer
+	// for the host means whichever log has the largest proofs sets the width
+	// for all of them, and a worker that has seen one Meta epoch runs WhatsApp
+	// four at a time instead of eight for the rest of its life.
 	//
 	// A function rather than a number because the two hosts answer it
 	// differently. A laptop answers with a constant — N-2 of the cores it is
@@ -71,7 +78,7 @@ type Runner struct {
 	// floor and a fixed threshold gate would wait forever. It answers instead
 	// with what its governor says the machine can currently afford, and so
 	// works one epoch at a time when the box is busy and eight when it is not.
-	Parallel func() int
+	Parallel func(origin string) int
 
 	Name string
 	Idle time.Duration
@@ -85,8 +92,9 @@ type Runner struct {
 	send sync.Mutex
 }
 
-// Fixed is a constant answer to Parallel, for a host whose share does not move.
-func Fixed(n int) func() int { return func() int { return n } }
+// Fixed is a constant answer to Parallel, for a host whose share does not move
+// and whose logs do not differ enough for it to matter.
+func Fixed(n int) func(string) int { return func(string) int { return n } }
 
 // DefaultParallel is N-2 cores, floored at one.
 func DefaultParallel() int {
@@ -162,7 +170,7 @@ func (r *Runner) Run(ctx context.Context) error {
 func (r *Runner) do(ctx context.Context, a Assignment, timeout time.Duration) {
 	par := DefaultParallel()
 	if r.Parallel != nil {
-		par = r.Parallel()
+		par = r.Parallel(a.Origin)
 	}
 	if par < 1 {
 		par = 1

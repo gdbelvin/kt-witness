@@ -5,16 +5,19 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+
+	"github.com/gdbsecurity/kt-witness/internal/hostmem"
 )
 
-// stubVerifier declares a width and a footprint and does nothing else.
+// stubVerifier declares a width and a per-origin footprint and does nothing
+// else.
 type stubVerifier struct {
 	w   int
-	mem uint64
+	mem map[string]uint64
 }
 
-func (s stubVerifier) width() int             { return s.w }
-func (s stubVerifier) memoryPerEpoch() uint64 { return s.mem }
+func (s stubVerifier) width() int                     { return s.w }
+func (s stubVerifier) memoryPerEpoch(o string) uint64 { return s.mem[o] }
 func (s stubVerifier) verify(context.Context, string, int64, string) (string, string, error) {
 	return "", "", nil
 }
@@ -61,25 +64,70 @@ func TestTheBudgetIsSplitByWhatAVerificationActuallyCosts(t *testing.T) {
 // handed to this machine, and must not exist before anything has.
 func TestMemoryNarrowsButOnlyOnceSomethingIsKnown(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	v := stubVerifier{w: 1, mem: map[string]uint64{}}
+	w := &worker{parallel: 8, log: log, verifiers: map[string]verifier{"meta": v, "wa": v}}
 
 	// Nothing decoded yet: no cap, or a worker would idle on its first
 	// assignment for want of a measurement it can only get by working.
-	w := &worker{parallel: 8, log: log,
-		verifiers: map[string]verifier{"a": stubVerifier{w: 1, mem: 0}}}
-	if got := w.parallelNow(); got != 8 {
+	if got := w.parallelNow("meta"); got != 8 {
 		t.Errorf("with nothing observed: %d epochs, want the full CPU budget of 8", got)
 	}
 
 	// A footprint so large that half of any plausible machine's free memory
 	// holds one at most. The worker keeps going rather than refusing.
-	w.verifiers["a"] = stubVerifier{w: 1, mem: 1 << 50}
-	if got := w.parallelNow(); got != 1 {
+	v.mem["meta"] = 1 << 50
+	if got := w.parallelNow("meta"); got != 1 {
 		t.Errorf("with an enormous footprint: %d epochs, want 1", got)
 	}
 
-	// A tiny one must not raise the count above what the CPU allows.
-	w.verifiers["a"] = stubVerifier{w: 1, mem: 1024}
-	if got := w.parallelNow(); got > 8 {
+	// And here is why the origin is an argument. Meta is now known to be
+	// enormous; WhatsApp is not, and must be unaffected. Held in common these
+	// would be the same number, and a worker that had seen one Meta proof would
+	// run WhatsApp one at a time forever.
+	if got := w.parallelNow("wa"); got != 8 {
+		t.Errorf("WhatsApp after a huge Meta proof: %d epochs, want the full 8", got)
+	}
+
+	// The conservative answer when there is no origin to ask about — the
+	// capacity report and the gate before requesting work. It must take the
+	// worst case, because promising the width of the smallest log and being
+	// handed the largest is how a machine swaps.
+	if got := w.parallelNow(""); got != 1 {
+		t.Errorf("with no origin: %d epochs, want the worst case of 1", got)
+	}
+
+	// A tiny footprint must not raise the count above what the CPU allows.
+	v.mem["wa"] = 1024
+	if got := w.parallelNow("wa"); got > 8 {
 		t.Errorf("with a tiny footprint: %d epochs, want no more than the CPU budget of 8", got)
+	}
+}
+
+// TestARealisticFootprintLeavesRealisticRoom is the case between the extremes,
+// and the one that would actually regress. A Meta proof is about 280 MB and the
+// structures built from it about three times that; on a laptop with a few
+// gigabytes spare the answer should be several epochs, not one.
+//
+// It exists because the two tests above pass just as happily against a
+// hostmem implementation that only counted free pages — which on macOS is a few
+// hundred megabytes on a perfectly healthy machine, and would quietly hold
+// every Mac in the fleet at one epoch at a time.
+func TestARealisticFootprintLeavesRealisticRoom(t *testing.T) {
+	free, ok := hostmem.Available()
+	if !ok {
+		t.Skip("this machine does not report available memory")
+	}
+	const metaProof = 280 << 20
+	w := &worker{parallel: 8, log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		verifiers: map[string]verifier{
+			"meta": stubVerifier{w: 1, mem: map[string]uint64{"meta": metaProof * 3}},
+		}}
+	got := w.parallelNow("meta")
+	t.Logf("%.1f GiB available, %d MB per epoch, %d epochs at once",
+		float64(free)/(1<<30), metaProof*3>>20, got)
+	if free > 4<<30 && got < 2 {
+		t.Errorf("%.1f GiB available but only %d Meta epoch at a time; either the "+
+			"cap is too tight or hostmem is under-reporting what the machine has",
+			float64(free)/(1<<30), got)
 	}
 }
