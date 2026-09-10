@@ -221,20 +221,30 @@ func (r *Runner) Run(ctx context.Context) error {
 			return ErrReportFailed
 		default:
 		}
-		// Room for more? in-flight counts what is being worked and what is
-		// queued behind it, so this asks before the pool runs dry rather than
-		// after.
-		room := int64(par*2) - inFlight.Load()
-		if room <= 0 {
+		// Ask only when a meaningful amount of the pool is free.
+		//
+		// The first version asked whenever there was ANY room, which on a
+		// saturated pool means one epoch per request: fifteen of sixteen slots
+		// busy, room of one, a Want and a Lease and a store scan for a single
+		// epoch. Watched it do exactly that — `epochs=1 asked_for=1` all the
+		// way down the log.
+		//
+		// High water is 2*par, low water is par. Below the low mark, ask for
+		// everything up to the high one, so requests come in batches the size
+		// of the pool rather than one at a time. Above it there is still work
+		// queued behind every slot and nothing to gain by asking.
+		inUse := inFlight.Load()
+		if inUse > int64(par) {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-failed:
 				return ErrReportFailed
-			case <-time.After(100 * time.Millisecond):
+			case <-time.After(50 * time.Millisecond):
 			}
 			continue
 		}
+		room := int64(par*2) - inUse
 
 		if r.BeforeNext != nil {
 			if err := r.BeforeNext(ctx); err != nil {

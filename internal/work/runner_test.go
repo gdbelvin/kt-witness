@@ -551,3 +551,77 @@ func (o *overlap) Peak() int {
 	defer o.mu.Unlock()
 	return o.peak
 }
+
+// TestTheRunnerAsksInBatchesNotPerEpoch.
+//
+// The first version of the pull loop asked whenever there was ANY room, which
+// on a saturated pool means one epoch per request: fifteen of sixteen slots
+// busy, room of one, and a Want plus a Lease plus a store scan for a single
+// epoch. Seen in production the moment it was deployed — `epochs=1 asked_for=1`
+// down the whole log.
+//
+// The pool is what bounds concurrency; the request size should follow it.
+func TestTheRunnerAsksInBatchesNotPerEpoch(t *testing.T) {
+	const par = 4
+
+	var mu sync.Mutex
+	var asked []int
+	release := make(chan struct{})
+	var once sync.Once
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	r := &Runner{
+		Name:     "t",
+		Idle:     time.Millisecond,
+		Parallel: Fixed(par),
+		Next: func(_ context.Context, want int) (Assignment, error) {
+			mu.Lock()
+			asked = append(asked, want)
+			n := len(asked)
+			mu.Unlock()
+			if n >= 3 {
+				once.Do(func() { close(release) })
+				return Assignment{}, ErrNoWork
+			}
+			from := int64(n*100 + 1)
+			return Assignment{ID: "a", Origin: "m/kt",
+				From: from, To: from + int64(want) - 1}, nil
+		},
+		// Instant. The first draft held every epoch until three requests had
+		// been made, which deadlocked: the pool filled, in-flight stayed above
+		// the low-water mark, and the runner correctly declined to ask again —
+		// so the verifies waited on a request that was waiting on them. That
+		// deadlock was the batching working, and a test that has to defeat the
+		// behaviour to observe it is measuring the wrong thing.
+		Verify: func(context.Context, string, int64, string) (string, string, error) {
+			return "aa", "bb", nil
+		},
+		Report: func(context.Context, Result) error { return nil },
+	}
+
+	done := make(chan struct{})
+	go func() { defer close(done); _ = r.Run(ctx) }()
+	select {
+	case <-release:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the runner never made three requests")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for i, want := range asked {
+		if want < par {
+			t.Errorf("request %d asked for %d epochs with a pool of %d; the pool "+
+				"bounds concurrency and the request size should follow it, not "+
+				"trickle one at a time", i, want, par)
+		}
+	}
+}
