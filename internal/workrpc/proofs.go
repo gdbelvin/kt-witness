@@ -1,6 +1,7 @@
 package workrpc
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/gdbsecurity/kt-witness/internal/akdtree"
 	"github.com/gdbsecurity/kt-witness/internal/metrics"
 	"strconv"
 	"strings"
@@ -196,32 +198,237 @@ func (p *ProofServer) serve(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	}
 
+	// Read the front of the proof before anything goes out, and do it for every
+	// proof rather than only for canaries.
+	//
+	// The scan is what tells the canary where `inserted` ends (see the region
+	// comment on pickCanaryBit). Doing it only when corrupting would have handed
+	// a worker the tell this whole file exists to deny it: a buffered prefix
+	// arrives as a pause and then a LAN-speed burst, an unbuffered one trickles
+	// through at the operator's pace, and the two are told apart by a stopwatch
+	// rather than by verifying anything. So the ordinary path pays it too, and
+	// the only difference between a canary and honest work remains one XOR.
+	head, sp := readInserted(body, insertedScanLimit)
+	src := io.MultiReader(bytes.NewReader(head), body)
+
 	if !corrupt {
-		if _, err := io.Copy(w, body); err != nil && p.Log != nil {
+		if _, err := io.Copy(w, src); err != nil && p.Log != nil {
 			p.Log.Debug("proof transfer interrupted", "origin", origin, "epoch", epoch, "err", err)
 		}
 		return
 	}
 
-	// Flip one bit on the way past, at a position chosen before the transfer
-	// starts so the stream is not buffered whole. The byte offset is uniform
-	// over the size the operator reported.
-	at, bit := int64(0), 0
-	if size > 0 {
-		if n, err := rand.Int(rand.Reader, big.NewInt(size)); err == nil {
-			at = n.Int64()
-		}
-		if n, err := rand.Int(rand.Reader, big.NewInt(8)); err == nil {
-			bit = int(n.Int64())
-		}
-	}
-	if err := copyFlipping(w, body, at, byte(1)<<uint(bit)); err != nil && p.Log != nil {
+	// Flip one bit on the way past, at a position chosen before the rest of the
+	// transfer starts so nothing beyond the scanned prefix is ever buffered.
+	at, bit, region := pickCanaryBit(head, sp, size)
+	if err := copyFlipping(w, src, at, byte(1)<<uint(bit)); err != nil && p.Log != nil {
 		p.Log.Debug("canary transfer interrupted", "origin", origin, "epoch", epoch, "err", err)
 	}
 	if p.Log != nil {
+		// The region is what separates the two failures. A canary in `inserted`
+		// that comes back verified means the worker never read the append-only
+		// evidence; one in `unchanged` that comes back verified means it did not
+		// read the proof at all. Without this line both arrive as the same
+		// sentence and the operator cannot tell which is being reported.
+		//
+		// The inserted span is logged whether or not it was aimed at, because
+		// nothing else measures it. No real proof has ever been on this
+		// machine's disk to measure, so the fraction below is the only place the
+		// witness will ever learn how much of a Meta proof one epoch's additions
+		// actually are — and that fraction is exactly what says how badly a
+		// uniform canary would have missed.
 		p.Log.Info("served a canary", "origin", origin, "epoch", epoch,
-			"corrupted", fmt.Sprintf("byte %d of %d, bit %d", at, size, bit))
+			"corrupted", fmt.Sprintf("byte %d of %d, bit %d", at, size, bit),
+			"region", region, "inserted", sp.describe(size))
 	}
+}
+
+// insertedField is `inserted` in SingleAppendOnlyProof: the elements this epoch
+// added, as opposed to field 2, the whole previous tree carried forward.
+const insertedField = 1
+
+// The canary split, as a fraction: canaryInsertedShare canaries out of every
+// canaryShareOf aim inside `inserted`. Argued in the comment on pickCanaryBit.
+const (
+	canaryInsertedShare = 3
+	canaryShareOf       = 4
+)
+
+// insertedScanLimit caps how much of a proof is held while the leading
+// `inserted` run is framed.
+//
+// The transfer itself streams — that is why copyFlipping exists — so this is
+// the only place the server holds proof bytes, and it is held on every request
+// rather than every hundredth. The comment on copyFlipping puts eight transfers
+// in flight, so the ceiling this sets is eight times itself plus a read buffer
+// each: about 136 MiB, against proofs of 284 MB the witness must never try to
+// hold whole. It is a ceiling and not an allocation — the buffer grows to the
+// run it actually finds, and on the test fixture that is 3 kB.
+//
+// A proof whose `inserted` set is larger than this is not a failure: everything
+// buffered is still inserted, so the flip still lands inside field 1. It only
+// means the choice is confined to the first 16 MiB of the field rather than
+// spread over all of it, which is recorded in the log line.
+const insertedScanLimit = 16 << 20
+
+// insertedSpan is what framing the front of a proof established about it.
+type insertedSpan struct {
+	end    int  // bytes [0, end) are a complete run of `inserted` elements
+	capped bool // the run was still going when the scan hit its limit
+	known  bool // the framing parsed at all
+}
+
+func (s insertedSpan) describe(size int64) string {
+	if !s.known {
+		return "not located; the framing did not parse"
+	}
+	of := "of a proof whose size the operator did not declare"
+	if size > 0 {
+		of = fmt.Sprintf("of %d bytes (%.2f%%)", size, 100*float64(s.end)/float64(size))
+	}
+	if s.capped {
+		return fmt.Sprintf("at least %d %s, scan capped at %d", s.end, of, insertedScanLimit)
+	}
+	return fmt.Sprintf("%d %s", s.end, of)
+}
+
+// readInserted reads from src until the leading run of `inserted` elements has
+// ended, and returns every byte it consumed along with where that run stops.
+//
+// Every byte, because the caller puts them back in front of the stream: this
+// must not be able to lose part of a proof, including when src is not a proof
+// at all and the framing scan gives up on the first tag.
+//
+// Errors are not returned. A proof whose front does not frame is one the canary
+// cannot aim at, which is a lost opportunity and not a reason to refuse a worker
+// the bytes — the operator publishes the encoding, and if it ever changes, the
+// witness should degrade to the uniform flip it used before rather than stop
+// serving.
+func readInserted(src io.Reader, limit int) ([]byte, insertedSpan) {
+	buf := make([]byte, 0, 1<<16)
+	tmp := make([]byte, 1<<20)
+	sp := insertedSpan{known: true}
+	// A Reader is discouraged from returning nothing without an error, but this
+	// runs before a single byte has reached the worker, so a reader that does
+	// would spin here holding the transfer slot rather than merely wasting a
+	// loop. Give up after a few and let the copy deal with it.
+	idle := 0
+	for {
+		end, ended, err := akdtree.ScanLeading(buf, insertedField, sp.end)
+		if err != nil {
+			return buf, insertedSpan{}
+		}
+		sp.end = end
+		if ended {
+			return buf, sp
+		}
+		if sp.end >= limit {
+			sp.capped = true
+			return buf, sp
+		}
+		n, err := src.Read(tmp)
+		if n > 0 {
+			buf = append(buf, tmp[:n]...)
+			idle = 0
+			continue
+		}
+		if err == nil {
+			if idle++; idle < 8 {
+				continue
+			}
+			return buf, sp
+		}
+		if err != nil {
+			// EOF, or a fetch that broke. Either way there is no more framing to
+			// do; what has been read is handed back and the copy will surface the
+			// failure again.
+			return buf, sp
+		}
+	}
+}
+
+// pickCanaryBit chooses which bit of a proof to flip, and says which half of
+// the proof it landed in.
+//
+// # Why not uniformly, as this did
+//
+// The published roots chain — curr_E equals prev_{E+1}, which this witness
+// enforces as a fork condition — and prev is by definition Root(unchanged). So
+// a worker holding proof E+1 can produce both of epoch E's roots from the two
+// unchanged sets, report them, and never look at inserted_E: two correct roots,
+// and the append-only property never checked. MayRead is what denies it the
+// second proof, and this is what catches it if it gets one anyway.
+//
+// It catches it only if the flipped bit is in bytes the shortcut skips. Chosen
+// uniformly over the file it almost never is: `unchanged` is the entire previous
+// tree and `inserted` is one epoch of additions, so on the test fixture 11.77%
+// of the bytes are inserted and on a Meta proof of several million nodes the
+// share is smaller again. A uniform canary was therefore testing, nine times in
+// ten, the one thing the shortcut still does honestly.
+//
+// # The split
+//
+// Three canaries in four aim inside `inserted`; the fourth is uniform over the
+// whole proof. The minority is not there to catch the shortcut — the majority
+// does that — but so that where a canary can be is not learnable. If every
+// corrupted byte were in the first few megabytes, a worker could hash only the
+// prefix, echo the published roots for everything after it, and pass. Keeping a
+// quarter of the flips anywhere at all costs a quarter of the sensitivity to
+// the shortcut and closes that, which is the better trade while the shortcut is
+// the failure we can actually name.
+//
+// # Where inside inserted
+//
+// Uniformly over the field's payload bytes — the label_val and value of each
+// element — and never over its framing. See PayloadOffset: a flipped length
+// desynchronises everything after it and Decode rejects the whole proof, which
+// is the verdict an honest verifier returns for it too, so the canary learns
+// nothing from that answer. On the fixture the framing is 14.7% of `inserted`,
+// so this recovers roughly one canary in seven that would otherwise have asked
+// an unanswerable question.
+func pickCanaryBit(head []byte, sp insertedSpan, size int64) (at int64, bit int, region string) {
+	bit = int(randBelow(8))
+
+	if sp.known && sp.end > 0 && randBelow(canaryShareOf) < canaryInsertedShare {
+		field := head[:sp.end]
+		if _, total, _, err := akdtree.PayloadOffset(field, insertedField, -1); err == nil && total > 0 {
+			off, _, found, err := akdtree.PayloadOffset(field, insertedField, int(randBelow(int64(total))))
+			if err == nil && found {
+				return int64(off), bit, "inserted"
+			}
+		}
+	}
+
+	if size > 0 {
+		at = randBelow(size)
+	}
+	switch {
+	case !sp.known:
+		region = "unknown; the framing did not parse"
+	case at < int64(sp.end):
+		region = "inserted"
+	case sp.capped:
+		// Past the point the scan reached, and the run was still going there, so
+		// this may be either field. Saying "unchanged" would be a guess.
+		region = "past the scanned prefix, field unknown"
+	default:
+		region = "unchanged"
+	}
+	return at, bit, region
+}
+
+// randBelow returns a uniform value in [0, n), or zero if the machine has no
+// randomness to give. Zero is a legal offset, so a canary is still served; it is
+// simply always the first byte, which the log line will make obvious.
+func randBelow(n int64) int64 {
+	if n <= 0 {
+		return 0
+	}
+	v, err := rand.Int(rand.Reader, big.NewInt(n))
+	if err != nil {
+		return 0
+	}
+	return v.Int64()
 }
 
 // copyFlipping streams src to dst, flipping one bit at offset.

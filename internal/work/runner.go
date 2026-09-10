@@ -67,24 +67,35 @@ type Runner struct {
 	// half-finished assignment sitting on a lease while the machine idled.
 	BeforeNext func(ctx context.Context) error
 
-	// Parallel reports how many epochs of this origin to verify at once,
-	// consulted once per assignment. Nil means N-2.
+	// Parallel sizes this machine's pool. Nil means N-2.
 	//
-	// The origin is an argument because a proof's size is a fact about the log,
-	// not about the machine. A WhatsApp epoch is a few megabytes and a Meta one
-	// is nearly three hundred, and the same worker takes both; a single answer
-	// for the host means whichever log has the largest proofs sets the width
-	// for all of them, and a worker that has seen one Meta epoch runs WhatsApp
-	// four at a time instead of eight for the rest of its life.
+	// Consulted ONCE, at the start of Run, with the empty origin — meaning "what
+	// can this host do, whatever it is handed". It used to be asked per
+	// assignment with the assignment's origin, and that is no longer possible:
+	// the pool outlives any one range and draws from a single channel that
+	// mixes them.
 	//
-	// A function rather than a number because the two hosts answer it
+	// The origin argument survives because the question it answers is still
+	// real. A proof's size is a fact about the log, not the machine — a
+	// WhatsApp epoch is a few megabytes and a Meta one nearly three hundred —
+	// so a host serving both has two different safe widths and only one pool.
+	// Asking with "" gets the conservative answer, the width of the largest
+	// log the host serves.
+	//
+	// That costs nothing on this fleet, where each machine serves one log: the
+	// laptop verifies WhatsApp and the GPU box Meta, so "" returns exactly that
+	// log's number. It costs throughput on a host serving both — the witness's
+	// own worker — which runs WhatsApp at Meta's width. The alternative is a
+	// per-origin bound on work in flight rather than a single pool, and that is
+	// worth doing when a mixed host is the bottleneck. It is not today.
+	//
+	// A function rather than a number because the two kinds of host answer
 	// differently. A laptop answers with a constant — N-2 of the cores it is
-	// allowed, which is what the operator asked for — and paces itself by not
-	// asking for more work. The witness cannot: it shares its box with live
-	// witnessing, which never yields, so its measured headroom sits at the
-	// floor and a fixed threshold gate would wait forever. It answers instead
-	// with what its governor says the machine can currently afford, and so
-	// works one epoch at a time when the box is busy and eight when it is not.
+	// allowed — and paces itself by not asking for more work. The witness
+	// cannot: it shares its box with live witnessing, which never yields, so
+	// its measured headroom sits at the floor and a fixed threshold would wait
+	// forever. It answers with what its governor says the machine can currently
+	// afford.
 	Parallel func(origin string) int
 
 	Name string

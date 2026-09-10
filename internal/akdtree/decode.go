@@ -60,6 +60,14 @@ func Decode(data []byte) (inserted, unchanged []Element, err error) {
 }
 
 // walk calls fn for each length-delimited field of the top-level message.
+//
+// The same framing rules as nextRecord in ranges.go, written out again rather
+// than called through it. Not an oversight: this runs several million times per
+// proof — twice at the top level and four more times inside every element — and
+// routing it through a record-shaped call cost 14% of Decode's throughput when
+// it was tried. nextRecord answers a question this cannot (whether a record is
+// merely half-arrived), and pays for it; walk is given a whole message and does
+// not need to ask. Change one and change the other.
 func walk(data []byte, fn func(field int, body []byte) error) error {
 	for len(data) > 0 {
 		key, n := binary.Uvarint(data)
