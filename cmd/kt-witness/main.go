@@ -751,16 +751,21 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		// worker build its own is what keeps the memory bound a single number.
 		var (
 			wVerifier  audit.Verifier
+			wPrefetch  *audit.Prefetcher
 			wResolvers []audit.Resolver
 			wTimeout   = 5 * time.Minute
 		)
 		if auditor != nil {
 			wVerifier, wResolvers = auditor.Verifier, resolvers
+			// The same cache the sweep uses. One cache, because it is one disk
+			// and one link, and two would compete for both while each believed
+			// it was within its budget.
+			wPrefetch = auditor.Prefetch
 			if auditor.Timeout > 0 {
 				wTimeout = auditor.Timeout
 			}
 		}
-		w, err := startWorkChannel(ctx, cfg, db, governorFor(auditor), wVerifier, wResolvers, wTimeout, log)
+		w, err := startWorkChannel(ctx, cfg, db, governorFor(auditor), wVerifier, wPrefetch, wResolvers, wTimeout, log)
 		if err != nil {
 			// Refusing to start is the point. A work channel that silently did
 			// not come up would leave the witness looking healthy while the

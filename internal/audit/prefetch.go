@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -66,8 +68,18 @@ type Prefetcher struct {
 	Client *http.Client
 	Log    *slog.Logger
 
+	// Origins this cache holds proofs for. Needed because a cache key hashes
+	// the origin — which is what lets the cache survive a log changing where it
+	// publishes — so the origin cannot be read back out of a filename without
+	// knowing the candidates.
+	Origins []string
+
 	mu     sync.Mutex
 	cached map[string]int64 // key -> size
+	// ready is which epochs are on disk, per origin. The queue hands out work
+	// from THIS rather than from the store, so that a lease is always answered
+	// by bytes that are already here and a worker never waits on a WAN fetch.
+	ready  map[string]map[int64]bool
 	bytes  int64
 	inWork map[string]bool
 
@@ -90,6 +102,12 @@ func (p *Prefetcher) init() {
 	p.once.Do(func() {
 		p.cached = map[string]int64{}
 		p.inWork = map[string]bool{}
+		p.ready = map[string]map[int64]bool{}
+		byHash := map[string]string{}
+		for _, o := range p.Origins {
+			sum := sha256.Sum256([]byte(o))
+			byHash[hex.EncodeToString(sum[:6])] = o
+		}
 		n := p.Workers
 		if n < 1 {
 			n = defaultPrefetchWorkers
@@ -105,8 +123,12 @@ func (p *Prefetcher) init() {
 			if err != nil || fi == nil || fi.IsDir() || filepath.Ext(path) == ".part" {
 				return nil
 			}
-			p.cached[filepath.Base(path)] = fi.Size()
+			base := filepath.Base(path)
+			p.cached[base] = fi.Size()
 			p.bytes += fi.Size()
+			if o, e, ok := splitKey(base, byHash); ok {
+				p.markReady(o, e)
+			}
 			return nil
 		})
 	})
@@ -131,6 +153,91 @@ func (p *Prefetcher) maxBytes() int64 {
 func cacheKey(origin string, epoch int64) string {
 	sum := sha256.Sum256([]byte(origin))
 	return fmt.Sprintf("%s-%d.proof", hex.EncodeToString(sum[:6]), epoch)
+}
+
+// splitKey recovers the origin and epoch from a cache filename, given the
+// origins this cache was told about.
+func splitKey(base string, byHash map[string]string) (string, int64, bool) {
+	name := strings.TrimSuffix(base, ".proof")
+	i := strings.LastIndex(name, "-")
+	if i <= 0 || name == base {
+		return "", 0, false
+	}
+	o, ok := byHash[name[:i]]
+	if !ok {
+		return "", 0, false
+	}
+	e, err := strconv.ParseInt(name[i+1:], 10, 64)
+	if err != nil {
+		return "", 0, false
+	}
+	return o, e, true
+}
+
+// markReady records that an epoch's proof is on disk. Caller holds no lock
+// during init; every other caller holds p.mu.
+func (p *Prefetcher) markReady(origin string, epoch int64) {
+	m := p.ready[origin]
+	if m == nil {
+		m = map[int64]bool{}
+		p.ready[origin] = m
+	}
+	m[epoch] = true
+}
+
+// Ready returns the next contiguous run of epochs whose proofs are on disk,
+// at or after `after`, at most n long.
+//
+// This is what the work queue hands out. It used to hand out whatever the store
+// said was unverified, which meant a lease could name epochs nobody had
+// downloaded — and the worker then waited on a cold WAN fetch that began only
+// when it asked. Both machines sat idle behind that: a laptop running eight
+// concurrent verifications at under one core of eight, and a thirty-two core
+// server at two, against a CDN giving about 20 Mbit/s per connection.
+//
+// Handing out only what is cached inverts it. The generator runs ahead and
+// fills this; the queue drains it; a worker's first byte is a local read.
+func (p *Prefetcher) Ready(origin string, after int64, n int) (from, to int64, ok bool) {
+	if p == nil || n < 1 {
+		return 0, 0, false
+	}
+	p.init()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	m := p.ready[origin]
+	if len(m) == 0 {
+		return 0, 0, false
+	}
+	// The lowest cached epoch at or after `after`; then as far as it runs
+	// without a gap. Sparse and small — the cache holds tens to hundreds of
+	// epochs, not the history — so a scan of the keys is cheaper than keeping
+	// them sorted through every add and release.
+	first := int64(-1)
+	for e := range m {
+		if e >= after && (first < 0 || e < first) {
+			first = e
+		}
+	}
+	if first < 0 {
+		return 0, 0, false
+	}
+	last := first
+	for m[last+1] && last-first+1 < int64(n) {
+		last++
+	}
+	return first, last, true
+}
+
+// Held reports how many proofs are cached for an origin, so the generator knows
+// whether to fetch more.
+func (p *Prefetcher) Held(origin string) int {
+	if p == nil {
+		return 0
+	}
+	p.init()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.ready[origin])
 }
 
 // Path returns the cached proof for an epoch, or "" if it is not held.
@@ -165,6 +272,9 @@ func (p *Prefetcher) Release(origin string, epoch int64) {
 	if ok {
 		delete(p.cached, k)
 		p.bytes -= size
+		if m := p.ready[origin]; m != nil {
+			delete(m, epoch)
+		}
 	}
 	p.mu.Unlock()
 	if ok {
@@ -263,6 +373,7 @@ func (p *Prefetcher) Fetch(ctx context.Context, origin, logDirectory string, epo
 	netmeter.Add(origin, n)
 	p.mu.Lock()
 	p.cached[k] = n
+	p.markReady(origin, epoch)
 	p.bytes += n
 	held, total := len(p.cached), p.bytes
 	p.mu.Unlock()
@@ -305,6 +416,26 @@ func (p *Prefetcher) Prune() {
 		mod  time.Time
 		size int64
 	}
+	// byKey lets a pruned file be forgotten from `ready` as well. Without it the
+	// queue would go on offering an epoch whose bytes have been deleted, and the
+	// worker would get a 404 for work the witness believed it held.
+	byKey := map[string]struct {
+		origin string
+		epoch  int64
+	}{}
+	hashes := map[string]string{}
+	for _, o := range p.Origins {
+		sum := sha256.Sum256([]byte(o))
+		hashes[hex.EncodeToString(sum[:6])] = o
+	}
+	for k := range p.cached {
+		if o, e, ok := splitKey(k, hashes); ok {
+			byKey[k] = struct {
+				origin string
+				epoch  int64
+			}{o, e}
+		}
+	}
 	var ents []ent
 	for k, size := range p.cached {
 		fi, err := os.Stat(filepath.Join(p.Dir, k))
@@ -320,6 +451,11 @@ func (p *Prefetcher) Prune() {
 		}
 		delete(p.cached, e.key)
 		p.bytes -= e.size
+		if id, ok := byKey[e.key]; ok {
+			if m := p.ready[id.origin]; m != nil {
+				delete(m, id.epoch)
+			}
+		}
 		_ = os.Remove(filepath.Join(p.Dir, e.key))
 	}
 }

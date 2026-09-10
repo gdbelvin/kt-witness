@@ -4,28 +4,43 @@ import (
 	"log/slog"
 
 	"github.com/gdbsecurity/kt-witness/internal/store"
+
+	"github.com/gdbsecurity/kt-witness/internal/audit"
 	"github.com/gdbsecurity/kt-witness/internal/work"
 )
 
-// storeSource answers the queue's question — what still needs auditing — from
-// the store, at the moment somebody asks.
+// cacheSource is what the queue hands out: epochs whose proofs are already on
+// this machine's disk.
 //
-// This replaces a feeder that ran on a thirty-second timer and pushed
-// fixed-size chunks into a list inside the queue. That feeder kept three pieces
-// of state duplicating what the store already knew, and each was wrong at some
-// point in one day:
+// The queue used to ask the STORE what was unverified, which meant a lease
+// could name epochs nobody had downloaded. The worker then waited through a
+// cold WAN fetch that began only when it asked — and since the operators' CDNs
+// give about 20 Mbit/s per connection while hashing an epoch takes about a
+// second, the wait was nearly all of it. A laptop ran eight concurrent
+// verifications at under one core of eight; a thirty-two core server at two.
+// Neither was short of CPU.
 //
-//   - a cursor that only ever moved forward, so an epoch that failed was never
-//     offered again and 7,877 unverified WhatsApp epochs sat stranded behind it;
-//   - a "is this chunk done" probe that sampled one epoch in twenty-five, so a
-//     range whose interleaved half had failed was declared finished;
-//   - a queue-depth cap counted across every log at once, so a bandwidth-bound
-//     log filled it and starved a fast one out entirely, leaving a laptop at 0%
-//     CPU with work it could do sitting unqueued.
+// Three parts now, with the slow one at the front. The generator reads the
+// store and downloads ahead (workgen.go); the cache holds what it fetched; this
+// drains it. A lease names only epochs already here, so a worker's first byte
+// is a local read.
 //
-// None of those are possible against a store query. There is also no chunk size
-// here: the caller says how many epochs it wants, and that number comes from
-// the machine that will do the work.
+// The store is still the authority on what NEEDS verifying — that is what the
+// generator reads. This is the authority on what is READY, which is a different
+// question and the only one the queue can usefully answer quickly.
+func cacheSource(pf *audit.Prefetcher, log *slog.Logger) work.Source {
+	return func(origin string, after int64, n int) (int64, int64, bool) {
+		return pf.Ready(origin, after, n)
+	}
+}
+
+// storeSource is the fallback when there is no cache: what the STORE says needs
+// verifying, downloaded by whoever is handed it.
+//
+// Kept because a witness with no prefetch directory should still work, and
+// because it is the honest description of what happens then — the queue names
+// epochs nobody has fetched, and each worker pays the WAN cost itself, in
+// series with its own verification.
 func storeSource(db *store.Store, log *slog.Logger) work.Source {
 	return func(origin string, after int64, n int) (int64, int64, bool) {
 		hs, err := db.Histories()
@@ -46,20 +61,9 @@ func storeSource(db *store.Store, log *slog.Logger) work.Source {
 			after = h.From
 		}
 		from, ok, err := db.FirstUnverified(origin, after, h.To)
-		if err != nil {
-			if log != nil {
-				log.Warn("cannot ask the store what needs auditing",
-					"origin", origin, "from", after, "err", err)
-			}
+		if err != nil || !ok {
 			return 0, 0, false
 		}
-		if !ok {
-			return 0, 0, false
-		}
-		// A contiguous run from there. Handing out more than is actually
-		// unverified costs nothing: a worker re-verifying an epoch overwrites
-		// the same verdict, and checking each one first would turn a single
-		// ordered scan into a query per epoch.
 		to := from + int64(n) - 1
 		if to > h.To {
 			to = h.To

@@ -27,8 +27,8 @@ import (
 // as parallelism. That is the one place the witness differs from a laptop, and
 // it differs in the parameter rather than in the pattern.
 func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *work.Queue,
-	g *pace.Governor, verifier audit.Verifier, resolvers []audit.Resolver, timeout time.Duration,
-	n int, log *slog.Logger) {
+	g *pace.Governor, verifier audit.Verifier, pf *audit.Prefetcher,
+	resolvers []audit.Resolver, timeout time.Duration, n int, log *slog.Logger) {
 	if n < 1 {
 		n = 1
 	}
@@ -96,13 +96,13 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 			// one every remote worker runs, and internal/akdtree's mutation
 			// trials and fuzzing are what establish that it rejects a bad
 			// proof.
-			return verifyEpochHere(ctx, byOrigin[origin], verifier, origin, epoch, timeout)
+			return verifyEpochHere(ctx, byOrigin[origin], verifier, pf, origin, epoch, timeout)
 		},
 		Report: func(ctx context.Context, res work.Result) error {
 			if err := q.Accept(res); err != nil {
 				return err
 			}
-			return recordWorkerResult(ctx, db, q, nil, resolvers, res, log)
+			return recordWorkerResult(ctx, db, q, nil, pf, resolvers, res, log)
 		},
 	}
 	go func() {
@@ -165,7 +165,7 @@ func originsOf(m map[string]audit.Resolver) []string {
 // down, and being wrong is an OOM kill of the whole witness rather than a
 // slowdown.
 func verifyEpochHere(ctx context.Context, r audit.Resolver, v audit.Verifier,
-	origin string, epoch int64, timeout time.Duration) (string, string, error) {
+	pf *audit.Prefetcher, origin string, epoch int64, timeout time.Duration) (string, string, error) {
 	if r == nil {
 		return "", "", fmt.Errorf("no resolver for %s", origin)
 	}
@@ -193,5 +193,11 @@ func verifyEpochHere(ctx context.Context, r audit.Resolver, v audit.Verifier,
 	// ref.PrevRoot and ref.CurrRoot still go in, and only to address the
 	// operator's directory — that is how the proof URL is formed. They take no
 	// part in what comes out.
-	return g.ComputeRoots(ctx, ref.LogDirectory, epoch, ref.PrevRoot, ref.CurrRoot, "", timeout)
+	// From the cache when it is there, which it should be: this worker leases
+	// from the same queue as the remote ones, and that queue only hands out
+	// epochs the generator has already downloaded. Passing "" here would send
+	// this machine to the CDN for bytes sitting on its own disk — the same
+	// mistake the proof server was making for every remote worker.
+	return g.ComputeRoots(ctx, ref.LogDirectory, epoch,
+		ref.PrevRoot, ref.CurrRoot, pf.Path(origin, epoch), timeout)
 }

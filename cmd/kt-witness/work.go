@@ -25,8 +25,8 @@ import (
 
 // startWorkChannel serves verification work to machines on this network.
 func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pace.Governor,
-	verifier audit.Verifier, resolvers []audit.Resolver, timeout time.Duration,
-	log *slog.Logger) (func() map[string]time.Time, error) {
+	verifier audit.Verifier, prefetch *audit.Prefetcher, resolvers []audit.Resolver,
+	timeout time.Duration, log *slog.Logger) (func() map[string]time.Time, error) {
 	note, err := workrpc.CheckListenAddr(cfg.Work.Listen)
 	if err != nil {
 		return nil, err
@@ -85,11 +85,25 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 		for _, r := range resolvers {
 			byOrigin[r.Origin()] = r
 		}
+		// From disk, because the generator put it there. The fall-through to the
+		// operator stays for the cases the cache cannot cover — a retry whose
+		// proof was released, an epoch the generator has not reached — and it is
+		// the slow path by design rather than the only one.
 		fetch := func(origin string, epoch int64) (io.ReadCloser, int64, error) {
 			r := byOrigin[origin]
 			if r == nil {
 				return nil, 0, fmt.Errorf("no resolver for %s", origin)
 			}
+			if path := prefetch.Path(origin, epoch); path != "" {
+				if f, err := os.Open(path); err == nil {
+					if fi, err := f.Stat(); err == nil {
+						metrics.Inc("kt_witness_proof_served_cached_total", nil)
+						return f, fi.Size(), nil
+					}
+					f.Close()
+				}
+			}
+			metrics.Inc("kt_witness_proof_served_cold_total", nil)
 			ref, err := r.ResolveEpoch(ctx, epoch)
 			if err != nil {
 				return nil, 0, err
@@ -176,7 +190,7 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 		Token:     token,
 		Log:       log,
 		OnResult: func(r work.Result) error {
-			return recordWorkerResult(ctx, db, q, proofs, resolvers, r, log)
+			return recordWorkerResult(ctx, db, q, proofs, prefetch, resolvers, r, log)
 		},
 		OnCapacity: func(worker string, c work.Capacity) {
 			recordCapacity(worker, c)
@@ -222,7 +236,23 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 		}
 	}
 	q.Origins = origins
-	q.Source = storeSource(db, log)
+	// The queue drains the cache; the generator fills it. See worksource.go for
+	// why the store is no longer asked here.
+	if prefetch != nil && prefetch.Dir != "" {
+		prefetch.Origins = origins
+		q.Source = cacheSource(prefetch, log)
+		startWorkGenerator(ctx, db, prefetch, resolvers, origins, log)
+	} else {
+		// No cache configured, so there is nothing to drain and the queue would
+		// hand out nothing at all. Fall back to asking the store, which is what
+		// this did before — every verification then begins with a cold WAN
+		// fetch, which is slow but is not silence.
+		log.Warn("no proof cache; the queue will hand out undownloaded epochs",
+			"note", "set audit.prefetch_dir. Without it each worker waits on a "+
+				"download that starts only when it asks, and neither the workers "+
+				"nor this machine will be anywhere near busy")
+		q.Source = storeSource(db, log)
+	}
 	publishQueueDepth(ctx, q)
 
 	// The witness's own verification, as ordinary participants on the same
@@ -238,7 +268,7 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 	// governor were sized for eight, and nothing in the logs said which was in
 	// force.
 	local := (&audit.GoVerifier{Concurrent: cfg.Audit.GoConcurrent}).Size()
-	startLocalWorkers(ctx, cfg, db, q, gov, verifier, resolvers, timeout, local, log)
+	startLocalWorkers(ctx, cfg, db, q, gov, verifier, prefetch, resolvers, timeout, local, log)
 
 	log.Info("work channel listening", "addr", cfg.Work.Listen, "lease", lease.String(),
 		"origins", origins,
@@ -260,7 +290,8 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 // not built yet. Until it is, this channel should only be given to machines the
 // operator controls, which is also why the listener refuses a public address.
 func recordWorkerResult(ctx context.Context, db *store.Store, q *work.Queue,
-	proofs *workrpc.ProofServer, resolvers []audit.Resolver, r work.Result, log *slog.Logger) error {
+	proofs *workrpc.ProofServer, pf *audit.Prefetcher, resolvers []audit.Resolver,
+	r work.Result, log *slog.Logger) error {
 	// Was this one of the proofs we corrupted?
 	//
 	// Its verdict is about the worker, not about the log, so it is never
@@ -364,6 +395,15 @@ func recordWorkerResult(ctx context.Context, db *store.Store, q *work.Queue,
 	}
 
 	r.Verified = true
+	// The proof has done its job, so the disk it holds goes back.
+	//
+	// This is the third step of the three, and without it the other two stop:
+	// the generator fills the cache, the queue drains it, and if nothing is ever
+	// released the cache reaches its cap and the generator declines forever —
+	// correctly, and silently, because a full cache is normally the system
+	// working.
+	pf.Release(r.Origin, r.Epoch)
+
 	// Counted against the machine that did it, so a graph can answer "did
 	// adding that box help" — which by origin alone it cannot.
 	metrics.Inc(audit.MetricByWorker,
