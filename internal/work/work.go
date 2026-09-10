@@ -79,9 +79,16 @@ type Result struct {
 	Origin       string `json:"origin"`
 	Epoch        int64  `json:"epoch"`
 
-	Verified   bool   `json:"verified"`
-	Root       string `json:"root"`
-	SignedRoot string `json:"signed_root"`
+	// ComputedPrev and ComputedCurr are the roots the worker rebuilt from the
+	// proof. It is not told what the operator published and does not report a
+	// verdict: a worker that does not know the expected answer cannot report it
+	// without doing the work.
+	ComputedPrev string `json:"computed_prev"`
+	ComputedCurr string `json:"computed_curr"`
+
+	// Verified is filled in by the WITNESS, after comparing the above against
+	// the roots the operator published. It is never set by a worker.
+	Verified bool `json:"verified"`
 
 	// Worker names who did it, and DurationMS how long they took. Published in
 	// the audit record, because a conclusion reached on somebody else's

@@ -61,11 +61,9 @@ func main() {
 		origins    = flag.String("origins", "", "comma-separated origins this worker can verify (default: whatever it is offered)")
 		tokenEnv   = flag.String("token-env", "KT_WORK_TOKEN", "environment variable holding the shared token")
 		dry        = flag.Bool("dry-run", false, "take assignments and report them unverified, to exercise the channel")
-		akdBin     = flag.String("akd-bin", "", "path to kt-akd-verify")
-		akdConfig  = flag.String("config", "deploy/witness.json", "witness config, read for each AKD log's public proof directory")
 		cpus       = flag.Int("cpus", 0, "logical CPUs this worker may use in total (default: every efficiency core plus two performance cores)")
 		eCores     = flag.Bool("efficiency-cores-only", false, "macOS: run in the background QoS class, which confines every thread to the efficiency cores and throttles disk I/O. Uses less of the machine, and is the only setting under which the laptop genuinely does not feel slower")
-		akdOrigins = flag.String("akd-origins", "meta.messenger.kt/v1,whatsapp.kt/v2", "origins the AKD sidecar can verify")
+		akdOrigins = flag.String("akd-origins", "meta.messenger.kt/v1,whatsapp.kt/v2", "AKD logs this worker will verify")
 		protonBin  = flag.String("proton-bin", "", "path to kt-proton-gpu")
 		protonDir  = flag.String("proton-dir", "", "directory holding the retained Proton tree and manifest")
 	)
@@ -188,26 +186,14 @@ func main() {
 		dry:          *dry,
 		log:          log,
 	}
+	// Everything this worker needs arrives from the witness: the proof over the
+	// LAN, the epoch in the assignment. No log directories, no config file, no
+	// internet — and no knowledge of the roots it is expected to produce, which
+	// is what makes its answer worth anything.
 	w.verifiers = map[string]verifier{}
-	if *akdBin != "" {
-		// An epoch cannot be verified from its number: the sidecar needs the
-		// proof directory and the two roots the operator published, and this
-		// worker looks those up itself from the operator's listing.
-		src, err := akdSourcesFromConfig(*akdConfig)
-		if err != nil {
-			log.Error("cannot read the AKD logs to verify", "config", *akdConfig, "err", err)
-			os.Exit(2)
-		}
-		for _, o := range strings.Split(*akdOrigins, ",") {
-			o = strings.TrimSpace(o)
-			if o == "" {
-				continue
-			}
-			if src[o] == nil {
-				log.Error("no proof directory for this origin", "origin", o, "config", *akdConfig)
-				os.Exit(2)
-			}
-			w.verifiers[o] = akdVerifier{bin: *akdBin, src: src, threads: epochThreads}
+	for _, o := range strings.Split(*akdOrigins, ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			w.verifiers[o] = akdVerifier{}
 		}
 	}
 	if *protonBin != "" && *protonDir != "" {
@@ -461,14 +447,16 @@ func (w *worker) run(ctx context.Context) error {
 			return v.verify(ctx, origin, epoch, proofBase)
 		},
 		Report: func(ctx context.Context, res work.Result) error {
-			if res.Verified {
+			if res.Err == "" {
 				w.verified.Add(1)
 			}
 			return stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Result{Result: &pb.Result{
 				AssignmentId: res.AssignmentID, Nonce: res.Nonce, Origin: res.Origin,
-				Epoch: res.Epoch, Verified: res.Verified, Root: res.Root,
-				SignedRoot: res.SignedRoot, Worker: res.Worker,
-				DurationMs: res.DurationMS, Error: res.Err,
+				Epoch:            res.Epoch,
+				ComputedPrevRoot: res.ComputedPrev,
+				ComputedCurrRoot: res.ComputedCurr,
+				Worker:           res.Worker,
+				DurationMs:       res.DurationMS, Error: res.Err,
 			}}})
 		},
 	}

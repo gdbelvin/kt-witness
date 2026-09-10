@@ -111,12 +111,20 @@ message Result {
   string origin = 3;
   int64 epoch = 4;
 
-  bool verified = 5;
-  // What the worker computed, and what the operator signed. Both are sent
-  // because the witness decides what a disagreement means, and cannot do that
-  // from a boolean.
-  string root = 6;
-  string signed_root = 7;
+  // The two roots the worker COMPUTED from the proof, and nothing else.
+  //
+  // It is never told what the operator published, and it does not report a
+  // verdict. That is not a division of labour, it is what makes the answer
+  // worth having: a worker that does not know the expected value cannot report
+  // it without doing the work, so fabrication stops being something to sample
+  // for and becomes something that cannot happen.
+  //
+  // The witness holds the published roots and does the comparison. A worker
+  // that computes wrong roots produces a mismatch, which the witness resolves
+  // by re-verifying the epoch itself — it can waste our time, and it cannot
+  // make us believe anything.
+  string computed_prev_root = 6;
+  string computed_curr_root = 7;
 
   string worker = 8;
   int64 duration_ms = 9;

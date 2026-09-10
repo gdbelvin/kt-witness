@@ -195,7 +195,7 @@ func (s *Server) awaitSettled(ctx context.Context, a work.Assignment) error {
 func (s *Server) handleResult(stream pb.Work_SessionServer, worker string, r *pb.Result) {
 	res := work.Result{
 		AssignmentID: r.AssignmentId, Nonce: r.Nonce, Origin: r.Origin, Epoch: r.Epoch,
-		Verified: r.Verified, Root: r.Root, SignedRoot: r.SignedRoot,
+		ComputedPrev: r.ComputedPrevRoot, ComputedCurr: r.ComputedCurrRoot,
 		Worker: worker, DurationMS: r.DurationMs, Err: r.Error,
 	}
 	ack := &pb.Ack{AssignmentId: r.AssignmentId, Epoch: r.Epoch, Accepted: true}

@@ -30,10 +30,13 @@ type Runner struct {
 	// Next blocks until an assignment is available, or returns ErrNoWork to be
 	// asked again after Idle.
 	Next func(ctx context.Context) (Assignment, error)
-	// Verify returns what it computed and what the operator signed. It decides
-	// nothing: a disagreement is for the witness to resolve, and a worker that
-	// concluded misbehaviour on its own would be claiming an authority the
-	// whole design withholds from it.
+	// Verify rebuilds the two roots from the proof and returns them.
+	//
+	// It is not given the roots the operator published and does not decide
+	// whether they match. That is the whole point: a worker that does not know
+	// the expected answer cannot report it without doing the work, so a
+	// fabricated result is not something to sample for — it is something that
+	// cannot be produced. The witness holds the published roots and compares.
 	//
 	// An epoch it cannot fetch is an ERROR, and an error is an answer. The
 	// worker reports it and moves on; rescheduling is the queue's business,
@@ -43,7 +46,7 @@ type Runner struct {
 	// the operator's own store. Set on every assignment or none: a base that
 	// appeared only sometimes would tell a worker which epochs were being
 	// tested.
-	Verify func(ctx context.Context, origin string, epoch int64, proofBase string) (root, signed string, err error)
+	Verify func(ctx context.Context, origin string, epoch int64, proofBase string) (computedPrev, computedCurr string, err error)
 	// Report records one verdict. Calls are serialised, so an implementation
 	// writing to a gRPC stream needs no lock of its own.
 	Report func(ctx context.Context, r Result) error
@@ -227,15 +230,17 @@ func (r *Runner) one(ctx context.Context, a Assignment, e int64, timeout time.Du
 		Epoch: e, Worker: r.Name,
 	}
 	ec, cancel := context.WithTimeout(ctx, timeout)
-	root, signed, err := r.Verify(ec, a.Origin, e, a.ProofBase)
+	prev, curr, err := r.Verify(ec, a.Origin, e, a.ProofBase)
 	cancel()
 	if err != nil {
 		// Unavailable is an answer. The queue decides whether and when to try
 		// again; this worker's job is to say what happened.
 		res.Err = err.Error()
 	} else {
-		res.Root, res.SignedRoot = root, signed
-		res.Verified = root != "" && root == signed
+		// No verdict here, deliberately. Whether these match what the operator
+		// published is the witness's question, and it is the only party that
+		// knows the answer.
+		res.ComputedPrev, res.ComputedCurr = prev, curr
 	}
 	res.DurationMS = time.Since(start).Milliseconds()
 

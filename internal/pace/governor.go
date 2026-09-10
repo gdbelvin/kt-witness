@@ -96,9 +96,19 @@ type Governor struct {
 }
 
 const (
-	// defaultReserveCores leaves one core for everything else on the box. This
-	// host also runs the home automation and a baby monitor.
-	defaultReserveCores = 1
+	// defaultReserveCores leaves two cores for everything else on the box.
+	//
+	// Two rather than one, and the same rule the workers use: N-2 is the budget
+	// everywhere in this project, so a machine behaves the same whether it is
+	// the witness, a laptop or the GPU box. One core was enough for the
+	// scheduler and not enough for the host — this box also runs the home
+	// automation and a baby monitor, and the second core is what keeps them
+	// responsive while thirty verifications run.
+	//
+	// It is a count rather than a fraction on purpose. A fraction silently
+	// reserves more as machines grow, which is the opposite of what a bigger
+	// machine is for.
+	defaultReserveCores = 2
 
 	// governorInterval is how often the loop measures and corrects. Long enough
 	// that a single 25-second verification does not dominate a sample, short

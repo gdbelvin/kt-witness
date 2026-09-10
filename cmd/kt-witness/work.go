@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -124,7 +123,7 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 		Token:     token,
 		Log:       log,
 		OnResult: func(r work.Result) error {
-			return recordWorkerResult(db, q, proofs, r, log)
+			return recordWorkerResult(ctx, db, q, proofs, resolvers, r, log)
 		},
 		OnCapacity: func(worker string, c work.Capacity) {
 			recordCapacity(worker, c)
@@ -206,7 +205,8 @@ func startWorkChannel(ctx context.Context, cfg *config, db *store.Store, gov *pa
 // that did nothing can report it; that is what spot-checking is for, and it is
 // not built yet. Until it is, this channel should only be given to machines the
 // operator controls, which is also why the listener refuses a public address.
-func recordWorkerResult(db *store.Store, q *work.Queue, proofs *workrpc.ProofServer, r work.Result, log *slog.Logger) error {
+func recordWorkerResult(ctx context.Context, db *store.Store, q *work.Queue,
+	proofs *workrpc.ProofServer, resolvers []audit.Resolver, r work.Result, log *slog.Logger) error {
 	// Was this one of the proofs we corrupted?
 	//
 	// Its verdict is about the worker, not about the log, so it is never
@@ -224,7 +224,7 @@ func recordWorkerResult(db *store.Store, q *work.Queue, proofs *workrpc.ProofSer
 				"anything, and every result it has reported must be treated as unproven. "+
 				"Stop giving it work and re-audit what it claimed",
 				"worker", r.Worker, "origin", r.Origin, "epoch", r.Epoch,
-				"assignment", r.AssignmentID, "root_it_reported", r.Root)
+				"assignment", r.AssignmentID, "roots_it_reported", r.ComputedPrev+"/"+r.ComputedCurr)
 		}
 		return nil
 	}
@@ -248,30 +248,51 @@ func recordWorkerResult(db *store.Store, q *work.Queue, proofs *workrpc.ProofSer
 			DecidedAt: time.Now().UTC(),
 		})
 	}
-	if r.Verified && (r.Root == "" || r.Root != r.SignedRoot) {
-		log.Error("refusing a worker result that claims verified while its own roots differ",
+	// The comparison happens HERE, and only here.
+	//
+	// The worker sent two roots it rebuilt from the proof and was never told
+	// what to expect. This witness resolves what the operator actually
+	// published and checks them. That ordering is the whole security argument:
+	// a worker that does not know the answer cannot report it without doing the
+	// work, so there is no fabricated result to detect — there is no way to
+	// produce one.
+	ref, refErr := resolvePublished(ctx, resolvers, r.Origin, r.Epoch)
+	if refErr != nil {
+		// We could not learn what to compare against. That is our problem, not
+		// the worker's, and it is emphatically not evidence about the log.
+		log.Warn("cannot resolve the published roots for a worker result; re-queueing",
+			"origin", r.Origin, "epoch", r.Epoch, "err", refErr)
+		q.Reschedule(r.Origin, r.Epoch)
+		return nil
+	}
+
+	matches := r.ComputedPrev == ref.PrevRoot && r.ComputedCurr == ref.CurrRoot
+	if !matches {
+		// A mismatch is a question, not a finding. It means one of: the worker
+		// is broken, the worker is lying, or the log built its tree wrongly —
+		// and those are not distinguishable from here. The strongest claim this
+		// system makes belongs to the witness's own verifier, so the epoch is
+		// recorded unverified and re-queued for this machine to settle.
+		metrics.Inc("kt_witness_worker_mismatch_total", map[string]string{"worker": r.Worker})
+		log.Error("A WORKER'S ROOTS DO NOT MATCH THE PUBLISHED ONES — recorded as "+
+			"unverified and re-queued. No finding is made against the log until this "+
+			"witness has verified the epoch itself",
 			"worker", r.Worker, "origin", r.Origin, "epoch", r.Epoch,
-			"root", r.Root, "signed", r.SignedRoot)
-		return fmt.Errorf("result is internally inconsistent")
+			"computed_prev", r.ComputedPrev, "published_prev", ref.PrevRoot,
+			"computed_curr", r.ComputedCurr, "published_curr", ref.CurrRoot)
+		q.Reschedule(r.Origin, r.Epoch)
+		return db.RecordAudit(&store.Audit{
+			Origin: r.Origin, Epoch: r.Epoch, Sampled: true, Rate: 1,
+			Strategy: "worker:" + r.Worker, Verified: false, Attempts: 1,
+			DecidedAt: time.Now().UTC(),
+		})
 	}
-	if !r.Verified && r.Root != "" && r.SignedRoot != "" {
-		// The worker says the construction failed. That is the strongest claim
-		// this system makes and a worker does not get to make it: recorded as
-		// unverified, shouted about, and left for the witness to re-run.
-		log.Error("A WORKER REPORTS A CONSTRUCTION MISMATCH — recorded as unverified; "+
-			"this witness must re-run the epoch itself before any finding is made",
-			"worker", r.Worker, "origin", r.Origin, "epoch", r.Epoch,
-			"worker_root", r.Root, "signed", r.SignedRoot)
-	}
-	if _, err := hex.DecodeString(r.Root); r.Root != "" && err != nil {
-		return fmt.Errorf("root is not hex")
-	}
-	if r.Verified {
-		// Counted against the machine that did it, so a graph can answer
-		// "did adding that box help" — which by origin alone it cannot.
-		metrics.Inc(audit.MetricByWorker,
-			map[string]string{"worker": r.Worker, "origin": r.Origin})
-	}
+
+	r.Verified = true
+	// Counted against the machine that did it, so a graph can answer "did
+	// adding that box help" — which by origin alone it cannot.
+	metrics.Inc(audit.MetricByWorker,
+		map[string]string{"worker": r.Worker, "origin": r.Origin})
 	return db.RecordAudit(&store.Audit{
 		Origin: r.Origin, Epoch: r.Epoch, Sampled: true, Rate: 1,
 		Strategy: "worker:" + r.Worker, Verified: r.Verified, Attempts: 1,
@@ -362,4 +383,18 @@ func knownOrigins(maps ...map[string]int) []string {
 		out = append(out, o)
 	}
 	return out
+}
+
+// resolvePublished asks the operator what it committed to for one epoch.
+//
+// The witness's own lookup, never the worker's: this is the value a worker must
+// not be able to see, because knowing it is the only way to report it without
+// verifying.
+func resolvePublished(ctx context.Context, resolvers []audit.Resolver, origin string, epoch int64) (*audit.EpochRef, error) {
+	for _, r := range resolvers {
+		if r.Origin() == origin {
+			return r.ResolveEpoch(ctx, epoch)
+		}
+	}
+	return nil, fmt.Errorf("no resolver for %s", origin)
 }

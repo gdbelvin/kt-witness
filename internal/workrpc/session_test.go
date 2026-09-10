@@ -81,7 +81,7 @@ func TestAWorkerIsDispatchedAndItsResultRecorded(t *testing.T) {
 
 	if err := stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Result{Result: &pb.Result{
 		AssignmentId: a.Id, Nonce: a.Nonce, Origin: a.Origin, Epoch: 11,
-		Verified: true, Root: "aa", SignedRoot: "aa"}}}); err != nil {
+		ComputedPrevRoot: "aa", ComputedCurrRoot: "bb"}}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -226,7 +226,7 @@ func TestAWorkerIsGivenOneRangeAtATime(t *testing.T) {
 	// Finish it, and the next one follows.
 	if err := stream.Send(&pb.WorkerMessage{Msg: &pb.WorkerMessage_Result{Result: &pb.Result{
 		AssignmentId: a.Id, Nonce: a.Nonce, Origin: a.Origin, Epoch: a.From,
-		Verified: true, Root: "aa", SignedRoot: "aa"}}}); err != nil {
+		ComputedPrevRoot: "aa", ComputedCurrRoot: "bb"}}}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(4 * time.Second)

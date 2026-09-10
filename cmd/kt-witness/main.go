@@ -191,8 +191,18 @@ type config struct {
 		//
 		// ShadowEvery samples it: 1 (or 0) shadows everything, 10 shadows one
 		// epoch in ten.
+		// Verifier selects which implementation does the witness's own
+		// verification: "go" for internal/akdtree, "rust" for the reference
+		// sidecar. The reference is the authority wherever it runs; this
+		// chooses which one runs in the hot path.
+		Verifier string `json:"verifier"`
+
 		ShadowVerify *bool `json:"shadow_verify"`
 		ShadowEvery  int   `json:"shadow_every"`
+
+		// GoConcurrent bounds in-process verifications. Zero derives it from
+		// the machine's cores.
+		GoConcurrent int `json:"go_concurrent"`
 
 		// CanaryEvery is how often a proof that just verified is corrupted and
 		// re-verified, to prove the verifier can still say no. 100 tests one
@@ -647,6 +657,23 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		pool := audit.NewPool(cfg.Audit.SidecarPath, workers)
 		var sidecar audit.Verifier = pool
 
+		// The Go verifier in the hot path, with the reference kept for the
+		// shadow and the canary.
+		//
+		// The sidecar pool is capped at eight because one Rust verification
+		// peaks near 3.7 GB, and that cap — not this machine's thirty-two
+		// cores — has been what bounds throughput. A verification in Go holds
+		// the proof and a flat array of nodes, so the ceiling moves off memory
+		// and onto cores.
+		var goVerifier *audit.GoVerifier
+		if strings.EqualFold(cfg.Audit.Verifier, "go") {
+			goVerifier = &audit.GoVerifier{Concurrent: cfg.Audit.GoConcurrent}
+			sidecar = goVerifier
+			log.Info("verifying in-process with the Go implementation",
+				"concurrent", goVerifier.Size(),
+				"shadow", cfg.Audit.ShadowVerify == nil || *cfg.Audit.ShadowVerify)
+		}
+
 		// A corrupted proof, one epoch in a hundred, that both verifiers must
 		// reject. This is the only check here that can tell a verifier from a
 		// rubber stamp: everything else asks it to agree with a valid proof,
@@ -681,10 +708,22 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		// the backlog still measured months.
 		var governor *pace.Governor
 		if cfg.Audit.Pace || cfg.Audit.TargetCores > 0 || cfg.Audit.ReserveCores > 0 {
+			// The ceiling has to match whatever is actually verifying.
+			//
+			// It was the sidecar pool's size, because that was the only thing
+			// that could run concurrently. With the Go verifier in the hot path
+			// the limit is cores rather than the 3.7 GB a Rust verification
+			// peaks at — and leaving the old number here would have quietly
+			// held the box at eight while thirty were available, which is the
+			// same mistake as the pool cap, one layer up.
+			maxConcurrent := workers
+			if strings.EqualFold(cfg.Audit.Verifier, "go") {
+				maxConcurrent = (&audit.GoVerifier{Concurrent: cfg.Audit.GoConcurrent}).Size()
+			}
 			governor = &pace.Governor{
 				ReserveCores:  cfg.Audit.ReserveCores,
 				TargetCores:   cfg.Audit.TargetCores,
-				MaxConcurrent: workers,
+				MaxConcurrent: maxConcurrent,
 				Log:           log,
 			}
 		}

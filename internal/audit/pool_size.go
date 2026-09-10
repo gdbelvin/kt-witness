@@ -70,10 +70,15 @@ func DefaultWorkers() int {
 	if n < 1 {
 		n = 1
 	}
-	// Above roughly one worker per two cores the pool cannot keep them busy —
-	// each verification is already parallel — and the extra memory buys queueing
-	// rather than throughput.
-	if cap := runtime.NumCPU() / 2; cap >= 1 && n > cap {
+	// N-2, the same core budget every part of this project uses.
+	//
+	// It was half the cores, on the reasoning that each Rust verification is
+	// internally parallel so a worker per two cores keeps them busy. That was
+	// true of the sidecar and it is a fraction, which is the shape this project
+	// has been bitten by three times: a fraction reserves more as machines grow,
+	// which is the opposite of what a bigger machine is for. Two cores left for
+	// the host is a statement that stays true from a laptop to this box.
+	if cap := runtime.NumCPU() - 2; cap >= 1 && n > cap {
 		n = cap
 	}
 	return n

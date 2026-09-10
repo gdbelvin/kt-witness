@@ -447,14 +447,22 @@ type Result struct {
 	Nonce        string                 `protobuf:"bytes,2,opt,name=nonce,proto3" json:"nonce,omitempty"`
 	Origin       string                 `protobuf:"bytes,3,opt,name=origin,proto3" json:"origin,omitempty"`
 	Epoch        int64                  `protobuf:"varint,4,opt,name=epoch,proto3" json:"epoch,omitempty"`
-	Verified     bool                   `protobuf:"varint,5,opt,name=verified,proto3" json:"verified,omitempty"`
-	// What the worker computed, and what the operator signed. Both are sent
-	// because the witness decides what a disagreement means, and cannot do that
-	// from a boolean.
-	Root       string `protobuf:"bytes,6,opt,name=root,proto3" json:"root,omitempty"`
-	SignedRoot string `protobuf:"bytes,7,opt,name=signed_root,json=signedRoot,proto3" json:"signed_root,omitempty"`
-	Worker     string `protobuf:"bytes,8,opt,name=worker,proto3" json:"worker,omitempty"`
-	DurationMs int64  `protobuf:"varint,9,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
+	// The two roots the worker COMPUTED from the proof, and nothing else.
+	//
+	// It is never told what the operator published, and it does not report a
+	// verdict. That is not a division of labour, it is what makes the answer
+	// worth having: a worker that does not know the expected value cannot report
+	// it without doing the work, so fabrication stops being something to sample
+	// for and becomes something that cannot happen.
+	//
+	// The witness holds the published roots and does the comparison. A worker
+	// that computes wrong roots produces a mismatch, which the witness resolves
+	// by re-verifying the epoch itself — it can waste our time, and it cannot
+	// make us believe anything.
+	ComputedPrevRoot string `protobuf:"bytes,6,opt,name=computed_prev_root,json=computedPrevRoot,proto3" json:"computed_prev_root,omitempty"`
+	ComputedCurrRoot string `protobuf:"bytes,7,opt,name=computed_curr_root,json=computedCurrRoot,proto3" json:"computed_curr_root,omitempty"`
+	Worker           string `protobuf:"bytes,8,opt,name=worker,proto3" json:"worker,omitempty"`
+	DurationMs       int64  `protobuf:"varint,9,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
 	// Set when the epoch could not be verified. Not a finding: an epoch that
 	// could not be fetched is unavailable, not evidence of anything.
 	Error         string `protobuf:"bytes,10,opt,name=error,proto3" json:"error,omitempty"`
@@ -520,23 +528,16 @@ func (x *Result) GetEpoch() int64 {
 	return 0
 }
 
-func (x *Result) GetVerified() bool {
+func (x *Result) GetComputedPrevRoot() string {
 	if x != nil {
-		return x.Verified
-	}
-	return false
-}
-
-func (x *Result) GetRoot() string {
-	if x != nil {
-		return x.Root
+		return x.ComputedPrevRoot
 	}
 	return ""
 }
 
-func (x *Result) GetSignedRoot() string {
+func (x *Result) GetComputedCurrRoot() string {
 	if x != nil {
-		return x.SignedRoot
+		return x.ComputedCurrRoot
 	}
 	return ""
 }
@@ -805,16 +806,14 @@ const file_proto_work_proto_rawDesc = "" +
 	"\x04from\x18\x03 \x01(\x03R\x04from\x12\x0e\n" +
 	"\x02to\x18\x04 \x01(\x03R\x02to\x12\x14\n" +
 	"\x05nonce\x18\x05 \x01(\tR\x05nonce\x12#\n" +
-	"\rdeadline_unix\x18\x06 \x01(\x03R\fdeadlineUnix\"\x91\x02\n" +
+	"\rdeadline_unix\x18\x06 \x01(\x03R\fdeadlineUnix\"\x9c\x02\n" +
 	"\x06Result\x12#\n" +
 	"\rassignment_id\x18\x01 \x01(\tR\fassignmentId\x12\x14\n" +
 	"\x05nonce\x18\x02 \x01(\tR\x05nonce\x12\x16\n" +
 	"\x06origin\x18\x03 \x01(\tR\x06origin\x12\x14\n" +
-	"\x05epoch\x18\x04 \x01(\x03R\x05epoch\x12\x1a\n" +
-	"\bverified\x18\x05 \x01(\bR\bverified\x12\x12\n" +
-	"\x04root\x18\x06 \x01(\tR\x04root\x12\x1f\n" +
-	"\vsigned_root\x18\a \x01(\tR\n" +
-	"signedRoot\x12\x16\n" +
+	"\x05epoch\x18\x04 \x01(\x03R\x05epoch\x12,\n" +
+	"\x12computed_prev_root\x18\x06 \x01(\tR\x10computedPrevRoot\x12,\n" +
+	"\x12computed_curr_root\x18\a \x01(\tR\x10computedCurrRoot\x12\x16\n" +
 	"\x06worker\x18\b \x01(\tR\x06worker\x12\x1f\n" +
 	"\vduration_ms\x18\t \x01(\x03R\n" +
 	"durationMs\x12\x14\n" +

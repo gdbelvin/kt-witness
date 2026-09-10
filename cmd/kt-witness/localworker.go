@@ -93,7 +93,7 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 			if err := q.Accept(res); err != nil {
 				return err
 			}
-			return recordWorkerResult(db, q, nil, res, log)
+			return recordWorkerResult(ctx, db, q, nil, resolvers, res, log)
 		},
 	}
 	go func() {

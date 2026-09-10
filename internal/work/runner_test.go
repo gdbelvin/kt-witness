@@ -121,10 +121,10 @@ func TestAnUnavailableEpochIsReportedRatherThanDropped(t *testing.T) {
 		switch {
 		case res.Epoch == 2 && res.Err == "":
 			t.Error("the unavailable epoch came back with no error")
-		case res.Epoch == 2 && res.Verified:
-			t.Error("an epoch that could not be fetched was reported verified")
-		case res.Epoch != 2 && !res.Verified:
-			t.Errorf("epoch %d should have verified", res.Epoch)
+		case res.Epoch == 2 && res.ComputedCurr != "":
+			t.Error("an epoch that could not be fetched reported a root anyway")
+		case res.Epoch != 2 && res.ComputedCurr == "":
+			t.Errorf("epoch %d reported no computed root", res.Epoch)
 		}
 	}
 }
