@@ -227,6 +227,10 @@ type worker struct {
 	// gov paces this host. Built in run, read by width, which both the Runner
 	// and the capacity report consult.
 	gov pacer
+
+	// lastWidth is what width reported last time, so it can say when the
+	// number moves rather than on every capacity tick.
+	lastWidth atomic.Int64
 }
 
 // pacer is what this worker needs from the governor, which is only ever
@@ -363,8 +367,13 @@ func (w *worker) width(origin string) int {
 	if spare < 1 {
 		spare = 1
 	}
-	w.log.Info("the machine is busy; narrowing rather than stopping",
-		"origin", origin, "would_run", n, "will_run", spare)
+	// Only when the answer moves. The capacity report asks this every thirty
+	// seconds, so an unconditional line here says the same thing a hundred and
+	// twenty times an hour and buries the moment it actually changed.
+	if w.lastWidth.Swap(int64(spare)) != int64(spare) {
+		w.log.Info("the machine is busy; narrowing rather than stopping",
+			"origin", origin, "would_run", n, "will_run", spare)
+	}
 	return spare
 }
 
