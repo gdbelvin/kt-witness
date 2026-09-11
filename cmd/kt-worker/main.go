@@ -281,7 +281,7 @@ type pacer interface {
 	// Measured reports whether a usable sample exists yet.
 	Measured() bool
 	// Spare is how many more epochs this machine can currently afford.
-	Spare() float64
+	Permits() float64
 	// Ready reports whether there is room for want concurrent verifications.
 	Ready(want float64) bool
 	// Observed is the last measured load and the ceiling, for saying so.
@@ -399,7 +399,7 @@ func (w *worker) width(origin string) int {
 		// narrowing below it is a claim that needs evidence.
 		return n
 	}
-	spare := int(w.gov.Spare())
+	spare := int(w.gov.Permits())
 	if spare >= n {
 		return n
 	}

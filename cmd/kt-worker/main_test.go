@@ -139,7 +139,7 @@ type stubPacer struct {
 }
 
 func (p stubPacer) Measured() bool               { return p.measured }
-func (p stubPacer) Spare() float64               { return p.spare }
+func (p stubPacer) Permits() float64             { return p.spare }
 func (p stubPacer) Ready(want float64) bool      { return p.spare >= want }
 func (p stubPacer) Observed() (float64, float64) { return 0, 0 }
 

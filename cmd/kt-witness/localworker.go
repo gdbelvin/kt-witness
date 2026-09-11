@@ -50,12 +50,9 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 		// How much of this box to use, asked fresh on every pass of the
 		// request loop.
 		//
-		// This is now the ONLY consumer of the governor. Spare() reads permits
-		// less what has been Acquired, and the backwards sweep was the only
-		// thing that ever acquired any — so with the sweep gone this is simply
-		// the measured allowance. It is left as Spare() rather than Permits()
-		// because the two are the same number today and Spare() stays correct
-		// if something starts taking permits again.
+		// This is now the ONLY consumer of the governor on this machine, which
+		// is why Spare() is gone: it returned permits less what the backwards
+		// sweep had acquired, and with the sweep deleted nothing acquires.
 		//
 		// A fixed n gated on "wait until there is room for n" was the tempting
 		// alternative and would have starved silently: live witnessing does not
@@ -69,7 +66,7 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 		Parallel: func(string) int {
 			w := n
 			if g != nil {
-				switch p := int(g.Spare()); {
+				switch p := int(g.Permits()); {
 				case p < 1:
 					w = 1 // always some progress; one replay is 3.7 GB of 44
 				case p > n:

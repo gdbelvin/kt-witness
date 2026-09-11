@@ -89,10 +89,9 @@ type Governor struct {
 
 	Log *slog.Logger
 
-	mu       sync.Mutex
-	permits  float64
-	inFlight int
-	last     cpuload.Sample
+	mu      sync.Mutex
+	permits float64
+	last    cpuload.Sample
 	// started records whether a complete sample has been applied. The first one
 	// sets the permit level outright; the rest correct it.
 	started bool
@@ -230,7 +229,6 @@ func (g *Governor) step(sample cpuload.Sample) {
 	metrics.Set("kt_witness_cpu_self_cores", nil, sample.SelfCores)
 	metrics.Set("kt_witness_cpu_machine_cores", nil, sample.MachineCores)
 	metrics.Set("kt_witness_audit_permits", nil, g.permits)
-	metrics.Set("kt_witness_audit_in_flight", nil, float64(g.inFlight))
 
 	if !sample.Complete {
 		// Cannot see. Hold at a conservative single permit rather than guessing
@@ -308,94 +306,50 @@ func (g *Governor) step(sample cpuload.Sample) {
 		g.Log.Debug("backlog pacing", "self_cores", fmt.Sprintf("%.2f", sample.SelfCores),
 			"machine_cores", fmt.Sprintf("%.2f", sample.MachineCores),
 			"headroom", fmt.Sprintf("%.2f", headroom),
-			"permits", fmt.Sprintf("%.2f", g.permits), "in_flight", g.inFlight)
+			"permits", fmt.Sprintf("%.2f", g.permits))
 	}
 }
 
-// Acquire blocks until the sweep is allowed to start another verification.
+// Permits is the allowance: how many concurrent verifications this machine can
+// currently afford. It is what sizes the local worker's share of the queue.
 //
-// Permits are fractional and in-flight work is integral, so the comparison is
-// "is there at least one whole permit spare". At zero permits the sweep pauses
-// entirely, which is the correct response to a busy machine.
-func (g *Governor) Acquire(ctx context.Context) error {
-	if g == nil {
-		return nil
-	}
-	for {
-		g.mu.Lock()
-		if float64(g.inFlight) < g.permits {
-			g.inFlight++
-			g.mu.Unlock()
-			return nil
-		}
-		g.mu.Unlock()
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
-	}
-}
-
-func (g *Governor) Release() {
-	if g == nil {
-		return
-	}
-	g.mu.Lock()
-	if g.inFlight > 0 {
-		g.inFlight--
-	}
-	g.mu.Unlock()
-}
-
-// Spare reports how much of the allowance nobody is using: permits less what
-// Acquire currently holds.
-//
-// It exists because this machine has two consumers of the same budget and only
-// one of them takes permits. The backwards sweep Acquires per epoch; the queue
-// worker sizes a whole assignment at once and holds nothing. Reading Permits
-// alone, each would size itself for the full allowance and the box would run
-// two full-width sweeps — sixteen proof replays at 3.7 GB against a 44 GB
-// limit, which is an OOM kill of the whole witness, equivocation detection
-// included.
-func (g *Governor) Spare() float64 {
+// There was a second accessor, Spare(), returning permits less what Acquire
+// held — because the box had two consumers of one budget and only one of them
+// took permits. The backwards sweep was that one, and it is gone; nothing
+// acquires now, so the two numbers were the same number and the difference
+// between them was a trap for whoever read it next.
+func (g *Governor) Permits() float64 {
 	if g == nil {
 		return 0
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.permits - float64(g.inFlight)
-}
-
-// Permits reports the current allowance, for logging and tests.
-func (g *Governor) Permits() float64 {
-	g.mu.Lock()
-	defer g.mu.Unlock()
 	return g.permits
 }
 
-// WaitForWork blocks until the machine has room for want concurrent
-// verifications, and is how a worker paces its REQUESTS for work.
+// Ready answers "can this machine support the work I am about to start", and
+// is how a worker paces its REQUESTS for work.
 //
 // It deliberately takes no permit and holds nothing. An earlier design had the
-// worker Acquire around each epoch, which put the governor in the middle of an
+// worker acquire around each epoch, which put the governor in the middle of an
 // assignment it had already accepted: the machine would take a lease on a
 // range, then refuse to work it, and the range sat on a timer while the worker
 // idled. Pacing belongs at the point where more work is taken on, because that
 // is the only decision that is still free to be made differently.
 //
 // want is the parallelism the caller is about to use, so the question asked is
-// the honest one — "can this machine support the work I am about to start" —
-// rather than "is there one core spare", which is true on a machine already
-// saturated by this same worker.
+// the honest one, rather than "is there one core spare" — which is true on a
+// machine already saturated by this same worker.
 //
 // Note that permits are floored at minPermits, so a caller asking for one will
 // never wait. That is intended: a worker that intends to do one thing at a time
 // is not what a busy machine needs protecting from.
-// Ready is WaitForWork's question without the waiting, so a caller can say out
-// loud that it is holding back. A gate that blocks silently is indistinguishable
-// from a broken worker, and this project keeps rediscovering that.
+//
+// It answers rather than blocks, so a caller can say out loud that it is
+// holding back. There was a WaitForWork beside this that did block; it lost its
+// last caller when the worker started logging "holding off asking for work",
+// and a gate that blocks silently is indistinguishable from a broken worker —
+// which this project keeps rediscovering.
 func (g *Governor) Ready(want float64) bool {
 	if g == nil {
 		return true
@@ -404,25 +358,6 @@ func (g *Governor) Ready(want float64) bool {
 		want = 1
 	}
 	return g.Permits() >= want
-}
-
-func (g *Governor) WaitForWork(ctx context.Context, want float64) error {
-	if g == nil {
-		return nil
-	}
-	if want < 1 {
-		want = 1
-	}
-	for {
-		if g.Permits() >= want {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(governorInterval / 3):
-		}
-	}
 }
 
 // Observed reports the last measured machine load and the ceiling it is being

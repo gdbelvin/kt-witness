@@ -89,7 +89,6 @@ const (
 	// Counters maintained by the witness loop rather than derived from storage.
 	MRounds            = "kt_witness_rounds_total"
 	MAuditPermits      = "kt_witness_audit_permits"
-	MAuditInFlight     = "kt_witness_audit_in_flight"
 	MCPUSelfCores      = "kt_witness_cpu_self_cores"
 	MCPUMachineCores   = "kt_witness_cpu_machine_cores"
 	MCPUSampleComplete = "kt_witness_cpu_sample_complete"
@@ -166,7 +165,6 @@ func Init(version, commit, built string) {
 
 	d(MRounds, metrics.Counter, "Witness rounds completed.")
 	d(MAuditPermits, metrics.Gauge, "Concurrent verifications the CPU governor currently allows this machine. It is what sizes the local worker's share of the queue, so zero means this box is yielding — correct on a busy machine, a stall if it persists on an idle one. Borrowed workers are unaffected; they pace themselves.")
-	d(MAuditInFlight, metrics.Gauge, "Backlog verifications running right now.")
 	d(MCPUSelfCores, metrics.Gauge, "CPU cores this container is using, from cgroup v2 cpu.stat.")
 	d(MCPUMachineCores, metrics.Gauge, "CPU cores busy across the whole host, from /proc/stat, which is not namespaced inside a container.")
 	d(MCPUSampleComplete, metrics.Gauge, "1 if the governor could read both CPU figures. At 0 it is pacing blind and holds a conservative single permit.")
