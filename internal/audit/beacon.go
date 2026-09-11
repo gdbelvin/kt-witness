@@ -104,10 +104,6 @@ func (b *Beacon) Round(ctx context.Context, number uint64) (*Round, error) {
 	return b.fetch(ctx, fmt.Sprintf("%s/%d", base, number))
 }
 
-func (b *Beacon) Latest(ctx context.Context) (*Round, error) {
-	return b.fetch(ctx, b.URL)
-}
-
 func (b *Beacon) fetch(ctx context.Context, url string) (*Round, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
