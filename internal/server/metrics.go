@@ -88,6 +88,7 @@ const (
 
 	// Counters maintained by the witness loop rather than derived from storage.
 	MRounds            = "kt_witness_rounds_total"
+	MDownloadLimit     = "kt_witness_download_limit_bytes"
 	MAuditPermits      = "kt_witness_audit_permits"
 	MCPUSelfCores      = "kt_witness_cpu_self_cores"
 	MCPUMachineCores   = "kt_witness_cpu_machine_cores"
@@ -164,6 +165,7 @@ func Init(version, commit, built string) {
 	d(MDiskUsedRatio, metrics.Gauge, "Fraction of the database filesystem in use, 0 to 1. A witness that runs out of disk stops witnessing.")
 
 	d(MRounds, metrics.Counter, "Witness rounds completed.")
+	d(MDownloadLimit, metrics.Gauge, "Bytes per second this process will read from the network, across all logs. Zero is uncapped. A non-zero value here is why network_bytes_in_total is flat at a number below the line rate: the cap is deliberate, and it is set below the link so the ISP's downstream queue stays short enough for a video call on the same connection to work.")
 	d(MAuditPermits, metrics.Gauge, "Concurrent verifications the CPU governor currently allows this machine. It is what sizes the local worker's share of the queue, so zero means this box is yielding — correct on a busy machine, a stall if it persists on an idle one. Borrowed workers are unaffected; they pace themselves.")
 	d(MCPUSelfCores, metrics.Gauge, "CPU cores this container is using, from cgroup v2 cpu.stat.")
 	d(MCPUMachineCores, metrics.Gauge, "CPU cores busy across the whole host, from /proc/stat, which is not namespaced inside a container.")

@@ -28,6 +28,7 @@ import (
 	"github.com/gdbsecurity/kt-witness/internal/cosig"
 	"github.com/gdbsecurity/kt-witness/internal/export"
 	"github.com/gdbsecurity/kt-witness/internal/metrics"
+	"github.com/gdbsecurity/kt-witness/internal/netmeter"
 	"github.com/gdbsecurity/kt-witness/internal/server"
 	"github.com/gdbsecurity/kt-witness/internal/source"
 	"github.com/gdbsecurity/kt-witness/internal/source/akd"
@@ -225,6 +226,19 @@ type config struct {
 		// number is visible from inside this process. So it is measured and
 		// configured — raise it until throughput stops improving.
 		PrefetchWorkers int `json:"prefetch_workers"`
+
+		// MaxDownloadMbit holds every download this process makes below a rate,
+		// in megabits per second, across all logs together. Zero is unlimited,
+		// which is what this did before and is right for a machine on a link
+		// nobody else is using.
+		//
+		// It exists because the generator pulls as hard as the CDN will serve,
+		// and on a home connection that is the whole link: measured here at
+		// 674-899 Mbit/s against a line of about 885, which left a video call
+		// on the same connection unusable. Set it below the line rate, not at
+		// it — what ruins a call is the ISP's downstream queue filling up, and
+		// the queue only stays short if the link is never quite full.
+		MaxDownloadMbit float64 `json:"max_download_mbit"`
 
 		// PrefetchMinFreeBytes is free space the cache will not consume,
 		// whatever its own cap says. The volume also holds the store and
@@ -726,6 +740,16 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 				MinFreeBytes: cfg.Audit.PrefetchMinFreeBytes,
 				Log:          log,
 			}
+			// Applied here rather than inside the prefetcher: the cap is a fact
+			// about the link, and three different things in this process download
+			// over it.
+			if mbit := cfg.Audit.MaxDownloadMbit; mbit > 0 {
+				netmeter.SetLimit(mbit * 1e6 / 8)
+				log.Info("download rate capped", "mbit_per_sec", mbit,
+					"note", "set below the line rate; a full link is what ruins a call on the same connection")
+			}
+			metrics.Set(server.MDownloadLimit, nil, netmeter.Limit())
+
 			files, bytes := prefetch.Stats()
 			log.Info("proof prefetch enabled", "dir", d,
 				"cap_gb", prefetch.MaxBytes>>30, "adopted_files", files, "adopted_gb", bytes>>30)

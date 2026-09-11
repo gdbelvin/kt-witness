@@ -356,7 +356,11 @@ func (p *Prefetcher) Fetch(ctx context.Context, origin, logDirectory string, epo
 	if err != nil {
 		return err
 	}
-	n, err := io.Copy(f, resp.Body)
+	// Through netmeter rather than straight off the body: that is where the
+	// bytes are counted AND where the download is held below the line rate.
+	// This is the path that pulls ~90% of everything, so a cap that missed it
+	// would not be a cap.
+	n, err := io.Copy(f, netmeter.Reader(ctx, origin, resp.Body))
 	closeErr := f.Close()
 	if err != nil || closeErr != nil {
 		os.Remove(tmp)
@@ -370,7 +374,6 @@ func (p *Prefetcher) Fetch(ctx context.Context, origin, logDirectory string, epo
 		return err
 	}
 
-	netmeter.Add(origin, n)
 	p.mu.Lock()
 	p.cached[k] = n
 	p.markReady(origin, epoch)

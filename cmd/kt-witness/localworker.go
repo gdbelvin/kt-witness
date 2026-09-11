@@ -211,6 +211,6 @@ func verifyEpochHere(ctx context.Context, r audit.Resolver, v audit.Verifier,
 	// epochs the generator has already downloaded. Passing "" here would send
 	// this machine to the CDN for bytes sitting on its own disk — the same
 	// mistake the proof server was making for every remote worker.
-	return g.ComputeRoots(ctx, ref.LogDirectory, epoch,
+	return g.ComputeRoots(ctx, origin, ref.LogDirectory, epoch,
 		ref.PrevRoot, ref.CurrRoot, pf.Path(origin, epoch), timeout)
 }

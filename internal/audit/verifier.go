@@ -42,8 +42,8 @@ func (r *Result) VerificationFailed() bool {
 // run ahead of the CPU: the prefetcher downloads while the verifier works,
 // rather than the two taking turns.
 type Verifier interface {
-	Verify(ctx context.Context, logDirectory string, epoch int64, prevRoot, currRoot string, timeout time.Duration) (*Result, error)
-	VerifyCached(ctx context.Context, logDirectory string, epoch int64, prevRoot, currRoot, proofPath string, timeout time.Duration) (*Result, error)
+	Verify(ctx context.Context, origin, logDirectory string, epoch int64, prevRoot, currRoot string, timeout time.Duration) (*Result, error)
+	VerifyCached(ctx context.Context, origin, logDirectory string, epoch int64, prevRoot, currRoot, proofPath string, timeout time.Duration) (*Result, error)
 	Close()
 }
 

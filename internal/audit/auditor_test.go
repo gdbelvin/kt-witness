@@ -22,11 +22,11 @@ import (
 // for.
 type stubVerifier struct{ res Result }
 
-func (v stubVerifier) Verify(ctx context.Context, dir string, epoch int64, prev, curr string, to time.Duration) (*Result, error) {
-	return v.VerifyCached(ctx, dir, epoch, prev, curr, "", to)
+func (v stubVerifier) Verify(ctx context.Context, origin, dir string, epoch int64, prev, curr string, to time.Duration) (*Result, error) {
+	return v.VerifyCached(ctx, origin, dir, epoch, prev, curr, "", to)
 }
 
-func (v stubVerifier) VerifyCached(_ context.Context, _ string, epoch int64, _, _, _ string, _ time.Duration) (*Result, error) {
+func (v stubVerifier) VerifyCached(_ context.Context, _, _ string, epoch int64, _, _, _ string, _ time.Duration) (*Result, error) {
 	r := v.res
 	r.Epoch = epoch
 	return &r, nil

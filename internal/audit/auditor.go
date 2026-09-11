@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/gdbsecurity/kt-witness/internal/metrics"
-	"github.com/gdbsecurity/kt-witness/internal/netmeter"
 
 	"github.com/gdbsecurity/kt-witness/internal/store"
 )
@@ -200,7 +199,7 @@ func (a *Auditor) Run(ctx context.Context, r Resolver) error {
 
 		a.Log.Info("auditing epoch", "origin", origin, "epoch", epoch,
 			"strategy", strategy, "rate", rate, "age", age, "attempt", ar.Attempts)
-		res, err := a.Verifier.Verify(ctx, ref.LogDirectory, epoch, ref.PrevRoot, ref.CurrRoot, a.Timeout)
+		res, err := a.Verifier.Verify(ctx, origin, ref.LogDirectory, epoch, ref.PrevRoot, ref.CurrRoot, a.Timeout)
 		if err != nil {
 			return a.unavailable(ar, epoch, "fetch", err)
 		}
@@ -249,10 +248,6 @@ func (a *Auditor) Run(ctx context.Context, r Resolver) error {
 		// contributing looks like a log that got slower.
 		metrics.Inc(MetricByWorker, map[string]string{"worker": "witness-live", "origin": origin})
 		metrics.Add("kt_witness_audit_bytes_total", lbl, float64(ar.Bytes))
-		// The verifier fetches proofs over its own HTTP stack, outside any
-		// transport we wrap, so without this the single largest consumer of
-		// bandwidth in the system would not appear in the bandwidth metric.
-		netmeter.Add(origin, ar.Bytes)
 		metrics.Add("kt_witness_audit_duration_seconds_sum", lbl, float64(ar.DurationMS)/1000)
 
 		if err := a.Store.SetAuditProgress(origin, epoch); err != nil {

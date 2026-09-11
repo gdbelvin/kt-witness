@@ -161,7 +161,7 @@ func (r *Replayer) replayAKD(ctx context.Context, m *Manifest) error {
 	// manifest describes — and a mismatch between the manifest's roots and the
 	// stored blob's path shows up as a fetch failure rather than a false pass.
 	dir := r.server.URL() + "/" + path.Join(string(KindAKD), slug(m.Origin), "blobs")
-	res, err := r.verifier.Verify(ctx, dir, m.Seq, m.PrevRoot, m.CurrRoot, r.timeout)
+	res, err := r.verifier.Verify(ctx, m.Origin, dir, m.Seq, m.PrevRoot, m.CurrRoot, r.timeout)
 	if err != nil {
 		return err
 	}
