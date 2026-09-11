@@ -380,10 +380,16 @@ func TestAFailedReportAbandonsTheRestOfTheRange(t *testing.T) {
 // per-origin answer a host can give is not consumed by this loop.
 //
 // So this pins what remains, which is the load-bearing half: Parallel is asked
-// exactly once per Run, BEFORE any work is requested, and its answer sets how
-// much work the runner then asks for — want is twice the width, one epoch being
-// worked per slot and one queued behind it. Drop the call and the pull size
-// goes with it.
+// with the whole-machine question BEFORE any work is requested, and its answer
+// sets how much work the runner then asks for — want is twice the width, one
+// epoch being worked per slot and one queued behind it. Drop the call and the
+// pull size goes with it.
+//
+// It used to also pin "exactly once per Run", and that was pinning a bug. A
+// host whose width starts at a floor and rises — the witness, reading a
+// governor that has not sampled anything yet — was frozen at the floor for the
+// life of the process. See TestAWidthThatStartsAtItsFloorStillReachesThePool.
+// What matters here is the FIRST call and what it sizes, not the count.
 func TestParallelSizesThePullBeforeAnyWorkIsAsked(t *testing.T) {
 	const par = 3
 
@@ -432,8 +438,8 @@ func TestParallelSizesThePullBeforeAnyWorkIsAsked(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(origins) != 1 {
-		t.Errorf("Parallel consulted %d times, want once — the pool is sized once per Run", len(origins))
+	if len(origins) == 0 {
+		t.Error("Parallel was never consulted; nothing sized the pull")
 	}
 	if len(origins) > 0 && origins[0] != "" {
 		t.Errorf("Parallel was asked about %q; Run sizes its pool with the whole-machine question", origins[0])
@@ -623,5 +629,79 @@ func TestTheRunnerAsksInBatchesNotPerEpoch(t *testing.T) {
 				"bounds concurrency and the request size should follow it, not "+
 				"trickle one at a time", i, want, par)
 		}
+	}
+}
+
+// TestAWidthThatStartsAtItsFloorStillReachesThePool.
+//
+// The witness answers Parallel from a governor whose permits START AT ONE,
+// because a load sampler has measured nothing until an interval has passed.
+// Run used to read Parallel once, at second zero, and size its pool from that
+// answer — so the witness's own worker verified ONE epoch at a time for the
+// life of the process on a thirty-two core box, while the capacity it reported
+// climbed to twenty-eight and was believed. Meta was never leased at all:
+// asking for one epoch, the queue's depth-ordered pick always chose the other
+// log, and Meta's downloaded proofs sat in the cache.
+//
+// So the ceiling and the current width are now two different numbers. Pool is
+// the ceiling and does not move; Parallel is re-read every pass. This test
+// starts the width at one — the floor — raises it once the runner is up, and
+// requires the runner to find the room. Pin Pool to Parallel's first answer
+// again and the peak stays at one.
+func TestAWidthThatStartsAtItsFloorStillReachesThePool(t *testing.T) {
+	const ceiling = 6
+
+	width := int32(1) // the governor's floor, before it has measured anything
+	o := newOverlap(4)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	asks := make(chan struct{}, 1)
+	r := &Runner{
+		Name:     "witness",
+		Pool:     ceiling,
+		Parallel: func(string) int { return int(atomic.LoadInt32(&width)) },
+		Next: func(_ context.Context, want int) (Assignment, error) {
+			select {
+			case asks <- struct{}{}:
+			default:
+			}
+			// One epoch per assignment, so the width alone decides how many are
+			// ever live together — a wide range would reach four in the pool
+			// whatever the request loop believed.
+			return Assignment{ID: "a", From: 1, To: 1}, nil
+		},
+		Verify: o.verify,
+		Report: func(context.Context, Result) error { return nil },
+	}
+	wait := start(t, ctx, r)
+
+	// Let it run at the floor first, so that a pool sized from the floor has
+	// every chance to show itself before the width moves.
+	select {
+	case <-asks:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the runner never asked for work")
+	}
+	select {
+	case <-o.gate:
+		t.Fatal("four epochs ran at once while the width was one")
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	atomic.StoreInt32(&width, ceiling) // the sampler has now measured the box
+
+	select {
+	case <-o.gate:
+	case <-time.After(10 * time.Second):
+		t.Error("the width rose to 6 and the runner never went past 3 epochs at " +
+			"once; Parallel is being read once rather than every pass")
+	}
+	cancel()
+	wait()
+
+	if p := o.Peak(); p < 4 {
+		t.Errorf("peaked at %d epochs at once, want at least 4", p)
 	}
 }

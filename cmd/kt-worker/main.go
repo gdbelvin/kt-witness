@@ -601,7 +601,25 @@ func (w *worker) run(ctx context.Context) error {
 		// epochs instead of eight, not to stop. Stopping altogether is reserved
 		// for the machine genuinely belonging to someone else, which is what
 		// permits falling to zero means and what the gate below now tests.
-		Parallel: w.width,
+		Parallel: w.parallelNow,
+		// The ceiling: this machine's CPU budget divided by what one epoch
+		// costs, narrowed by memory. Both move slowly or not at all.
+		//
+		// Deliberately NOT w.width, which narrows further on measured load.
+		// Until now that narrowing reached the Runner exactly once, at startup,
+		// before the sampler had measured anything — so on this laptop it has
+		// never actually limited anything, and the paragraph above describing
+		// it as the pacing mechanism has been aspirational the whole time. What
+		// does the pacing here is BeforeNext, and it demonstrably fires.
+		//
+		// Now that the Runner re-reads Parallel, passing width would make that
+		// narrowing real for the first time: the water marks would follow a
+		// one-minute load average that includes this worker's own bursts, on
+		// the machine currently doing two thirds of the fleet's epochs. That is
+		// a change in how hard somebody's laptop works, which is theirs to
+		// make, not a side effect of fixing the witness. width still sets the
+		// capacity report and still gates through the governor.
+		Pool: par,
 		// So the gate is now only the extreme case: is there room for anything
 		// at all. Permits reach zero when everything else on the box already
 		// exceeds this worker's whole budget — the owner is using their laptop

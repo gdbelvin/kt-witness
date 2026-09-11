@@ -67,13 +67,23 @@ type Runner struct {
 	// half-finished assignment sitting on a lease while the machine idled.
 	BeforeNext func(ctx context.Context) error
 
-	// Parallel sizes this machine's pool. Nil means N-2.
+	// Parallel is how much of this machine to use RIGHT NOW, asked fresh on
+	// every pass of the request loop with the empty origin — meaning "what can
+	// this host do, whatever it is handed". It sets the water marks, not the
+	// pool: Pool below is the ceiling, and this decides how much of it to fill.
 	//
-	// Consulted ONCE, at the start of Run, with the empty origin — meaning "what
-	// can this host do, whatever it is handed". It used to be asked per
-	// assignment with the assignment's origin, and that is no longer possible:
-	// the pool outlives any one range and draws from a single channel that
-	// mixes them.
+	// It used to be consulted ONCE, at the start of Run, and that was a bug
+	// with a large price. The witness answers this from its governor, whose
+	// permits START AT THE FLOOR — one — because a load sampler needs an
+	// interval before it can say anything. Read once, at second zero, the
+	// witness's own worker was pinned to a pool of one for the life of the
+	// process: a thirty-two core box verifying one epoch at a time while
+	// reporting twenty-eight, running at 4.7 of the 30 cores it was allowed,
+	// and leasing NOTHING for Meta — with `want` of one, the queue's
+	// depth-ordered pick always landed on the deeper log. Twenty-seven Meta
+	// proofs sat downloaded and idle.
+	//
+	// So it is asked every time round, and the value is clamped into [1, Pool].
 	//
 	// The origin argument survives because the question it answers is still
 	// real. A proof's size is a fact about the log, not the machine — a
@@ -82,21 +92,37 @@ type Runner struct {
 	// Asking with "" gets the conservative answer, the width of the largest
 	// log the host serves.
 	//
-	// That costs nothing on this fleet, where each machine serves one log: the
-	// laptop verifies WhatsApp and the GPU box Meta, so "" returns exactly that
-	// log's number. It costs throughput on a host serving both — the witness's
-	// own worker — which runs WhatsApp at Meta's width. The alternative is a
-	// per-origin bound on work in flight rather than a single pool, and that is
-	// worth doing when a mixed host is the bottleneck. It is not today.
+	// That costs nothing on a machine serving one log: the laptop verifies
+	// WhatsApp, so "" returns exactly WhatsApp's number. It costs throughput on
+	// a host serving both — the witness's own worker — which runs WhatsApp at
+	// Meta's width. The alternative is a per-origin bound on work in flight
+	// rather than a single pool. That is now the largest remaining thing in the
+	// way of a mixed host, and it is not fixed here.
 	//
 	// A function rather than a number because the two kinds of host answer
 	// differently. A laptop answers with a constant — N-2 of the cores it is
-	// allowed — and paces itself by not asking for more work. The witness
-	// cannot: it shares its box with live witnessing, which never yields, so
-	// its measured headroom sits at the floor and a fixed threshold would wait
-	// forever. It answers with what its governor says the machine can currently
-	// afford.
+	// allowed — and paces itself by not asking for more work, through
+	// BeforeNext. The witness cannot: it shares its box with live witnessing,
+	// which never yields, so its measured headroom sits at the floor and a
+	// fixed threshold would wait forever. It answers with what its governor
+	// says the machine can currently afford, which is exactly why this has to
+	// be re-read rather than sampled at startup.
 	Parallel func(origin string) int
+
+	// Pool is the hard ceiling on epochs in flight: the number of worker
+	// goroutines, and the depth of the channel feeding them. It does not move,
+	// because the things that set it do not — a container's memory limit, a
+	// verifier's own semaphore.
+	//
+	// It is separate from Parallel because the two answer different questions.
+	// This one is "what could this host survive being handed", asked once; that
+	// one is "what should it take on right now", asked continuously. Collapsing
+	// them is what froze the witness at one: a ceiling read from a control loop
+	// before the loop had measured anything.
+	//
+	// Zero means Parallel's answer at startup, which is right for a host whose
+	// ceiling genuinely does not move.
+	Pool int
 
 	Name string
 	Idle time.Duration
@@ -143,12 +169,30 @@ func (r *Runner) Run(ctx context.Context) error {
 	if timeout <= 0 {
 		timeout = 15 * time.Minute
 	}
-	par := DefaultParallel()
-	if r.Parallel != nil {
-		par = r.Parallel("")
+	pool := r.Pool
+	if pool < 1 {
+		pool = DefaultParallel()
+		if r.Parallel != nil {
+			pool = r.Parallel("")
+		}
 	}
-	if par < 1 {
-		par = 1
+	if pool < 1 {
+		pool = 1
+	}
+	// How much of the pool to fill, now. Clamped into the pool so the request
+	// loop can never ask for more than the channel behind it will hold.
+	width := func() int {
+		if r.Parallel == nil {
+			return pool
+		}
+		switch n := r.Parallel(""); {
+		case n < 1:
+			return 1
+		case n > pool:
+			return pool
+		default:
+			return n
+		}
 	}
 
 	// Two contexts, and the split is the point.
@@ -170,7 +214,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	// a while, which is the mistake the old dispatcher made in the other
 	// direction — it pushed forty ranges at one worker, every one of them
 	// counting down a deadline it could not meet.
-	jobs := make(chan job, par*2)
+	jobs := make(chan job, pool*2)
 	var inFlight atomic.Int64
 
 	// Closed when reporting fails, which means the stream is gone. That is
@@ -184,7 +228,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	var failOnce sync.Once
 
 	var wg sync.WaitGroup
-	for i := 0; i < par; i++ {
+	for i := 0; i < pool; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -233,6 +277,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		// everything up to the high one, so requests come in batches the size
 		// of the pool rather than one at a time. Above it there is still work
 		// queued behind every slot and nothing to gain by asking.
+		par := width()
 		inUse := inFlight.Load()
 		if inUse > int64(par) {
 			select {

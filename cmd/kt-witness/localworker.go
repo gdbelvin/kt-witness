@@ -79,6 +79,21 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 			}
 			return w
 		},
+		// The ceiling, which does not move: the verifier's own semaphore is
+		// what actually bounds concurrent replays, so a goroutine pool any
+		// wider than it buys nothing and one narrower than it wastes the box.
+		//
+		// It has to be stated separately from Parallel above, and this is the
+		// whole reason Pool exists. Parallel reads the governor, and a
+		// governor's permits start at their FLOOR — a load sampler cannot say
+		// anything until an interval has passed. The Runner used to size its
+		// pool from one call to Parallel at startup, so it read that floor:
+		// this worker ran ONE epoch at a time, forever, on a thirty-two core
+		// machine, while the capacity it reported every thirty seconds climbed
+		// to twenty-eight and was believed. Meta went unleased entirely —
+		// asking for one epoch, the queue's depth-ordered pick always chose
+		// WhatsApp — while its downloaded proofs sat in the cache.
+		Pool: n,
 		// No request gate here, deliberately: the width above is this host's
 		// yielding, and a second brake that can never release would be one
 		// silent stall waiting to happen.
