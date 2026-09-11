@@ -26,7 +26,7 @@
     "prefetch_dir": "/data/proof-cache",
     "prefetch_bytes": 68719476736,
     "dscp_class": 8,
-    "max_download_mbit": 0,
+    "max_download_mbit": 1400,
     "prefetch_workers": 64,
     "prefetch_min_free_bytes": 5368709120,
     "pace_backlog": true,
