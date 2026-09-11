@@ -6,8 +6,8 @@ a timed run recorded in this repository.
 ## The short version
 
 **Infrastructure is not the cost.** Witnessing ten origins — including Meta,
-WhatsApp, Signal, Apple, Proton and 80 CT logs — needs about **a quarter of one
-CPU core, 1.2 TB/month of ingress, and ~45 GB of disk.** That is roughly $1,900
+WhatsApp, Signal, Apple, Proton and 80 CT logs — needs about **a third of one
+CPU core, a few TB/month of ingress, and ~45 GB of disk.** That is roughly $1,900
 a year of real hardware, and near zero on a machine you already own.
 
 The cost is **engineering and attention**: adapters that break when providers
@@ -17,7 +17,9 @@ runs out.
 
 ## Measured resource use
 
-Poll interval 60 s; tier-B sampling at 0.1 for the AKD logs.
+Poll interval 60 s. The table below was built assuming tier-B sampling at 0.1
+for the AKD logs; see the correction under it, because that is not what the tip
+actually does.
 
 | Log | GB/day | TB/yr | CPU h/day | Disk GB | Basis |
 |---|---:|---:|---:|---:|---|
@@ -30,7 +32,21 @@ Poll interval 60 s; tier-B sampling at 0.1 for the AKD logs.
 | static CT × 80 | 1.97 | 0.72 | 0.30 | ~0 | *modeled*: ~700 B checkpoint + ~2 × 8 KB tiles per poll |
 | **Total** | **40.1** | **14.7** | **6.45** | **~45** | |
 
-**0.27 cores sustained. 1.2 TB/month. ~45 GB of disk.**
+**~0.3 cores sustained. ~45 GB of disk.** See the correction below before
+using the bandwidth total.
+
+**The sampling premise in this table is wrong for the tip.** `sample_rate` 0.1
+governs the *backlog* only: `audit.SelectionRate` returns 1 for any epoch inside
+`DefaultTipWindow`, so every newly published epoch is audited exhaustively. The
+"10% sampled" basis therefore understates steady-state Meta and WhatsApp by 10×.
+For CPU that error is almost exactly cancelled by the Rust-to-Go speedup noted
+below (10 ÷ 8), which is why the core figure barely moves. **For bandwidth it is
+not cancelled by anything: the real steady-state ingress is nearer 370 GB/day,
+up to ~11 TB/month at the table's conservative blob sizes, and probably about
+half of that in practice — not 1.2 TB/month.** The funded plan's own "137 TB
+across eight drives" for a year of retained proofs is ~375 GB/day, which agrees
+with the exhaustive reading rather than the sampled one. The table has not yet
+been rebuilt around this.
 
 **These blob sizes are conservative.** Capturing a corpus of real proofs
 measured Meta epochs at ~150 MB rather than 284 MB, WhatsApp at ~30–37 MB
@@ -59,7 +75,9 @@ is why 14.7 TB/year costs nothing on a dedicated box and would cost real money
 only on a hyperscaler billing egress.
 
 **Sampling is doing enormous work.** Meta at 100% would be 204 GB/day and
-WhatsApp 168 GB/day. At 0.1 they are 20 and 17. The security argument for
+WhatsApp 168 GB/day, and at 0.1 they would be 20 and 17 — but that saving
+applies only to the backlog, since the tip is audited exhaustively. The security
+argument for
 sampling is in [design.md](design.md); the economic argument is a 10× bill.
 
 **Signal is the surprise.** It carries no tier-B cost at all, yet costs more

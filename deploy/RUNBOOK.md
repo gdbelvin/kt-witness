@@ -362,12 +362,18 @@ signal.
 
 Measured; the full model is in [docs/cost.md](../docs/cost.md).
 
-- **Bandwidth**: **~40 GB/day** (~1.2 TB/month), essentially all tier B at
-  `sample_rate` 0.1 — ~20 GB Meta, ~17 GB WhatsApp. Raising the rate to 1.0
-  means ~372 GB/day; check any cap first. Almost all of it is *ingress*.
-- **CPU**: ~0.27 cores sustained, but bursty. One Meta epoch was ~24 s wall and
+- **Bandwidth**: **~200–370 GB/day**, essentially all tier B. `sample_rate` 0.1
+  applies to the backlog only — the tip is audited exhaustively — so the older
+  "~40 GB/day, 1.2 TB/month" figure understates steady state by about 10×. The
+  upper end uses the conservative blob sizes in cost.md; measured proofs run
+  nearer half. Check any cap first. Almost all of it is *ingress*.
+- **CPU**: ~0.3 cores sustained, but bursty. One Meta epoch was ~24 s wall and
   ~144 s CPU against the Rust sidecar (it parallelises ~6×); the in-process Go
-  verifier costs about an eighth of that. Tier B still wants real cores — on a
+  verifier costs about an eighth of that. Note that `sample_rate` does NOT
+  reduce this at the tip: `SelectionRate` returns 1 inside `DefaultTipWindow`,
+  so every new epoch is audited and only the backlog is sampled. The ~0.3 is
+  ten times the table's sampled figure divided by the eightfold Go speedup, and
+  those two corrections very nearly cancel. Tier B still wants real cores — on a
   single core it would miss the 120 s cadence.
 - **Memory**: one AKD verification peaked ~3.7 GB RSS in the sidecar, and is a
   fraction of that now; the compose limit is the host's budget, not the

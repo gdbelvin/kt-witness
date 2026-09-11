@@ -12,6 +12,9 @@ import (
 // GB/day, which sounded prohibitive until it was measured against a real
 // connection and turned out to be about 35 Mbps sustained — under a tenth of
 // the link, and roughly 1.7 CPU cores. Sampling the tip was never necessary.
+// (That 1.7 was projected from the Rust verifier's 144 s per Meta epoch; the in-process Go one costs
+// about an eighth as much, so exhaustive tip auditing is nearer a third of a
+// core today. The bandwidth figure stands.)
 //
 // So auditing now runs three ways at once, each covering a case the others
 // cannot:
