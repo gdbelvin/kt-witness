@@ -114,7 +114,10 @@ func (p *Prefetcher) init() {
 		}
 		p.sem = make(chan struct{}, n)
 		if p.Client == nil {
-			p.Client = &http.Client{Timeout: 10 * time.Minute}
+			p.Client = &http.Client{
+				Timeout:   10 * time.Minute,
+				Transport: &http.Transport{DialContext: netmeter.Dialer().DialContext},
+			}
 		}
 		// Adopt anything already on disk from a previous run. Re-downloading
 		// proofs we already hold would waste exactly the bandwidth this exists

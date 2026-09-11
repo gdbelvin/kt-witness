@@ -227,6 +227,19 @@ type config struct {
 		// configured — raise it until throughput stops improving.
 		PrefetchWorkers int `json:"prefetch_workers"`
 
+		// DSCPClass marks outbound packets so a shaper can sort this traffic
+		// into its bulk queue. 8 is CS1, the de-facto scavenger class and what
+		// CAKE's diffserv modes recognise; 1 is RFC 8622 Lower Effort, which is
+		// more correct and less widely honoured; 0 does not mark.
+		//
+		// It does not slow anything down on its own — see internal/netmeter,
+		// which explains why the mark cannot reach the CDN sending the bytes.
+		// It is what a ROUTER doing ingress shaping keys on, via conntrack
+		// carrying the outbound class across to the returning packets. Without
+		// it a 284 MB proof and a video call look the same to the one queue
+		// that could tell them apart.
+		DSCPClass int `json:"dscp_class"`
+
 		// MaxDownloadMbit holds every download this process makes below a rate,
 		// in megabits per second, across all logs together. Zero is unlimited,
 		// which is what this did before and is right for a machine on a link
@@ -740,6 +753,14 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 				MinFreeBytes: cfg.Audit.PrefetchMinFreeBytes,
 				Log:          log,
 			}
+			// Set before any client dials, so the first connection is marked.
+			if c := cfg.Audit.DSCPClass; c > 0 {
+				netmeter.SetDSCP(c)
+				log.Info("outbound traffic marked", "dscp", c,
+					"note", "a shaper must act on this; the mark alone slows nothing down")
+			}
+			metrics.Set(server.MDSCPClass, nil, float64(netmeter.DSCP()))
+
 			// Applied here rather than inside the prefetcher: the cap is a fact
 			// about the link, and three different things in this process download
 			// over it.

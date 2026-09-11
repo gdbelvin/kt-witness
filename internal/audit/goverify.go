@@ -84,7 +84,10 @@ func (g *GoVerifier) init() {
 		}
 		g.sem = make(chan struct{}, n)
 		if g.Client == nil {
-			g.Client = &http.Client{Timeout: 20 * time.Minute}
+			g.Client = &http.Client{
+				Timeout:   20 * time.Minute,
+				Transport: &http.Transport{DialContext: netmeter.Dialer().DialContext},
+			}
 		}
 	})
 }
