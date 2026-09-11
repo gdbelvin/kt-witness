@@ -8,7 +8,6 @@ import (
 
 	"github.com/gdbsecurity/kt-witness/internal/metrics"
 	"github.com/gdbsecurity/kt-witness/internal/netmeter"
-	"github.com/gdbsecurity/kt-witness/internal/pace"
 
 	"github.com/gdbsecurity/kt-witness/internal/store"
 )
@@ -53,11 +52,6 @@ type Auditor struct {
 	// Prefetch, if set, downloads proofs ahead of verification so the link and
 	// the CPU are busy at the same time instead of taking turns.
 	Prefetch *Prefetcher
-
-	// Governor, if set, paces the BACKWARDS sweep against measured CPU. Live
-	// auditing is never paced: it follows the tip and is what would notice an
-	// operator misbehaving now.
-	Governor *pace.Governor
 
 	// Rate is the fraction of epochs verified, published alongside results.
 	Rate float64

@@ -625,6 +625,16 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 	// exists; the verifier is built before the channel it serves.
 	var auditInterval time.Duration
 	var resolvers []audit.Resolver
+	// The CPU governor. Declared out here rather than inside the block that
+	// builds it because two things outside that block read it: the work
+	// channel, whose local worker sizes itself from it, and the goroutine that
+	// runs its control loop.
+	//
+	// It used to be stashed on the Auditor and fetched back out through a
+	// governorFor helper. The audit package never read the field — it was a
+	// carrier between two points in this function, wearing the shape of a
+	// dependency the auditor did not have.
+	var governor *pace.Governor
 	// Tier B runs when there is a log that can be audited.
 	//
 	// The gate used to be a path to a Rust verifier binary, which made
@@ -675,7 +685,6 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		// the previous value was chosen when a verification took 94 s on four
 		// cores, and after more cores arrived it left five of them idle while
 		// the backlog still measured months.
-		var governor *pace.Governor
 		if cfg.Audit.Pace || cfg.Audit.TargetCores > 0 || cfg.Audit.ReserveCores > 0 {
 			// The ceiling has to match whatever is actually verifying.
 			//
@@ -725,7 +734,6 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 			Store: db, Beacon: audit.NewBeacon(cfg.Audit.BeaconURL),
 			Verifier: goVerifier, Log: log, Rate: rate, Timeout: auditTimeout,
 			MaxEpochsPerRound: maxEpochsPerRound(cfg.Audit.MaxEpochsPerRound),
-			Governor:          governor,
 			Prefetch:          prefetch,
 		}
 		for _, src := range sources {
@@ -800,7 +808,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 				wTimeout = auditor.Timeout
 			}
 		}
-		w, err := startWorkChannel(ctx, cfg, db, governorFor(auditor), wVerifier, wPrefetch, wResolvers, wTimeout, log)
+		w, err := startWorkChannel(ctx, cfg, db, governor, wVerifier, wPrefetch, wResolvers, wTimeout, log)
 		if err != nil {
 			// Refusing to start is the point. A work channel that silently did
 			// not come up would leave the witness looking healthy while the
@@ -815,7 +823,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 	srv := &http.Server{
 		Addr: cfg.Listen,
 		Handler: (&server.Server{Store: db, VKey: vkey, Version: version, Commit: gitCommit, Built: buildDate, Workers: workers, Log: log, Tiers: tiers, Kinds: kinds,
-			Events:  events,
+			Events:      events,
 			Storage:     server.StoragePaths{DBPath: cfg.DB, ExportDir: cfg.ExportDir},
 			FundingPath: cfg.FundingPath}).Handler(),
 	}
@@ -949,13 +957,13 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 			}
 		}()
 	}
-	if auditor != nil && auditor.Governor != nil {
-		go auditor.Governor.Run(ctx)
+	if governor != nil {
+		go governor.Run(ctx)
 		log.Info("local verification paced against CPU",
 			"cores_detected", runtime.NumCPU(),
-			"budget_cores", auditor.Governor.BudgetFor(float64(runtime.NumCPU())),
+			"budget_cores", governor.BudgetFor(float64(runtime.NumCPU())),
 			"reserve_cores", cfg.Audit.ReserveCores,
-			"max_concurrent", auditor.Governor.MaxConcurrent,
+			"max_concurrent", governor.MaxConcurrent,
 			"note", "live auditing is never paced")
 	}
 
@@ -1776,15 +1784,6 @@ func storedHistory(db *store.Store, origin string) *store.History {
 // rewrites an object nobody re-reads — which is exactly where a rewrite would
 // be put. A daily full walk closes that, at two minutes of listing.
 const fullBackfillEvery = 24 * time.Hour
-
-// governorFor is the pacer the local workers share with the rest of the
-// witness's own load, so the two do not each think they have the machine.
-func governorFor(a *audit.Auditor) *pace.Governor {
-	if a == nil {
-		return nil
-	}
-	return a.Governor
-}
 
 func canaryEvery(n int) int {
 	if n <= 0 {
