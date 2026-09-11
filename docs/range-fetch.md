@@ -1,211 +1,113 @@
-# Fetching only `inserted`
+# Fetching only `inserted` — proposed, measured, refuted
 
-**Status: design, not built. The soundness argument below is the part that needs
-review — it changes what "verified" means, and everything else is engineering.**
+**Status: does not work. Kept because the refutation is more useful than the
+idea was, and because the measurement that kills it is cheap to re-derive
+wrongly.**
 
-Bandwidth is the binding constraint on this witness. The remaining backlog is
-889,031 epochs and about 154 TB, against a residential line measured at ~885
-Mbit/s, which is roughly three weeks even with the link entirely to itself. This
-proposes downloading 7.67% of that.
+The proposal was to stop downloading `unchanged_nodes` — 92% of every proof's
+bytes — on the grounds that it is the previous epoch's tree, which a verifier
+that just did epoch E-1 already holds. A verifier would carry its tree forward,
+fetch `inserted` alone by HTTP range request, and merge.
 
-## The measurement it rests on
+It rests on a false premise. `unchanged_nodes` is **not** the previous tree.
 
-Two facts, taken against WhatsApp's live CloudFront distribution on 2026-09-11:
+## What was true
 
-```
-$ curl -sI .../1181000/d36fa36f.../64faba15...
-HTTP/2 200
-content-length: 46676236
-accept-ranges: bytes
+Both of these hold and are worth keeping:
 
-$ curl -H "Range: bytes=0-4194303" ...
-HTTP/2 206
-content-range: bytes 0-4194303/46676236
-```
+- **CloudFront honours range requests.** `accept-ranges: bytes`, HTTP 206, exact
+  `content-range`. Verified against WhatsApp's distribution on 2026-09-11.
+- **`inserted` is at the front and its extent is discoverable from a prefix.**
+  prost writes fields in number order and `SingleAppendOnlyProof` has
+  `inserted = 1`, so `akdtree.ScanLeading(prefix, 1, 0)` found the boundary at
+  byte 3,580,680 of a 46,676,236-byte proof — 7.67% — inside a 4 MB fetch, with
+  `ended=true`.
 
-Range requests are honoured. And running `akdtree.ScanLeading(prefix, 1, 0)` over
-that 4 MB prefix:
+So the *fetching* half was sound. The verification half was not.
 
-```
-field 1 run ends at 3580680  complete=true
-=> inserted is the first 3,580,680 bytes = 7.67% of the proof
-```
+## What was false
 
-So `inserted` sits at the front — prost writes fields in number order, and
-`SingleAppendOnlyProof` has `inserted = 1`, `unchanged_nodes = 2` — and its
-extent is discoverable from a prefix. The other **92.33% is `unchanged_nodes`.**
+`unchanged_nodes` is the **sibling frontier** for this epoch's insertions, not
+the tree. Measured on two consecutive real WhatsApp proofs:
 
-`ScanLeading` already exists, with a doc comment describing exactly this caller:
-"measures the run of records of one field at the front of a proof, for a caller
-that holds only a prefix of it."
+| | inserted | unchanged | inserted share |
+|---|---|---|---|
+| epoch 1,181,000 | 47,745 | 902,146 | 5.03% of elements |
+| epoch 1,181,001 | 45,053 | 855,759 | 5.00% of elements |
 
-## What `unchanged_nodes` is
+19 unchanged nodes per inserted node is the shape of `O(k·log(n/k))` sibling
+hashes, not of a tree with a billion leaves. **The operator is already sending
+close to the minimum.** There is no redundancy to compress out, which was the
+objection that prompted the test.
 
-It is the previous epoch's tree. Verification today is:
+The frontier also depends on *where this epoch's insertions landed*, so it is
+different every epoch. Two consequences, both measured:
 
-```go
-prev = Root(sort(unchanged))
-curr = Root(merge(sort(unchanged), sort(commit(inserted, E))))
-```
-
-and the caller checks `prev == published_prev_E` and `curr == published_curr_E`.
-
-Because the published roots chain, `published_prev_E == published_curr_{E-1}`.
-So the first line is asserting that the operator's `unchanged` set rebuilds a
-root we have **already computed ourselves**, if we verified epoch E-1.
-
-We are spending 92% of our bandwidth re-downloading a set we can reconstruct.
-
-## The proposal
-
-Verify a contiguous run ascending, carrying the tree forward.
-
-Let `S_E` be the sorted element multiset the verifier built for epoch E — the
-`both` slice inside `Roots`, whose root it checked against `published_curr_E`.
-
-For epoch E+1, fetch **only `inserted_{E+1}`** and compute:
+**The sets differ.** With `S_E = unchanged_E ∪ commit(inserted_E, E)`:
 
 ```
-curr_{E+1} = Root(merge(S_E, sort(commit(inserted_{E+1}, E+1))))
+Root(S_E)             = 64faba15d9c66524     <- equal, as they must be
+Root(unchanged_{E+1}) = 64faba15d9c66524
+|S_E| = 949,891   |unchanged_{E+1}| = 855,759   ratio 0.901
+SETS IDENTICAL: false
 ```
 
-Check it against `published_curr_{E+1}`. No `unchanged_{E+1}` is fetched, and
-`prev_{E+1}` needs no computation: it is `published_curr_E`, which we verified
-last round.
+Same root, different sets — 10% different. Not a hash collision: a compressed
+trie deliberately collapses an untouched subtree into one node, so a set of
+subtree roots and the set of leaves beneath them produce the same digest.
 
-Each run needs one full proof to seed it; every epoch after that costs 7.67%.
+**This is exactly the step the soundness argument rested on**, and it is wrong.
+The argument said: any `unchanged_{E+1}` passing today satisfies
+`Root(unchanged_{E+1}) == Root(S_E)`, therefore under collision resistance the
+two sets are equal. They are not equal, and collision resistance has nothing to
+say about it, because `Root` is not injective over element sets by construction.
 
-## Soundness
+**And the substitution fails outright.** Carrying `S_E` forward and merging
+epoch E+1's insertions:
 
-**Claim.** If `Root(S_E) == published_curr_E` and
-`Root(merge(S_E, commit(inserted_{E+1}, E+1))) == published_curr_{E+1}`, then the
-epoch E→E+1 transition is append-only, and the conclusion is no weaker than
-what the current scheme establishes.
+```
+Root(merge(S_E, commit(inserted_{E+1}, E+1)))
+  = akdtree: element with label length 16 sits on the interior node covering it;
+    a committed value would be dropped
+```
 
-**What append-only means here.** That the tree published at E+1 contains every
-node of the tree published at E, plus additions that are committed to E+1. The
-proof format's way of asserting this is to hand over the two sets separately and
-let the verifier rebuild both roots.
+`S_E` carries a collapsed subtree root at label length 16. Epoch E+1 inserts a
+leaf *inside* that subtree. The merged set then contains both an interior node
+and something beneath it, which `Root` rejects — correctly, and by the check
+that exists precisely to stop a committed value being silently dropped.
 
-**Argument.** The construction exhibits a set `S_{E+1} = S_E ∪ commit(inserted_{E+1})`
-with `S_E ⊆ S_{E+1}` by construction — `merge` is a union, it removes nothing —
-and `Root(S_{E+1}) == published_curr_{E+1}`. Combined with
-`Root(S_E) == published_curr_E`, that is precisely the statement: the tree behind
-the published root at E+1 contains the tree behind the published root at E, plus
-elements committed to E+1. Containment is not inferred from anything the
-operator said; it is a property of the set we built.
+The frontier a verifier holds was chosen for the previous epoch's insertions. It
+is the wrong shape for the next epoch's, and nothing short of the full tree —
+which a witness never receives — is the right shape for all of them.
 
-**Why it is not weaker.** The current scheme obtains `S_E`'s role from the
-operator's `unchanged_{E+1}`, checked only by `Root(unchanged_{E+1}) ==
-published_prev_{E+1}`. Since `published_prev_{E+1} == published_curr_E ==
-Root(S_E)`, any `unchanged_{E+1}` that passes today satisfies
-`Root(unchanged_{E+1}) == Root(S_E)`. Under collision resistance of the tree hash
-(BLAKE3, WhatsAppV1Configuration), `unchanged_{E+1} == S_E` except with
-negligible probability.
+## What survives
 
-So the current scheme is the proposed one *plus* a redundant round-trip through
-a collision-resistance assumption. Substituting `S_E` removes that assumption
-from the chain rather than adding one.
+- **`ScanLeading` and the range-request finding** stay true and may be useful for
+  something else. Nothing in the code changes.
+- **The bandwidth problem is unchanged.** 154 TB is close to irreducible at this
+  witness's end; the levers are the link, a worker on a fatter one, or asking the
+  operator for bulk access.
+- **The canary reasoning is untouched.** It defends against a worker that derives
+  `curr_E` from `unchanged_{E+1}`, and both sets are still fetched in full.
 
-**Why it is arguably stronger.** Today, `unchanged` is the operator's claim
-about the previous tree, and we accept it on a hash match. Under the proposal
-the previous tree is the one we built and checked. An adversary who found a
-second preimage for a subtree root could pass today's check with a set that is
-not the real previous tree; they could not pass the proposed one, because we
-never consult their set.
+## One thing worth asking an operator
 
-**What it does not weaken.**
+A single append-only proof from E to E+N costs one frontier instead of N, so the
+frontier's cost amortises. Meta and WhatsApp publish one proof per epoch; they
+could publish periodic long-range ones alongside.
 
-- *Per-epoch root agreement* is unchanged. Every epoch's published current root
-  is still independently reconstructed and compared.
-- *Duplicate labels are still caught.* If a label in `inserted_{E+1}` collided
-  with one already in `S_E`, `Root` errors — an element whose label terminates at
-  an interior node is rejected explicitly ("a committed value would be dropped"),
-  rather than silently deduplicated. So a re-insertion masquerading as an
-  addition fails loudly.
-- *The seed epoch* is verified the current way, in full.
+It proves something **weaker** — that everything in E survives to E+N, not that
+each intermediate step was append-only, so an insert-then-remove inside the
+window would pass. It is not a substitute for per-epoch verification, but it
+would let a bandwidth-constrained witness establish a coarse guarantee over
+history it cannot otherwise afford to check at all, and refine later.
 
-**What it genuinely gives up.** Today each epoch re-derives the previous root
-from freshly downloaded bytes, which would catch corruption of our own in-memory
-tree. Under the proposal an undetected bit-flip in `S_E` propagates to every
-later epoch in the run. Mitigation: runs are bounded (a few hundred epochs), and
-the run's final root is still checked against a published value, so corruption
-surfaces as a mismatch at the next epoch rather than passing silently. It
-becomes a liveness/false-alarm risk, not a soundness one — and a mismatch already
-triggers local re-verification.
+## The lesson worth keeping
 
-**The dependency it introduces.** A run's later epochs depend on its earlier
-ones being correct. This is a *sequential* dependency inside one worker, not a
-trust relationship between machines: each worker seeds its own run from a full
-proof it fetched and verified itself. No worker takes another's word for
-anything, which is the property the whole work channel is built to preserve.
+The premise was checkable in about twenty minutes — download two consecutive
+proofs, decode, compare — and the design document was written before doing it.
+The argument was internally valid and rested on a claim about the data that was
+never measured. `docs/gpu_notes.md` records the same shape of error: a GPU
+verifier that would have been correct, fast, and pointed at 7% of the problem.
 
-## Effect on the canary
-
-It survives, and gets sharper.
-
-The canary exists because a worker holding proofs for E and E+1 can shortcut:
-`curr_E == prev_{E+1} == Root(unchanged_{E+1})`, so it can report two correct
-roots for E without ever reading `inserted_E`. The canary answers this by
-flipping a bit inside `inserted` — the region the shortcut skips.
-
-Under the proposal `inserted` is *all the worker receives*. There is no
-`unchanged` to derive an answer from, so the shortcut has no input. A flipped
-bit in the only bytes it has still produces a wrong root, so the canary still
-fires — and the thing it was defending against is now structurally impossible
-rather than merely detectable.
-
-The witness must serve the range rather than the whole proof, and must corrupt
-within it. `PayloadOffset` already restricts flips to payload bytes.
-
-## What it costs to build
-
-**The generator must descend in ascending runs.** Today `cursors.backward`
-walks down, one epoch at a time, selecting with `FirstUnverified`. A run needs
-the *opposite* order internally: pick a window, seed at its bottom with a full
-proof, then walk up. The descent across windows stays; the order within a window
-inverts.
-
-**Memory per concurrent run**, from measured proof sizes at 68 bytes per
-in-memory `Element`:
-
-| log | `unchanged` wire | elements | tree held | with merge scratch |
-|---|---|---|---|---|
-| whatsapp | 43 MB | 0.80 M | 54 MB | 109 MB |
-| meta | 262 MB | 4.87 M | 331 MB | 662 MB |
-
-So concurrency becomes ~10–15 Meta runs against the 44 GB container limit,
-rather than 26 independent epochs. Fewer, longer-lived units of work — which
-suits the queue, since it already hands out contiguous ranges.
-
-**Fetching needs a prefix loop.** Ask for a generous prefix (9% plus slack),
-run `ScanLeading`; if it reports the run incomplete, fetch more and resume from
-the returned offset. `ScanLeading` is built for exactly this and takes `from`
-for the purpose.
-
-**Assignment semantics change.** A run is a chain: a worker that drops out
-mid-run invalidates the rest, where today each epoch stands alone. The lease
-already covers a contiguous range, so the unit is right, but partial-completion
-accounting needs thought.
-
-## What it is worth
-
-154 TB → **~12 TB**. At the current 600 Mbit/s cap that is under two days
-instead of twenty-four, and it removes the argument for uncapping the link at
-all.
-
-## Open questions for review
-
-1. Is the collision-resistance argument above the right frame, or is there a
-   property of `unchanged_nodes` I am treating as redundant that is not? This is
-   the question that decides the whole thing.
-2. Does AKD ever *change* a node's value between epochs without changing its
-   label? The proposal assumes node-level append-only — that a label, once
-   present, keeps its value. `Root`'s duplicate rejection means a violation
-   fails loudly rather than silently, but if it happens routinely the design is
-   wrong rather than merely noisy.
-3. Should the seed epoch of each run be chosen adversarially (beacon-randomised)
-   rather than at the window edge, so an operator cannot predict which epochs
-   get a full independent check?
-4. Is a bounded run length the right mitigation for in-memory corruption, or
-   should `S_E` be re-derived from a full proof every N epochs regardless?
+Measure the premise first.
