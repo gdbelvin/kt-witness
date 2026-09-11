@@ -101,7 +101,6 @@ const (
 	MFetchSeconds        = "kt_witness_fetch_duration_seconds_sum"
 	MFetchCount          = "kt_witness_fetch_duration_seconds_count"
 	MAuditVerified       = "kt_witness_audit_verified_total"
-	MHistoryVerified     = "kt_witness_history_verified_total"
 	MAuditBytes          = "kt_witness_audit_bytes_total"
 	MAuditSeconds        = "kt_witness_audit_duration_seconds_sum"
 )
@@ -135,7 +134,7 @@ func Init(version, commit, built string) {
 	d(MHistoryExpired, metrics.Gauge, "Epochs that have aged out of an operator's published window since this witness first looked. Not misbehaviour and not recoverable: the evidence needed to check those epochs is no longer served, so nobody can ever verify them. Alert on it RISING, not on its value — a growing figure means an operator's auditable window is closing faster than anyone is auditing it.")
 	d(MHistoryFrom, metrics.Gauge, "First epoch of the published range coverage is measured against. Published because coverage is counted only INSIDE this range: work outside it is real but uncounted, which looks identical to no work at all.")
 	d(MHistoryTo, metrics.Gauge, "Last epoch of the published range coverage is measured against.")
-	d(MAuditPopulation, metrics.Gauge, "Audit records retained for this origin, across all epochs. Compare with history_audited_epochs: a large gap means most records fall outside the measured range, and a value pinned at the retention cap means the oldest are being evicted as fast as new ones arrive — which for a downward sweep means evicting exactly what it just wrote.")
+	d(MAuditPopulation, metrics.Gauge, "Audit records retained for this origin, across all epochs. Compare with history_audited_epochs: a large gap means most records fall outside the measured range, and a value pinned at the retention cap means the oldest are being evicted as fast as new ones arrive — which, while the work generator is descending through history, means evicting exactly what it just wrote.")
 	d(MHistoryCoverage, metrics.Gauge, "Fraction of published history construction audited, 0 to 1. Reaching 1 is what earns tier B+ — a bare tier B only covers epochs published since we started watching.")
 	d(MAuditEpochs, metrics.Counter, "Epochs considered for construction auditing, by outcome: sampled, declined, verified, unavailable.")
 	d(MAppHeads, metrics.Gauge, "Per-application heads observed. These are observations, never cosigned.")
@@ -166,7 +165,7 @@ func Init(version, commit, built string) {
 	d(MDiskUsedRatio, metrics.Gauge, "Fraction of the database filesystem in use, 0 to 1. A witness that runs out of disk stops witnessing.")
 
 	d(MRounds, metrics.Counter, "Witness rounds completed.")
-	d(MAuditPermits, metrics.Gauge, "Concurrent backlog verifications the CPU governor currently allows. Zero means the sweep is yielding, which is correct on a busy machine and a stall if it persists on an idle one.")
+	d(MAuditPermits, metrics.Gauge, "Concurrent verifications the CPU governor currently allows this machine. It is what sizes the local worker's share of the queue, so zero means this box is yielding — correct on a busy machine, a stall if it persists on an idle one. Borrowed workers are unaffected; they pace themselves.")
 	d(MAuditInFlight, metrics.Gauge, "Backlog verifications running right now.")
 	d(MCPUSelfCores, metrics.Gauge, "CPU cores this container is using, from cgroup v2 cpu.stat.")
 	d(MCPUMachineCores, metrics.Gauge, "CPU cores busy across the whole host, from /proc/stat, which is not namespaced inside a container.")
@@ -177,11 +176,10 @@ func Init(version, commit, built string) {
 	d(MForkDetected, metrics.Counter, "Forks detected, by origin.")
 	d(MFetchSeconds, metrics.Counter, "Cumulative seconds spent fetching heads, by origin.")
 	d(MFetchCount, metrics.Counter, "Number of head fetches, by origin. Divide the sum by this for a mean.")
-	d(MAuditVerified, metrics.Counter, "Construction proofs replayed and verified, by origin. Incremented by both the live path and the history sweep, so its rate does not distinguish keeping up from catching up.")
+	d(MAuditVerified, metrics.Counter, "Construction proofs replayed and verified, by origin. Incremented by the live path and by every worker on the queue alike, so its rate does not distinguish keeping up from catching up. Split it by worker with epochs_verified_by_worker_total.")
 	d("kt_witness_audit_decode_seconds_sum", metrics.Counter, "Seconds spent decoding audit proofs, by origin. Read beside verify and download: which phase dominates decides whether this work could be moved to other hardware, and guessing at it has been wrong before.")
 	d("kt_witness_audit_verify_seconds_sum", metrics.Counter, "Seconds spent verifying decoded audit proofs, by origin.")
 	d("kt_witness_audit_download_seconds_sum", metrics.Counter, "Seconds spent fetching audit proofs, by origin. Large relative to the others means the link is the constraint, not the CPU.")
-	d(MHistoryVerified, metrics.Counter, "Construction proofs verified by the HISTORY sweep alone, by origin. This is the one to rate for backlog progress: a flat line here with audit_verified_total still climbing means the sweep has stopped and only the tip is being audited.")
 	d(MAuditBytes, metrics.Counter, "Bytes of construction proof downloaded and verified, by origin.")
 	d(MAuditSeconds, metrics.Counter, "Cumulative seconds spent verifying construction proofs, by origin.")
 
