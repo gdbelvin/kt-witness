@@ -1,0 +1,85 @@
+{
+  "$schema": "https://fundingjson.org/schema/v1.1.0.json",
+  "version": "v1.1.0",
+  "entity": {
+    "type": "organisation",
+    "role": "owner",
+    "name": "Example Org",
+    "email": "funding@example.org",
+    "description": "Who operates this witness, and the standing that makes its verification worth trusting. State any relationship to the operators being audited here rather than omitting it.",
+    "webpageUrl": {
+      "url": "https://witness.example.org/",
+      "wellKnown": "https://witness.example.org/.well-known/funding-manifest-urls"
+    }
+  },
+  "projects": [
+    {
+      "guid": "kt-witness",
+      "name": "kt-witness",
+      "description": "What the project does and why an independent party doing it matters.",
+      "webpageUrl": {
+        "url": "https://witness.example.org/"
+      },
+      "repositoryUrl": {
+        "url": "https://github.com/example/kt-witness"
+      },
+      "licenses": [
+        "spdx:Apache-2.0"
+      ],
+      "tags": [
+        "security",
+        "cryptography",
+        "transparency-log",
+        "key-transparency",
+        "certificate-transparency",
+        "auditing",
+        "infrastructure"
+      ]
+    }
+  ],
+  "funding": {
+    "channels": [
+      {
+        "guid": "bank-transfer",
+        "type": "bank",
+        "address": "Contact funding@example.org for transfer details.",
+        "description": "How money is actually received."
+      }
+    ],
+    "plans": [
+      {
+        "guid": "operations-funded",
+        "status": "active",
+        "name": "Annual support for a witness others can rely on",
+        "description": "What this tier of support buys, and what it does not.",
+        "amount": 0,
+        "currency": "USD",
+        "frequency": "yearly",
+        "channels": [
+          "bank-transfer"
+        ]
+      },
+      {
+        "guid": "operations-floor",
+        "status": "active",
+        "name": "Annual cost of bare survival",
+        "description": "What this tier of support buys, and what it does not.",
+        "amount": 0,
+        "currency": "USD",
+        "frequency": "yearly",
+        "channels": [
+          "bank-transfer"
+        ]
+      }
+    ],
+    "history": [
+      {
+        "year": 2026,
+        "currency": "USD",
+        "income": 0,
+        "expenses": 0,
+        "description": "What came in, what went out, and the independence rules money is accepted under — pooled rather than per-log, never from a single audited operator, no payment contingent on an audit outcome, and every funder named in the witness's own output."
+      }
+    ]
+  }
+}

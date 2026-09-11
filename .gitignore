@@ -50,3 +50,12 @@
 
 # Worker and witness run logs. Operational output, not source.
 *.log
+
+# Funding material: the manifest the witness serves, the funder letters, the
+# business case and the cost models behind the asks. The manifest is published
+# at https://witness.gdbsecurity.com/funding.json — it is served, not secret —
+# but what it is drafted from, who it is drafted for, and what this project is
+# willing to be paid are the operator's business and not the repository's.
+# funding.json is loaded from disk at runtime; see internal/server/funding.go
+# and deploy/funding.example.json for the shape.
+/private/

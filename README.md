@@ -22,12 +22,16 @@ of noticing each attack. It is the argument for why this exists.
 [`docs/landscape.md`](docs/landscape.md) surveys the whole transparency-log
 world: what exists, what is witnessed here, what is reachable, and what is
 deliberately excluded. [`docs/cost.md`](docs/cost.md) measures what running it
-actually costs — 0.27 cores and 1.2 TB/month for all ten origins — and what
+actually costs — about a third of a core for all ten origins — and what
 that implies for funding it.
 
-[`BUSINESS-CASE.md`](BUSINESS-CASE.md) is the case for funding this as operated
-infrastructure: what is already built, what one-time investment remains, what it
-costs to run, the risks, and why the providers are the *last* people to ask.
+The case for funding this as operated infrastructure — what one-time investment
+remains, what it costs to run, the risks, and why the providers are the *last*
+people to ask — is not in this repository. What the witness asks to be paid, and
+the terms it will take money under, are published at
+[`/funding.json`](https://witness.gdbsecurity.com/funding.json) in FLOSS/fund
+form; `deploy/funding.example.json` documents the shape for anyone running their
+own.
 
 ## Assurance tiers
 

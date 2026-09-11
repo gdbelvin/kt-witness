@@ -136,8 +136,9 @@ quirk, and names no machine of the operator's.
 ### Email
 
 `gdb@gdbsecurity.com` appears throughout, and deliberately: it is the contact
-address in `funding.json`, which has to be reachable. `a funder's published contact` is
-a funder's published contact, from research notes.
+address in the published funding manifest, which has to be reachable. Funder
+contact addresses were in the research notes; those notes, the funder letters
+and the business case have since been moved out of the repository entirely.
 
 ## What was checked and found clean
 
@@ -186,6 +187,5 @@ operator's call, not an auditor's.
 ## Cleared for publication
 
 Subject to the two decisions that are not this document's to make: whether to
-commission the $2,000–5,000 legal review of the disclosure process
-(`BUSINESS-CASE.md` §8b calls it the one genuinely uncovered risk), and rotating
-the Tailscale key mentioned above.
+commission the $2,000–5,000 legal review of the disclosure process — the one
+genuinely uncovered risk — and rotating the Tailscale key mentioned above.

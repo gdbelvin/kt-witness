@@ -52,6 +52,14 @@ type Server struct {
 	// whether its contents are correctly constructed.
 	Tiers map[string]string
 
+	// FundingPath is the file served at /funding.json, or "" to publish no
+	// manifest at all. Not embedded: see internal/server/funding.go for why a
+	// witness publishes one and why its contents are not in this repository.
+	FundingPath string
+
+	fundingOnce sync.Once
+	fundingBody []byte
+
 	// Kinds maps an origin to what it makes transparent: kt, ct, software.
 	// Orthogonal to Tiers — a tier-A certificate log and a tier-A key
 	// transparency log are the same strength of claim about different things.

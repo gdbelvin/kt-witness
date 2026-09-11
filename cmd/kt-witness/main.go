@@ -89,6 +89,13 @@ type config struct {
 	// can be read without this binary. Empty disables it.
 	ExportDir string `json:"export_dir"`
 
+	// FundingPath is the FLOSS/fund manifest served at /funding.json. It is
+	// read from disk rather than compiled in, because what this project asks
+	// to be paid is the operator's business and not the repository's; see
+	// internal/server/funding.go. Empty, or a file that is not there, publishes
+	// no manifest and 404s the endpoint.
+	FundingPath string `json:"funding_path"`
+
 	// Audit configures tier B: replaying construction proofs for a sampled
 	// subset of epochs. Runs whenever a configured log can resolve an epoch.
 	// ProtonAudit runs Proton's construction audit inside this process. It
@@ -808,7 +815,8 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		Addr: cfg.Listen,
 		Handler: (&server.Server{Store: db, VKey: vkey, Version: version, Commit: gitCommit, Built: buildDate, Workers: workers, Log: log, Tiers: tiers, Kinds: kinds,
 			Events:  events,
-			Storage: server.StoragePaths{DBPath: cfg.DB, ExportDir: cfg.ExportDir}}).Handler(),
+			Storage:     server.StoragePaths{DBPath: cfg.DB, ExportDir: cfg.ExportDir},
+			FundingPath: cfg.FundingPath}).Handler(),
 	}
 	startPprof(ctx, cfg.PprofListen, log)
 	startUnblockProbe(ctx, log)

@@ -23,6 +23,13 @@ services:
       # because it never knew about the rest. Nothing about that looks wrong
       # from the outside, which is what made it dangerous.
       - ./deploy/witness.json:/config/witness.json:ro
+      # The funding manifest, read-only, from a directory the operator owns and
+      # git ignores. It is served at /funding.json and is meant to be public;
+      # what is not public is the drafting behind it — the letters, the asks and
+      # the cost models — so the whole directory stays out of the repository.
+      # deploy/funding.example.json documents the shape. Absent, the endpoint
+      # 404s and the witness is otherwise unaffected.
+      - ./private/funding.json:/config/funding.json:ro
 
     # The work channel's shared token, from a file the operator owns rather
     # than the compose file. A missing token closes the channel rather than

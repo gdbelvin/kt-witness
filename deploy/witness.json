@@ -20,6 +20,8 @@
   "poll_interval": "60s",
   "max_sign_delay": "120s",
   "refresh_interval": "1h",
+  "funding_path": "/config/funding.json",
+
   "audit": {
     "prefetch_dir": "/data/proof-cache",
     "prefetch_bytes": 68719476736,
