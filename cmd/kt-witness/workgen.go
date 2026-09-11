@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log/slog"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -65,6 +64,7 @@ func startWorkGenerator(ctx context.Context, q *work.Queue, db *store.Store, pf 
 		}
 		go func(origin string, r audit.Resolver) {
 			var c cursors
+			var inFlight atomic.Int64
 			for ctx.Err() == nil {
 				n := pf.Held(origin)
 				want := readyTarget(q, origin)
@@ -72,20 +72,31 @@ func startWorkGenerator(ctx context.Context, q *work.Queue, db *store.Store, pf 
 					map[string]string{"origin": origin}, float64(n))
 				metrics.Set("kt_witness_proofs_target",
 					map[string]string{"origin": origin}, float64(want))
-				if n >= want {
-					// Enough downloaded work is waiting. Sleeping rather than
+				metrics.Set("kt_witness_proofs_downloading",
+					map[string]string{"origin": origin}, float64(inFlight.Load()))
+
+				// Room counts what is already ON THE WAY, not just what has
+				// landed. Without that term this asks for the whole shortfall
+				// on every pass and orders the same epochs repeatedly — the
+				// barrier used to hide it by making one pass per wave.
+				room := want - n - int(inFlight.Load())
+				if room <= 0 {
+					// Enough is downloaded or downloading. Sleeping rather than
 					// spinning: the next thing to happen is a verifier freeing
 					// room, and that is not something to poll hard for.
 					sleep(ctx, 2*time.Second)
 					continue
 				}
-				got := fillOnce(ctx, db, pf, r, origin, &c, log)
-				if got == 0 {
+				if fillMore(ctx, db, pf, r, origin, &c, room, &inFlight, log) == 0 {
 					// Nothing to fetch from here — either the log is caught up
 					// or the cache refused. Either way, wait before asking
 					// again; both resolve on their own.
 					sleep(ctx, 10*time.Second)
+					continue
 				}
+				// Top up promptly as slots free, without spinning. This is the
+				// loop that keeps the prefetcher's pool full.
+				sleep(ctx, 250*time.Millisecond)
 			}
 		}(origin, r)
 	}
@@ -147,8 +158,9 @@ func readyTarget(q *work.Queue, origin string) int {
 // still reach somebody; a hole in three-year-old history is a coverage number.
 // internal/audit/strategy.go sizes the tip window for the same reason: 256
 // epochs is about eight hours of Messenger and two of WhatsApp.
-func fillOnce(ctx context.Context, db *store.Store, pf *audit.Prefetcher,
-	r audit.Resolver, origin string, c *cursors, log *slog.Logger) int {
+func fillMore(ctx context.Context, db *store.Store, pf *audit.Prefetcher,
+	r audit.Resolver, origin string, c *cursors, room int, inFlight *atomic.Int64,
+	log *slog.Logger) int {
 	hs, err := db.Histories()
 	if err != nil {
 		return 0
@@ -165,39 +177,45 @@ func fillOnce(ctx context.Context, db *store.Store, pf *audit.Prefetcher,
 	}
 	c.init(db, origin, h)
 
-	want := fillBatch
-	epochs := c.forward(db, origin, h, want)
-	if len(epochs) < want {
-		epochs = append(epochs, c.backward(db, origin, h, want-len(epochs))...)
+	epochs := c.forward(db, origin, h, room)
+	if len(epochs) < room {
+		epochs = append(epochs, c.backward(db, origin, h, room-len(epochs))...)
 	}
 	if len(epochs) == 0 {
 		return 0
 	}
 
-	// Concurrently, because Fetch BLOCKS: it takes a slot from the prefetcher's
-	// semaphore and does the download inline. Called in a loop it downloads one
-	// proof at a time, the semaphore is never contended, and prefetch_workers
-	// has no effect at all — which is exactly what happened. Outbound
-	// connections sat at five however high that number was set.
-	var wg sync.WaitGroup
-	var started atomic.Int64
+	// Started and left running. The caller does NOT wait for them.
+	//
+	// It used to, and that was the ceiling nobody could find. Each pass fired a
+	// wave of twenty-four and blocked on the slowest — and a Meta proof is
+	// 284 MB against WhatsApp's 40, so twenty-three slots sat idle while one
+	// straggler finished. prefetch_workers could be set to anything and change
+	// nothing: the generator never had more than one wave outstanding, and the
+	// wave emptied before the next began. Raising it from 32 to 96 on a 2 Gbit
+	// line moved the sustained rate from 746-764 to 717-751 Mbit/s, which is to
+	// say not at all.
+	//
+	// Fetch still BLOCKS and still takes a slot from the prefetcher's
+	// semaphore, which remains the real concurrency bound — that is the whole
+	// reason these go out in goroutines rather than a loop. What changed is
+	// that the generator now tops the pool up as slots free instead of
+	// draining it and refilling, which is the same fix the work runner needed
+	// for the same reason.
 	for _, e := range epochs {
 		ref, err := r.ResolveEpoch(ctx, e)
 		if err != nil {
 			continue // an epoch we cannot address is not one we can download
 		}
-		wg.Add(1)
+		inFlight.Add(1)
 		go func(e int64, ref *audit.EpochRef) {
-			defer wg.Done()
+			defer inFlight.Add(-1)
 			if err := pf.Fetch(ctx, origin, ref.LogDirectory, e, ref.PrevRoot, ref.CurrRoot); err != nil {
 				log.Debug("could not prefetch a proof", "origin", origin, "epoch", e, "err", err)
-				return
 			}
-			started.Add(1)
 		}(e, ref)
 	}
-	wg.Wait()
-	return int(started.Load())
+	return len(epochs)
 }
 
 // cursors is one origin's two positions: how far the tip-chasing pass has
@@ -317,11 +335,6 @@ func (c *cursors) backward(db *store.Store, origin string, h *store.History, n i
 	}
 	return out
 }
-
-// fillBatch is how many epochs one pass fetches. These go out concurrently and
-// the prefetcher's own semaphore bounds how many actually run, so this is the
-// width of one wave rather than a concurrency limit.
-const fillBatch = 24
 
 // backStride is how much history one backward probe covers.
 //

@@ -88,6 +88,7 @@ const (
 
 	// Counters maintained by the witness loop rather than derived from storage.
 	MRounds            = "kt_witness_rounds_total"
+	MPrefetchWorkers   = "kt_witness_prefetch_workers"
 	MDSCPClass         = "kt_witness_dscp_class"
 	MDownloadLimit     = "kt_witness_download_limit_bytes"
 	MAuditPermits      = "kt_witness_audit_permits"
@@ -166,6 +167,8 @@ func Init(version, commit, built string) {
 	d(MDiskUsedRatio, metrics.Gauge, "Fraction of the database filesystem in use, 0 to 1. A witness that runs out of disk stops witnessing.")
 
 	d(MRounds, metrics.Counter, "Witness rounds completed.")
+	d("kt_witness_proofs_downloading", metrics.Gauge, "Proofs being downloaded right now, by log. Persistently far below prefetch_workers means something upstream of the pool is the limit, not the pool.")
+	d(MPrefetchWorkers, metrics.Gauge, "Concurrent proof downloads the prefetcher allows. This is the ceiling on download concurrency and therefore on the fetch rate; compare with proofs_downloading, which is how many are actually running.")
 	d(MDSCPClass, metrics.Gauge, "DSCP codepoint stamped on this process's outbound packets. 8 is CS1, the scavenger class a shaper sorts into its bulk queue; 0 means unmarked. A non-zero value does not itself slow anything down — it is what a router doing ingress shaping classifies on.")
 	d(MDownloadLimit, metrics.Gauge, "Bytes per second this process will read from the network, across all logs. Zero is uncapped. A non-zero value here is why network_bytes_in_total is flat at a number below the line rate: the cap is deliberate, and it is set below the link so the ISP's downstream queue stays short enough for a video call on the same connection to work.")
 	d(MAuditPermits, metrics.Gauge, "Concurrent verifications the CPU governor currently allows this machine. It is what sizes the local worker's share of the queue, so zero means this box is yielding — correct on a busy machine, a stall if it persists on an idle one. Borrowed workers are unaffected; they pace themselves.")

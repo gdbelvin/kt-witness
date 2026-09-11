@@ -773,7 +773,14 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 
 			files, bytes := prefetch.Stats()
 			log.Info("proof prefetch enabled", "dir", d,
-				"cap_gb", prefetch.MaxBytes>>30, "adopted_files", files, "adopted_gb", bytes>>30)
+				"cap_gb", prefetch.MaxBytes>>30, "adopted_files", files, "adopted_gb", bytes>>30,
+				"workers", cfg.Audit.PrefetchWorkers)
+			// Published because it decides the download rate and there was no
+			// way to confirm from outside that a change to it had taken: the
+			// value was measured by raising it and watching for an effect,
+			// which is exactly the experiment that cannot distinguish "no
+			// effect" from "never deployed".
+			metrics.Set(server.MPrefetchWorkers, nil, float64(prefetch.Concurrency()))
 		}
 		auditor = &audit.Auditor{
 			Store: db, Beacon: audit.NewBeacon(cfg.Audit.BeaconURL),

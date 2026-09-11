@@ -391,6 +391,15 @@ func (p *Prefetcher) Fetch(ctx context.Context, origin, logDirectory string, epo
 	return nil
 }
 
+// Concurrency is how many downloads may run at once, after defaulting. The
+// EFFECTIVE number rather than the configured one: Workers below 1 means the
+// default, and a caller publishing the configured value would report zero for a
+// pool of four.
+func (p *Prefetcher) Concurrency() int {
+	p.init()
+	return cap(p.sem)
+}
+
 // Stats reports what the cache is holding.
 func (p *Prefetcher) Stats() (files int, bytes int64) {
 	if p == nil {

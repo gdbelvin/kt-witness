@@ -1,10 +1,16 @@
 package main
 
 import (
+	"context"
+	"io"
+	"log/slog"
+	"net/http"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/gdbsecurity/kt-witness/internal/audit"
 	"github.com/gdbsecurity/kt-witness/internal/store"
 )
 
@@ -185,5 +191,83 @@ func TestTheBackwardSweepReturnsRunsNotSinglets(t *testing.T) {
 		t.Errorf("got %v — %d separate runs. A contiguous unverified region "+
 			"should come back contiguous, or the queue can only hand out singlets",
 			got, runs)
+	}
+}
+
+// slowFetch is a proof server that never finishes, so a caller that waits for
+// its downloads is a caller that hangs.
+type slowFetch struct{ started chan struct{} }
+
+func (s *slowFetch) RoundTrip(r *http.Request) (*http.Response, error) {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+	<-r.Context().Done()
+	return nil, r.Context().Err()
+}
+
+type genResolver struct{ origin string }
+
+func (g genResolver) Origin() string { return g.origin }
+func (g genResolver) ResolveEpoch(_ context.Context, e int64) (*audit.EpochRef, error) {
+	return &audit.EpochRef{LogDirectory: "http://proofs.invalid", PrevRoot: "aa", CurrRoot: "bb"}, nil
+}
+
+// TestTheGeneratorDoesNotWaitForItsDownloads is the ceiling nobody could find.
+//
+// Each pass used to fire a wave of twenty-four fetches and block on wg.Wait()
+// until the slowest returned. A Meta proof is 284 MB against WhatsApp's 40, so
+// twenty-three slots idled while one straggler finished, and the pool was empty
+// between waves. The visible symptom was that prefetch_workers did nothing:
+// raising it from 32 to 96 on a 2 Gbit line moved the sustained rate from
+// 746-764 to 717-751 Mbit/s, which is to say not at all. The knob was real, the
+// generator just never asked for more than one wave.
+//
+// So the property is about RETURNING, not about rate: fillMore starts downloads
+// and hands control back while they run. With a fetcher that never completes,
+// the old code cannot return at all.
+func TestTheGeneratorDoesNotWaitForItsDownloads(t *testing.T) {
+	const origin = "whatsapp.kt/v2"
+	db := genStore(t, origin, 1, 500)
+
+	sf := &slowFetch{started: make(chan struct{}, 1)}
+	pf := &audit.Prefetcher{
+		Dir:     t.TempDir(),
+		Origins: []string{origin},
+		Workers: 8,
+		Client:  &http.Client{Transport: sf},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var c cursors
+	var inFlight atomic.Int64
+
+	done := make(chan int, 1)
+	go func() {
+		done <- fillMore(ctx, db, pf, genResolver{origin}, origin, &c, 8, &inFlight, slog.New(
+			slog.NewTextHandler(io.Discard, nil)))
+	}()
+
+	select {
+	case n := <-done:
+		if n == 0 {
+			t.Fatal("nothing was started; the fixture is wrong, not the code")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("fillMore did not return while downloads were in flight; " +
+			"it is waiting for them, which is the barrier this removed")
+	}
+
+	// And they really are still running — otherwise the return proves nothing.
+	select {
+	case <-sf.started:
+	case <-time.After(5 * time.Second):
+		t.Error("no download ever started")
+	}
+	if n := inFlight.Load(); n == 0 {
+		t.Error("in-flight count is zero after returning; the caller cannot pace itself")
 	}
 }
