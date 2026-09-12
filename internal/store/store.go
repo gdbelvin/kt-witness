@@ -947,10 +947,24 @@ func (s *Store) HolesDue(origin string, from, to int64, now time.Time, limit int
 			if a.Verified || a.Epoch < from || a.Epoch > to {
 				continue
 			}
-			// Zero means it has not exhausted its attempts, so the ordinary
-			// sweep still owns it and this pass must not race it.
-			if a.RetryAfter.IsZero() || now.Before(a.RetryAfter) {
-				continue
+			// Attempts decide ownership, not the timestamp.
+			//
+			// This used to skip any record with a zero RetryAfter, reasoning
+			// that an unexhausted epoch still belongs to the ordinary sweep and
+			// this pass must not race it. The reasoning is right; reading it off
+			// RetryAfter was wrong, because a zero there means only that nobody
+			// scheduled a retry — which is exactly the state of every hole
+			// written while the field had no writer at all.
+			//
+			// Measured: 436 Meta epochs stuck at attempts=5 with
+			// 0001-01-01T00:00:00Z, invisible to this function forever. They
+			// failed on "No space left on device" during a tmpfs misconfiguration
+			// days earlier, and every one of them fetches fine now.
+			if a.Attempts < MaxFetchAttempts {
+				continue // the ordinary sweep still owns it
+			}
+			if !a.RetryAfter.IsZero() && now.Before(a.RetryAfter) {
+				continue // exhausted, but still inside its backoff
 			}
 			out = append(out, a.Epoch)
 		}
