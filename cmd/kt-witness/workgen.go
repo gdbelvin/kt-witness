@@ -177,7 +177,31 @@ func fillMore(ctx context.Context, db *store.Store, pf *audit.Prefetcher,
 	}
 	c.init(db, origin, h)
 
-	epochs := c.forward(db, origin, h, room)
+	// Holes first, and only ever a slice of the batch.
+	//
+	// A hole is an epoch already recorded unverified: we spent the bandwidth,
+	// failed, and it now sits inside the range the coverage figure is computed
+	// over. It is worth more than an untouched epoch for two reasons. It is a
+	// known address, so finding it costs a bounded scan rather than a search.
+	// And holes cluster immediately above the verified region — the forward
+	// cursor advances past whatever it offers and never rewinds, so a failure
+	// leaves a gap exactly where the contiguous run stops growing. Closing 436
+	// of them on Meta moves verified_region_epochs by far more than 436 fresh
+	// epochs at the bottom of history would.
+	//
+	// Capped at a quarter of the batch so a log with thousands of dead epochs
+	// cannot starve forward progress. They are due on a backoff that doubles
+	// to a week, so a genuinely pruned blob costs a handful of requests a week
+	// forever rather than being written off.
+	var epochs []int64
+	if n := room/4 + 1; n > 0 {
+		if due, err := db.HolesDue(origin, h.From, h.To, time.Now().UTC(), n); err == nil {
+			epochs = append(epochs, due...)
+		}
+	}
+	if len(epochs) < room {
+		epochs = append(epochs, c.forward(db, origin, h, room-len(epochs))...)
+	}
 	if len(epochs) < room {
 		epochs = append(epochs, c.backward(db, origin, h, room-len(epochs))...)
 	}

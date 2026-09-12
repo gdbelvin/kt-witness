@@ -288,7 +288,15 @@ func (a *Auditor) unavailable(ar *store.Audit, epoch int64, kind string, cause e
 			ar.Origin, epoch, kind, ar.Attempts, maxAttempts, cause)
 	}
 
+	// Exhausted, so hand it to the backoff rather than to nobody.
+	//
+	// Without this the record carried a zero RetryAfter, HolesDue skipped it
+	// forever, and the epoch was left to the generator's backward cursor — one
+	// visit per full descent, about twelve days on Meta. The forward cursor has
+	// already been advanced past it by SetAuditProgress below and deliberately
+	// never rewinds, so this field is the only thing that brings it back.
 	ar.Kind = "unavailable"
+	ar.RetryAfter = store.RetryAt(time.Now().UTC(), ar.Attempts)
 	if err := a.Store.RecordAudit(ar); err != nil {
 		return err
 	}
