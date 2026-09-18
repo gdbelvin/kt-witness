@@ -195,21 +195,19 @@ func (s *Source) VerifyConsistency(ctx context.Context, prev, next *source.Head)
 	tree := tlog.Tree{N: next.Size, Hash: next.Hash}
 	hr := torchwood.TileHashReaderWithContext(ctx, tree, s.fetcher)
 
-	if prev == nil {
-		// Trust on first use. We cannot prove anything about history we never
-		// saw, but we can confirm the log can actually produce tile data
-		// consistent with the root it just signed — which catches a log
-		// publishing a root it cannot back with real entries.
-		if next.Size == 0 {
-			return nil
-		}
-		if _, err := tlog.TreeHash(next.Size, hr); err != nil {
-			return fmt.Errorf("c2sp: first-use tile check failed: %w", err)
-		}
-		if s.cfg.VerifyEntries {
-			return s.verifyNewEntries(ctx, 0, next.Size, tree)
-		}
-		return nil
+	if prev == nil || prev.Size == 0 {
+		// Trust on first use, and growth from the empty tree, which is the same
+		// question: there is no earlier root to prove anything against.
+		//
+		// The empty tree needs naming because tlog.ProveTree refuses an old
+		// size below one, and "invalid inputs" is a plain error, so a log first
+		// witnessed at size 0 was withheld from on every round after its first
+		// entry arrived — permanently, since the stored head never advanced.
+		// New CT shards are exactly that: three loreto shards were cosigned
+		// empty on the day they were configured, grew within the hour, and
+		// were never cosigned again. Every tree extends the empty one, so the
+		// proof is vacuous; what remains worth checking is below.
+		return s.verifyFromEmpty(ctx, next, tree, hr)
 	}
 
 	proof, err := tlog.ProveTree(next.Size, prev.Size, hr)
@@ -236,6 +234,25 @@ func (s *Source) VerifyConsistency(ctx context.Context, prev, next *source.Head)
 		if err := s.verifyNewEntries(ctx, prev.Size, next.Size, tree); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// verifyFromEmpty is the consistency check when there is no earlier root: first
+// use, or a previously witnessed empty tree. We cannot prove anything about
+// history we never saw, but we can confirm the log can actually produce tile
+// data consistent with the root it just signed — which catches a log
+// publishing a root it cannot back with real entries — and, at tier B, that
+// every entry it publishes is the one its tree commits to.
+func (s *Source) verifyFromEmpty(ctx context.Context, next *source.Head, tree tlog.Tree, hr tlog.HashReader) error {
+	if next.Size == 0 {
+		return nil
+	}
+	if _, err := tlog.TreeHash(next.Size, hr); err != nil {
+		return fmt.Errorf("c2sp: first-use tile check failed: %w", err)
+	}
+	if s.cfg.VerifyEntries {
+		return s.verifyNewEntries(ctx, 0, next.Size, tree)
 	}
 	return nil
 }
