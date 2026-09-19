@@ -6,8 +6,13 @@
 
 ## Build
 
+Releases are built on GitHub from pushed code and published to
+`ghcr.io/gdbelvin/kt-witness`; `.github/workflows/release.yml` is the whole of
+it, and [deploy/RUNBOOK.md](deploy/RUNBOOK.md) "Releasing" is how a deploy
+names one. To build by hand:
+
 ```sh
-docker build --platform linux/amd64 -t kt-witness .
+docker build --platform linux/amd64 -t ghcr.io/gdbelvin/kt-witness:dev .
 ```
 
 One builder: Go, cross-compiled to the run platform, into

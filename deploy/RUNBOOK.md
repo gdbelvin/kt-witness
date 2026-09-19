@@ -25,10 +25,30 @@ git remote add server ssh://<server>/~/kt-witness.git && git push server master
 git clone ~/kt-witness.git kt-witness && cd kt-witness
 ```
 
-## 2. Build
+## 2. Get the image
+
+The server does not build. GitHub does, from pushed code, and publishes to
+`ghcr.io/gdbelvin/kt-witness` — see "Releasing" below for what gets tagged and
+how a deploy names it. Here, the only step is telling compose which tag:
 
 ```sh
-docker build -t kt-witness:latest .
+cp deploy/infra.example.env .env       # once; then keep it current
+$EDITOR .env                           # KT_WITNESS_TAG=sha-<7 hex> or a version
+docker compose pull kt-witness
+```
+
+**Once, after the first workflow run:** GHCR creates the package private. Either
+make it public in the package's settings on GitHub (the image is a public
+witness's public code, and a public package needs no login on the server), or
+`docker login ghcr.io` on the server with a token that has `read:packages`.
+Until one of those is done, `pull` is denied and looks like a typo in the tag.
+
+To run something that has not been pushed — a local experiment — build it under
+the same name and point the tag at it:
+
+```sh
+docker build -t ghcr.io/gdbelvin/kt-witness:dev .    # on the server, or push it
+KT_WITNESS_TAG=dev
 ```
 
 There is no separate verifier binary to check any more. This step used to pipe a
@@ -204,10 +224,78 @@ Residual jitter after that is real: proof sizes vary between epochs, and the CPU
 governor re-evaluates permits every 15s. Smoothing it further would hide the
 system rather than measure it.
 
-## Shipping the source without git
+## Releasing
 
-The server is not a git checkout, so the source arrives by tar over ssh. There
-is no rsync on it.
+The build happens on GitHub and the deploy happens here, and the line between
+them is drawn where the secrets are. `.github/workflows/release.yml` tests the
+tree, builds the image, pushes it to GHCR and attests which commit and which
+workflow produced it. It never reaches this machine. The `.env`, the
+work-channel token, the tunnel credentials and the signing key are read by the
+running container from this disk and are inputs to nothing GitHub does — so
+GitHub does not hold them, and there is nothing to leak.
+
+What a push produces:
+
+| Event | Image tags | Also |
+|---|---|---|
+| push to `master` | `sha-<7 hex>`, `master` | |
+| push tag `v0.1.1` | `0.1.1`, `latest` | a GitHub Release with generated notes |
+| pull request | nothing built | tests, gofmt, vet |
+
+Nothing restarts the witness but you. Deciding when to interrupt a running
+witness is a judgement call, and a pipeline that makes it is how a comment fix
+costs ninety seconds of cosignatures at three in the morning.
+
+**Deploy a master build**, once the workflow is green:
+
+```sh
+git log -1 --format=%h origin/master            # the 7 hex the image is tagged with
+KT_WITNESS_TAG=sha-<those> deploy/redeploy.sh witness
+```
+
+That ships the compose file and config, rewrites `KT_WITNESS_TAG` in the
+server's `.env`, pulls, recreates the container, and shows what came back. The
+`.env` is therefore the record of what is running; `git log` on the laptop is
+not, which is the point.
+
+**Cut a release** when a master build has run long enough to trust:
+
+```sh
+git tag -a v0.1.1 -m "a log first witnessed empty can be cosigned again"
+git push origin v0.1.1
+KT_WITNESS_TAG=0.1.1 deploy/redeploy.sh witness
+```
+
+**Roll back** by naming the previous tag. Nothing else changes:
+
+```sh
+KT_WITNESS_TAG=sha-<previous> deploy/redeploy.sh witness
+```
+
+**Check what is running** the same way as always, and expect the hash to be one
+you can find on GitHub:
+
+```sh
+curl -s https://witness.gdbsecurity.com/ | head -1
+```
+
+**Verify an image came from this repository's workflow**, from any machine with
+`gh`:
+
+```sh
+gh attestation verify oci://ghcr.io/gdbelvin/kt-witness:0.1.1 --repo gdbelvin/kt-witness
+```
+
+For a witness, that line is worth more than it looks: the signing key runs
+whatever code is in the container, and this is the proof of where that code
+came from.
+
+## Shipping the config
+
+The server is not a git checkout, so the compose file and the config arrive by
+tar over ssh. There is no rsync on it. It used to ship the source to be built
+there too; the source still arrives, harmlessly, but nothing on the server
+compiles it any more.
 
 ```sh
 # from the laptop
@@ -228,9 +316,10 @@ scp deploy/witness.json <server>:~/kt-witness/deploy/witness.json
 ```
 
 It also writes `.build-info` (commit and date) before the tar, which the
-Dockerfile bakes into the binary. Without it a build reports its commit as
-`unknown` — the server is not a git checkout, so it cannot work the commit out
-for itself. Check what is actually running with:
+Dockerfile bakes into the binary when the image is built from the tarball —
+the local-experiment path in step 2. A GitHub build gets the commit as build
+args instead, from the commit that triggered it, which is the honest one by
+construction. Check what is actually running with:
 
 ```sh
 curl -s https://witness.kt.gdbsecurity.com/ | head -1
@@ -311,7 +400,9 @@ anchor from, and neither serves proofs from a size we have not already witnessed
 
 ```sh
 # 8080 is often taken. Pick a free host port; the container port is unchanged.
-echo "KT_WITNESS_PORT=8088" > .env
+# .env also carries KT_WITNESS_TAG (step 2) and the LAN addresses from
+# deploy/infra.example.env; compose refuses to start with any of them unset.
+echo "KT_WITNESS_PORT=8088" >> .env
 docker compose up -d
 docker compose logs -f
 ```

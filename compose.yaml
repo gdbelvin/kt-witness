@@ -1,9 +1,19 @@
 services:
   kt-witness:
-    build:
-      context: .
-      platforms: [linux/amd64]
-    image: kt-witness:latest
+    # The image comes from GHCR, built and attested by
+    # .github/workflows/release.yml from a commit that has been pushed. It used
+    # to be built here from a source tarball, and the binary that resulted
+    # reported a commit hash nobody could find in the repository — the laptop
+    # that shipped it was ahead of what it had pushed. Only pushed code can be
+    # built now, so what runs is always something that can be read.
+    #
+    # The tag is pinned in .env rather than defaulted to `latest`: a deploy
+    # names what it deploys, and a rollback is editing the line back. Set it to
+    # a `sha-<7 hex>` tag for a master build or a bare version for a release;
+    # deploy/RUNBOOK.md "Releasing" has the steps. For a local build:
+    #
+    #   docker build -t ghcr.io/gdbelvin/kt-witness:dev . && KT_WITNESS_TAG=dev
+    image: ghcr.io/gdbelvin/kt-witness:${KT_WITNESS_TAG:?set KT_WITNESS_TAG in .env to the image tag to run — see deploy/RUNBOOK.md, Releasing}
     restart: unless-stopped
 
     # The witness's identity and its record of what it has attested. Back this

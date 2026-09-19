@@ -3,7 +3,9 @@
 #
 #   usage: deploy/redeploy.sh [witness|mac|gpu|workers|all]   (default: all)
 #
-#   witness  the server: ship, rebuild the image, recreate the container
+#   witness  the server: ship the config, pull the image, recreate the container
+#            KT_WITNESS_TAG=sha-abc1234 (or 0.1.1) pins a new image first;
+#            unset, the server keeps the tag already in its .env
 #   mac      this laptop's worker, rebuilt and restarted in place
 #   gpu      the GPU box's worker — NOT part of "all", see below
 #   workers  the workers that are part of "all" (just the mac)
@@ -39,10 +41,27 @@ echo "==> tests"
   || { echo "tests failed; nothing shipped" >&2; exit 1; }
 
 if [ "$WHAT" = all ] || [ "$WHAT" = witness ]; then
-  echo "==> witness: ship"
+  # The server no longer builds. The image is built and attested on GitHub
+  # from pushed code (.github/workflows/release.yml); what ships here is the
+  # compose file and the config, and the tag that says which image to run.
+  echo "==> witness: ship config"
   "$here/deploy/ship.sh" "$HOST" >/dev/null
-  echo "==> witness: build and restart"
-  ssh -n "$HOST" "cd ~/kt-witness && docker compose build kt-witness >/dev/null && docker compose up -d kt-witness" >/dev/null
+
+  # The tag lives in the server's .env, which is gitignored and never shipped.
+  # Pin it from here when asked, so a deploy is one command with the tag in
+  # it, and the .env stays the record of what is running.
+  if [ -n "${KT_WITNESS_TAG:-}" ]; then
+    echo "==> witness: pin KT_WITNESS_TAG=$KT_WITNESS_TAG"
+    ssh -n "$HOST" "cd ~/kt-witness && touch .env && \
+      if grep -q '^KT_WITNESS_TAG=' .env; then \
+        sed -i 's|^KT_WITNESS_TAG=.*|KT_WITNESS_TAG=$KT_WITNESS_TAG|' .env; \
+      else echo 'KT_WITNESS_TAG=$KT_WITNESS_TAG' >> .env; fi"
+  fi
+  TAG=$(ssh -n "$HOST" "cd ~/kt-witness && sed -n 's/^KT_WITNESS_TAG=//p' .env 2>/dev/null" || true)
+  [ -n "$TAG" ] || { echo "no KT_WITNESS_TAG on $HOST; pass one: KT_WITNESS_TAG=sha-abc1234 $0 witness" >&2; exit 1; }
+
+  echo "==> witness: pull $TAG and restart"
+  ssh -n "$HOST" "cd ~/kt-witness && docker compose pull -q kt-witness && docker compose up -d kt-witness" >/dev/null
 fi
 
 if [ "$WHAT" = all ] || [ "$WHAT" = workers ] || [ "$WHAT" = mac ]; then
