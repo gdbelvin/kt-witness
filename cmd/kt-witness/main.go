@@ -814,7 +814,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 	srv := &http.Server{
 		Addr: cfg.Listen,
 		Handler: (&server.Server{Store: db, VKey: vkey, Version: version, Commit: gitCommit, Built: buildDate, Workers: workers, Log: log, Tiers: tiers, Kinds: kinds,
-			Events:  events,
+			Events:      events,
 			Storage:     server.StoragePaths{DBPath: cfg.DB, ExportDir: cfg.ExportDir},
 			FundingPath: cfg.FundingPath}).Handler(),
 	}

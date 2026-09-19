@@ -261,11 +261,11 @@ func (d *dribble) Read(p []byte) (int, error) {
 	if d.i >= len(d.b) {
 		return 0, io.EOF
 	}
-	n := 7
-	if d.i+n > len(d.b) {
-		n = len(d.b) - d.i
-	}
-	copy(p, d.b[d.i:d.i+n])
+	// Report what was actually copied, not what was offered: a caller's buffer
+	// can be smaller than seven bytes (io.ReadAll starts small), and a Read
+	// that claims more than it wrote makes the caller slice past its buffer.
+	n := min(7, len(d.b)-d.i)
+	n = copy(p, d.b[d.i:d.i+n])
 	d.i += n
 	return n, nil
 }
