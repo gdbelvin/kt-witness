@@ -65,7 +65,7 @@ ingress:
   #
   # Growing logs fixed themselves on their next round. Two closed 2026h1 shards
   # could not, and stayed unverifiable for fourteen days until somebody outside
-  # reported it (#1). RepairCosignerName restates those lines on startup.
+  # reported it (#1). `kt-witness -repair-cosigner-name` restates those lines.
   #
   # Renaming a witness is never free once it has signed anything. If it happens
   # again, the stored cosignatures are part of the change.

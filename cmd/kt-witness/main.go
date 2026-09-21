@@ -447,6 +447,7 @@ func main() {
 	once := flag.Bool("once", false, "run a single round and exit (for testing)")
 	backfill := flag.Bool("backfill", false, "verify each log's published history before witnessing")
 	retract := flag.String("retract-fork", "", "withdraw a fork finding for this origin and exit; requires -reason")
+	repairName := flag.Bool("repair-cosigner-name", false, "restate stored cosignatures issued under a former witness name, and exit")
 	reason := flag.String("reason", "", "why a fork finding is being withdrawn")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	healthcheck := flag.Bool("healthcheck", false, "probe the local monitoring endpoint and exit non-zero if it is not serving")
@@ -490,7 +491,7 @@ func main() {
 		return
 	}
 
-	if err := run(cfg, log, events, *once, *backfill, *retract, *reason); err != nil {
+	if err := run(cfg, log, events, *once, *backfill, *repairName, *retract, *reason); err != nil {
 		log.Error("fatal", "err", err)
 		os.Exit(1)
 	}
@@ -572,7 +573,7 @@ func loadSigner(cfg *config) (*torchwood.CosignatureSigner, error) {
 	return torchwood.NewCosignatureSigner(cfg.Name, ed25519.NewKeyFromSeed(seed))
 }
 
-func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill bool, retractOrigin, retractReason string) error {
+func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill, repairName bool, retractOrigin, retractReason string) error {
 	signer, err := loadSigner(cfg)
 	if err != nil {
 		return err
@@ -585,14 +586,17 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 	}
 	defer db.Close()
 
-	// A rename leaves behind cosignatures nobody can attribute to us. Logs that
-	// are still growing repair themselves on their next round; closed shards
-	// never do, so the correction has to be applied to what is already stored.
-	// Idempotent, so it costs one pass over the heads bucket on every start.
-	if n, err := witness.RepairCosignerName(db, signer.Verifier(), log); err != nil {
-		return err
-	} else if n > 0 {
-		log.Warn("repaired cosignatures issued under a former name", "records", n, "name", cfg.Name)
+	// One-shot, like -retract-fork: a correction to state this witness already
+	// published, invoked deliberately rather than applied on every start. It
+	// needs nothing but the store and the key, so it runs before any source is
+	// built and returns without witnessing anything.
+	if repairName {
+		n, err := witness.RepairCosignerName(db, signer.Verifier(), log)
+		if err != nil {
+			return err
+		}
+		log.Info("cosigner name repair complete", "rewritten", n, "name", cfg.Name)
+		return nil
 	}
 
 	pollInterval, err := time.ParseDuration(cfg.PollInterval)

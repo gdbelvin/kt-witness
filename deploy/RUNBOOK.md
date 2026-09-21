@@ -294,9 +294,21 @@ holding the current verifier cannot match a line issued under the old name and
 skips it as a stranger's. This witness was renamed from
 `witness.kt.gdbsecurity.com` on 2026-09-03 and two closed CT shards, whose trees
 never advance again, served unattributable cosignatures for fourteen days before
-an outside report (#1) found them. `RepairCosignerName` restates such lines on
-startup, preserving the original signature and timestamp. Treat a rename as a
-change to stored state, not to configuration.
+an outside report (#1) found them.
+
+So a rename has a second step, on the stored records:
+
+```sh
+docker compose run --rm kt-witness -config /data/witness.json -repair-cosigner-name
+# cosigner name repair complete  rewritten=2  name=witness.gdbsecurity.com
+```
+
+It restates each line under the current name and key hash, preserving the
+original signature and timestamp — the attestation and the moment it was made
+are unchanged. Only lines that verify under this witness's own key are touched,
+so it cannot alter another party's cosignature and a second run rewrites
+nothing. Run it after changing `name`, and treat a rename as a change to stored
+state rather than to configuration.
 
 ## 5. Backfill
 
