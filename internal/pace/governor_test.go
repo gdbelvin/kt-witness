@@ -13,7 +13,6 @@
 package pace
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -96,49 +95,26 @@ func TestGovernorNeverExceedsPoolSize(t *testing.T) {
 	}
 }
 
-// TestAcquireRespectsPermits checks the gate itself, including that zero
-// permits pauses the sweep rather than letting it through.
-func TestAcquireRespectsPermits(t *testing.T) {
-	g := &Governor{ReserveCores: 11, MaxConcurrent: 4}
-	g.permits = 2
-
-	ctx := context.Background()
-	if err := g.Acquire(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := g.Acquire(ctx); err != nil {
-		t.Fatal(err)
-	}
-	// Third must block: 2 in flight against 2 permits.
-	short, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
-	defer cancel()
-	if err := g.Acquire(short); err == nil {
-		t.Fatal("acquired a third permit when only two were allowed")
-	}
-
-	g.Release()
-	if err := g.Acquire(ctx); err != nil {
-		t.Fatalf("a released permit was not reusable: %v", err)
-	}
-
-	// Zero permits pauses entirely.
-	g2 := &Governor{ReserveCores: 11, MaxConcurrent: 4}
-	g2.permits = 0
-	short2, cancel2 := context.WithTimeout(ctx, 200*time.Millisecond)
-	defer cancel2()
-	if err := g2.Acquire(short2); err == nil {
-		t.Fatal("work started with zero permits")
-	}
-}
-
 // A nil Governor must be a no-op, so pacing can be switched off in config
-// without the history sweep having to know.
+// without every caller having to know.
+//
+// It used to pin this on Acquire and Release. Those are gone with the sweep
+// that called them, so it pins the same property on what actually reads the
+// governor now: a worker asks Ready before taking on more, and sizes itself
+// from Permits. Inert means the first says yes and the second reports no
+// allowance — which is why the callers check Measured first, and why a nil
+// governor leaves a worker at its configured width rather than at one.
 func TestNilGovernorIsInert(t *testing.T) {
 	var g *Governor
-	if err := g.Acquire(context.Background()); err != nil {
-		t.Fatalf("nil governor blocked: %v", err)
+	if !g.Ready(8) {
+		t.Error("a nil governor held work back; pacing is meant to be off")
 	}
-	g.Release()
+	if p := g.Permits(); p != 0 {
+		t.Errorf("nil governor reported %v permits, want 0", p)
+	}
+	if g.Measured() {
+		t.Error("a nil governor claims to have measured the machine")
+	}
 }
 
 // TestBudgetIsDerivedFromTheMachine is the property that keeps this correct

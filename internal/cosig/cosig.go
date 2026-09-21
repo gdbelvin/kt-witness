@@ -227,33 +227,6 @@ func parseBody(text, wantOrigin string) (size int64, root string, ok bool) {
 	return n, lines[2], true
 }
 
-// Conflict reports two attestations of different roots at one size.
-//
-// This is conclusive ONLY when both carry the log's own signature over their
-// respective bodies: a log cannot have signed two roots at one size, and that
-// is the log convicting itself. Two witness cosignatures on the same document
-// can never reach this state, so in practice it is reachable only once peer
-// checkpoints can be fetched — see peer.go.
-//
-// Which party was served the false history is not determined by the evidence.
-// Only that somebody was.
-type Conflict struct {
-	Origin    string
-	Size      int64
-	A, B      string // witness names
-	RootA     string
-	RootB     string
-	Timestamp uint64
-}
-
-func (c *Conflict) Error() string {
-	return fmt.Sprintf(
-		"split view on %s at size %d: %s attests root %s, %s attests root %s; "+
-			"a log cannot have two roots at one size, so it served different "+
-			"histories to different parties",
-		c.Origin, c.Size, c.A, c.RootA, c.B, c.RootB)
-}
-
 // cosignatureTimestamp reads the seconds field out of a cosignature/v1 blob.
 //
 // The blob is keyid(4) ‖ timestamp(8, big-endian) ‖ signature(64). torchwood's

@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"github.com/gdbsecurity/kt-witness/internal/metrics"
-	"github.com/gdbsecurity/kt-witness/internal/netmeter"
-	"github.com/gdbsecurity/kt-witness/internal/pace"
 
 	"github.com/gdbsecurity/kt-witness/internal/store"
 )
@@ -53,11 +51,6 @@ type Auditor struct {
 	// Prefetch, if set, downloads proofs ahead of verification so the link and
 	// the CPU are busy at the same time instead of taking turns.
 	Prefetch *Prefetcher
-
-	// Governor, if set, paces the BACKWARDS sweep against measured CPU. Live
-	// auditing is never paced: it follows the tip and is what would notice an
-	// operator misbehaving now.
-	Governor *pace.Governor
 
 	// Rate is the fraction of epochs verified, published alongside results.
 	Rate float64
@@ -206,7 +199,7 @@ func (a *Auditor) Run(ctx context.Context, r Resolver) error {
 
 		a.Log.Info("auditing epoch", "origin", origin, "epoch", epoch,
 			"strategy", strategy, "rate", rate, "age", age, "attempt", ar.Attempts)
-		res, err := a.Verifier.Verify(ctx, ref.LogDirectory, epoch, ref.PrevRoot, ref.CurrRoot, a.Timeout)
+		res, err := a.Verifier.Verify(ctx, origin, ref.LogDirectory, epoch, ref.PrevRoot, ref.CurrRoot, a.Timeout)
 		if err != nil {
 			return a.unavailable(ar, epoch, "fetch", err)
 		}
@@ -255,10 +248,6 @@ func (a *Auditor) Run(ctx context.Context, r Resolver) error {
 		// contributing looks like a log that got slower.
 		metrics.Inc(MetricByWorker, map[string]string{"worker": "witness-live", "origin": origin})
 		metrics.Add("kt_witness_audit_bytes_total", lbl, float64(ar.Bytes))
-		// The verifier fetches proofs over its own HTTP stack, outside any
-		// transport we wrap, so without this the single largest consumer of
-		// bandwidth in the system would not appear in the bandwidth metric.
-		netmeter.Add(origin, ar.Bytes)
 		metrics.Add("kt_witness_audit_duration_seconds_sum", lbl, float64(ar.DurationMS)/1000)
 
 		if err := a.Store.SetAuditProgress(origin, epoch); err != nil {
@@ -299,7 +288,15 @@ func (a *Auditor) unavailable(ar *store.Audit, epoch int64, kind string, cause e
 			ar.Origin, epoch, kind, ar.Attempts, maxAttempts, cause)
 	}
 
+	// Exhausted, so hand it to the backoff rather than to nobody.
+	//
+	// Without this the record carried a zero RetryAfter, HolesDue skipped it
+	// forever, and the epoch was left to the generator's backward cursor — one
+	// visit per full descent, about twelve days on Meta. The forward cursor has
+	// already been advanced past it by SetAuditProgress below and deliberately
+	// never rewinds, so this field is the only thing that brings it back.
 	ar.Kind = "unavailable"
+	ar.RetryAfter = store.RetryAt(time.Now().UTC(), ar.Attempts)
 	if err := a.Store.RecordAudit(ar); err != nil {
 		return err
 	}

@@ -114,7 +114,10 @@ func (p *Prefetcher) init() {
 		}
 		p.sem = make(chan struct{}, n)
 		if p.Client == nil {
-			p.Client = &http.Client{Timeout: 10 * time.Minute}
+			p.Client = &http.Client{
+				Timeout:   10 * time.Minute,
+				Transport: &http.Transport{DialContext: netmeter.Dialer().DialContext},
+			}
 		}
 		// Adopt anything already on disk from a previous run. Re-downloading
 		// proofs we already hold would waste exactly the bandwidth this exists
@@ -356,7 +359,11 @@ func (p *Prefetcher) Fetch(ctx context.Context, origin, logDirectory string, epo
 	if err != nil {
 		return err
 	}
-	n, err := io.Copy(f, resp.Body)
+	// Through netmeter rather than straight off the body: that is where the
+	// bytes are counted AND where the download is held below the line rate.
+	// This is the path that pulls ~90% of everything, so a cap that missed it
+	// would not be a cap.
+	n, err := io.Copy(f, netmeter.Reader(ctx, origin, resp.Body))
 	closeErr := f.Close()
 	if err != nil || closeErr != nil {
 		os.Remove(tmp)
@@ -370,7 +377,6 @@ func (p *Prefetcher) Fetch(ctx context.Context, origin, logDirectory string, epo
 		return err
 	}
 
-	netmeter.Add(origin, n)
 	p.mu.Lock()
 	p.cached[k] = n
 	p.markReady(origin, epoch)
@@ -383,6 +389,15 @@ func (p *Prefetcher) Fetch(ctx context.Context, origin, logDirectory string, epo
 			"mb", n>>20, "cached", held, "cache_gb", total>>30)
 	}
 	return nil
+}
+
+// Concurrency is how many downloads may run at once, after defaulting. The
+// EFFECTIVE number rather than the configured one: Workers below 1 means the
+// default, and a caller publishing the configured value would report zero for a
+// pool of four.
+func (p *Prefetcher) Concurrency() int {
+	p.init()
+	return cap(p.sem)
 }
 
 // Stats reports what the cache is holding.

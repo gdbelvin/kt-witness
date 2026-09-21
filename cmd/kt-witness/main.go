@@ -28,6 +28,7 @@ import (
 	"github.com/gdbsecurity/kt-witness/internal/cosig"
 	"github.com/gdbsecurity/kt-witness/internal/export"
 	"github.com/gdbsecurity/kt-witness/internal/metrics"
+	"github.com/gdbsecurity/kt-witness/internal/netmeter"
 	"github.com/gdbsecurity/kt-witness/internal/server"
 	"github.com/gdbsecurity/kt-witness/internal/source"
 	"github.com/gdbsecurity/kt-witness/internal/source/akd"
@@ -188,8 +189,8 @@ type config struct {
 		GoConcurrent int `json:"go_concurrent"`
 
 		// ReserveCores is how many cores to leave free for everything else. The
-		// backlog sweep's budget is derived from the machine: it drives total
-		// usage toward (cores - reserve). Defaults to 1 when pacing is on.
+		// governor's budget is derived from the machine: it drives total usage
+		// toward (cores - reserve). Defaults to 1 when pacing is on.
 		//
 		// Derived rather than stated because a core count is a fact about
 		// hardware that changes, and a stale one has already cost this project
@@ -210,7 +211,7 @@ type config struct {
 		// PrefetchWorkers is how many downloads run at once — this is what
 		// saturates the link, and since the generator became the fleet's only
 		// downloader it has to cover everybody's appetite, not just this
-		// machine's sweep.
+		// machine's.
 		//
 		// It was 8, which was right when each verifier also fetched its own
 		// proofs: the fleet then had about nineteen connections open and pulled
@@ -226,6 +227,32 @@ type config struct {
 		// configured — raise it until throughput stops improving.
 		PrefetchWorkers int `json:"prefetch_workers"`
 
+		// DSCPClass marks outbound packets so a shaper can sort this traffic
+		// into its bulk queue. 8 is CS1, the de-facto scavenger class and what
+		// CAKE's diffserv modes recognise; 1 is RFC 8622 Lower Effort, which is
+		// more correct and less widely honoured; 0 does not mark.
+		//
+		// It does not slow anything down on its own — see internal/netmeter,
+		// which explains why the mark cannot reach the CDN sending the bytes.
+		// It is what a ROUTER doing ingress shaping keys on, via conntrack
+		// carrying the outbound class across to the returning packets. Without
+		// it a 284 MB proof and a video call look the same to the one queue
+		// that could tell them apart.
+		DSCPClass int `json:"dscp_class"`
+
+		// MaxDownloadMbit holds every download this process makes below a rate,
+		// in megabits per second, across all logs together. Zero is unlimited,
+		// which is what this did before and is right for a machine on a link
+		// nobody else is using.
+		//
+		// It exists because the generator pulls as hard as the CDN will serve,
+		// and on a home connection that is the whole link: measured here at
+		// 674-899 Mbit/s against a line of about 885, which left a video call
+		// on the same connection unusable. Set it below the line rate, not at
+		// it — what ruins a call is the ISP's downstream queue filling up, and
+		// the queue only stays short if the link is never quite full.
+		MaxDownloadMbit float64 `json:"max_download_mbit"`
+
 		// PrefetchMinFreeBytes is free space the cache will not consume,
 		// whatever its own cap says. The volume also holds the store and
 		// Proton's retained tree, and filling it stops the witness recording
@@ -236,7 +263,8 @@ type config struct {
 		// who wants to use less than the machine allows.
 		TargetCores float64 `json:"target_cores"`
 
-		// Pace enables CPU pacing of the backlog sweep. Live auditing is never
+		// Pace enables CPU pacing of this machine's own verification — it is
+		// what the local worker's width is read from. Live auditing is never
 		// paced.
 		Pace bool `json:"pace_backlog"`
 
@@ -624,6 +652,16 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 	// exists; the verifier is built before the channel it serves.
 	var auditInterval time.Duration
 	var resolvers []audit.Resolver
+	// The CPU governor. Declared out here rather than inside the block that
+	// builds it because two things outside that block read it: the work
+	// channel, whose local worker sizes itself from it, and the goroutine that
+	// runs its control loop.
+	//
+	// It used to be stashed on the Auditor and fetched back out through a
+	// governorFor helper. The audit package never read the field — it was a
+	// carrier between two points in this function, wearing the shape of a
+	// dependency the auditor did not have.
+	var governor *pace.Governor
 	// Tier B runs when there is a log that can be audited.
 	//
 	// The gate used to be a path to a Rust verifier binary, which made
@@ -674,7 +712,6 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 		// the previous value was chosen when a verification took 94 s on four
 		// cores, and after more cores arrived it left five of them idle while
 		// the backlog still measured months.
-		var governor *pace.Governor
 		if cfg.Audit.Pace || cfg.Audit.TargetCores > 0 || cfg.Audit.ReserveCores > 0 {
 			// The ceiling has to match whatever is actually verifying.
 			//
@@ -716,15 +753,39 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 				MinFreeBytes: cfg.Audit.PrefetchMinFreeBytes,
 				Log:          log,
 			}
+			// Set before any client dials, so the first connection is marked.
+			if c := cfg.Audit.DSCPClass; c > 0 {
+				netmeter.SetDSCP(c)
+				log.Info("outbound traffic marked", "dscp", c,
+					"note", "a shaper must act on this; the mark alone slows nothing down")
+			}
+			metrics.Set(server.MDSCPClass, nil, float64(netmeter.DSCP()))
+
+			// Applied here rather than inside the prefetcher: the cap is a fact
+			// about the link, and three different things in this process download
+			// over it.
+			if mbit := cfg.Audit.MaxDownloadMbit; mbit > 0 {
+				netmeter.SetLimit(mbit * 1e6 / 8)
+				log.Info("download rate capped", "mbit_per_sec", mbit,
+					"note", "set below the line rate; a full link is what ruins a call on the same connection")
+			}
+			metrics.Set(server.MDownloadLimit, nil, netmeter.Limit())
+
 			files, bytes := prefetch.Stats()
 			log.Info("proof prefetch enabled", "dir", d,
-				"cap_gb", prefetch.MaxBytes>>30, "adopted_files", files, "adopted_gb", bytes>>30)
+				"cap_gb", prefetch.MaxBytes>>30, "adopted_files", files, "adopted_gb", bytes>>30,
+				"workers", cfg.Audit.PrefetchWorkers)
+			// Published because it decides the download rate and there was no
+			// way to confirm from outside that a change to it had taken: the
+			// value was measured by raising it and watching for an effect,
+			// which is exactly the experiment that cannot distinguish "no
+			// effect" from "never deployed".
+			metrics.Set(server.MPrefetchWorkers, nil, float64(prefetch.Concurrency()))
 		}
 		auditor = &audit.Auditor{
 			Store: db, Beacon: audit.NewBeacon(cfg.Audit.BeaconURL),
 			Verifier: goVerifier, Log: log, Rate: rate, Timeout: auditTimeout,
 			MaxEpochsPerRound: maxEpochsPerRound(cfg.Audit.MaxEpochsPerRound),
-			Governor:          governor,
 			Prefetch:          prefetch,
 		}
 		for _, src := range sources {
@@ -799,7 +860,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 				wTimeout = auditor.Timeout
 			}
 		}
-		w, err := startWorkChannel(ctx, cfg, db, governorFor(auditor), wVerifier, wPrefetch, wResolvers, wTimeout, log)
+		w, err := startWorkChannel(ctx, cfg, db, governor, wVerifier, wPrefetch, wResolvers, wTimeout, log)
 		if err != nil {
 			// Refusing to start is the point. A work channel that silently did
 			// not come up would leave the witness looking healthy while the
@@ -814,7 +875,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 	srv := &http.Server{
 		Addr: cfg.Listen,
 		Handler: (&server.Server{Store: db, VKey: vkey, Version: version, Commit: gitCommit, Built: buildDate, Workers: workers, Log: log, Tiers: tiers, Kinds: kinds,
-			Events:  events,
+			Events:      events,
 			Storage:     server.StoragePaths{DBPath: cfg.DB, ExportDir: cfg.ExportDir},
 			FundingPath: cfg.FundingPath}).Handler(),
 	}
@@ -948,13 +1009,13 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 			}
 		}()
 	}
-	if auditor != nil && auditor.Governor != nil {
-		go auditor.Governor.Run(ctx)
-		log.Info("backlog sweep paced against CPU",
+	if governor != nil {
+		go governor.Run(ctx)
+		log.Info("local verification paced against CPU",
 			"cores_detected", runtime.NumCPU(),
-			"budget_cores", auditor.Governor.BudgetFor(float64(runtime.NumCPU())),
+			"budget_cores", governor.BudgetFor(float64(runtime.NumCPU())),
 			"reserve_cores", cfg.Audit.ReserveCores,
-			"max_concurrent", auditor.Governor.MaxConcurrent,
+			"max_concurrent", governor.MaxConcurrent,
 			"note", "live auditing is never paced")
 	}
 
@@ -988,85 +1049,30 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 			}
 		}()
 
-		// The backwards sweep runs on its OWN goroutine, not after the forward
-		// one.
+		// The backwards sweep that used to live here is gone, and so is the
+		// hole-repair pass beside it.
 		//
-		// It used to run after awg.Wait(), which read as a sensible priority
-		// rule — the tip is a live incident, history is a completeness exercise
-		// — but it made history's progress conditional on the forward pass ever
-		// finishing. With an unbounded backlog the forward pass does not
-		// finish for days, so the sweep never ran at all: 31 of Meta's 536,043
-		// epochs, frozen, with no error and no log line to say why. A
-		// completeness metric that silently stops moving is worse than one that
-		// is honestly slow.
+		// Both were the witness auditing history by itself: one cursor walking
+		// down, verifying inline, on the same download budget the work generator
+		// needs. The generator plus the queue now do the same job better in the
+		// two ways that were the sweep's standing defects.
 		//
-		// Priority is now enforced where it actually belongs — the verifier
-		// mutex — so the two sweeps interleave one verification at a time
-		// instead of one starving the other. Memory stays bounded because only
-		// one verification ever runs.
-		go func() {
-			for {
-				// Across origins in parallel, like the forward sweep. The
-				// verifier's concurrency is what bounds real work, so fanning out
-				// here costs nothing when the pool is small and uses the whole
-				// pool when it is not.
-				var hwg sync.WaitGroup
-				for _, r := range resolvers {
-					hwg.Add(1)
-					go func(r audit.Resolver) {
-						defer hwg.Done()
-						out, err := auditor.RunHistory(ctx, r, historyBudgetPerRound)
-						if err != nil && ctx.Err() == nil {
-							log.Warn("history sweep", "origin", r.Origin(), "err", err)
-							return
-						}
-						if out != nil && out.Verified > 0 {
-							log.Info("history swept", "origin", out.Origin,
-								"from", out.From, "to", out.To, "verified", out.Verified,
-								"remaining", out.Remaining, "complete", out.Complete)
-						}
-
-						// Revisit holes the sweep left behind. It runs here, on
-						// the sweep's own goroutine and after it, so repair can
-						// never crowd out forward progress: the cursor moving
-						// down is the primary job and closing gaps is the
-						// cleanup. The budget is deliberately a fraction of the
-						// sweep's — holes are few, and each has already waited
-						// at least an hour.
-						rep, err := auditor.RunRepair(ctx, r, repairBudgetPerRound)
-						if err != nil && ctx.Err() == nil {
-							log.Warn("hole repair", "origin", r.Origin(), "err", err)
-							return
-						}
-						if rep != nil && rep.Attempted > 0 {
-							log.Info("holes retried", "origin", rep.Origin,
-								"attempted", rep.Attempted, "repaired", rep.Repaired,
-								"still_open", rep.Remaining)
-						}
-					}(r)
-				}
-				hwg.Wait()
-
-				// A short pause, not a duty cycle.
-				//
-				// This used to sleep the full audit interval, which combined
-				// with a fixed per-round budget to produce a staircase: about
-				// a hundred seconds of work, then five minutes of nothing,
-				// regardless of how idle the machine was. Pacing is the
-				// governor's job now — it measures CPU and grants permits —
-				// and a second throttle here just meant the controller had no
-				// lever to pull.
-				//
-				// Long enough to yield between passes and to notice a context
-				// cancellation promptly; short enough that progress looks like
-				// progress rather than a sawtooth.
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(historyPause):
-				}
-			}
-		}()
+		// The sweep's cursor only ever walked down, so an epoch it could not
+		// fetch was behind it forever and every transient CDN refusal became a
+		// permanent hole — which is the entire reason repair.go existed. The
+		// generator's backward cursor WRAPS: at the bottom it restarts from the
+		// forward pass's floor, and it selects with FirstUnverified, so an epoch
+		// recorded unverified is offered again on the next descent. Holes heal as
+		// an ordinary consequence of the descent instead of needing a second pass
+		// with its own backoff table.
+		//
+		// And the sweep verified on this box. The queue hands the same epochs to
+		// whoever has capacity, which after the pool fix is this box at full
+		// width plus every borrowed machine.
+		//
+		// Coverage does not depend on either of them and never did: the server
+		// computes it by scanning audit records in the store, and a worker's
+		// result is recorded with the same shape the sweep wrote.
 	}
 
 	// Scanning surfaces other logs' heads carried inside a log we witness —
@@ -1222,44 +1228,6 @@ const roundConcurrency = 8
 // routine warning into something that demands attention. At a 60 s poll that is
 // roughly twenty minutes of a log not being witnessed at all.
 const sustainedWithholding = 20
-
-// historyPause is the gap between backwards-sweep passes.
-//
-// Deliberately short. What limits the sweep is the CPU governor, not a timer:
-// when the machine is busy the governor withholds permits and the sweep blocks
-// inside Acquire, which is where the waiting belongs. A long sleep here throttles
-// even an idle box, which is exactly the behaviour it used to have.
-const historyPause = 10 * time.Second
-
-// historyBudgetPerRound bounds how many historical epochs one pass audits.
-//
-// Small on purpose. Meta alone has 625,000 published epochs at ~24 s of
-// verification each; sweeping them is a months-long background task, not
-// something to finish today, and it must never crowd out the forward auditing
-// that catches an active equivocation.
-// Raised from 4 once the governor existed. This is a yield point — how much one
-// origin does before the loop comes back around and gives the others a turn —
-// rather than a throttle. Throttling is measured, and lives in the governor.
-// Measured: with a budget of 32 the permit count sat at 4 while in-flight
-// verifications fell to 1 and then 0 — the tail of each batch draining with
-// capacity idle, because every epoch in a batch must finish before the next
-// batch begins and Meta's proofs take ~37s against WhatsApp's ~7s.
-//
-// A larger budget does not remove that barrier, it amortises it: the idle tail
-// is roughly constant per batch, so tripling the batch cuts its share of the
-// round by the same factor. The real fix is a sliding window that admits a new
-// epoch as each one completes, which is a rewrite of the cursor-settlement
-// logic — and that logic has produced four bugs this week, so it wants its own
-// change with its own tests rather than riding along with a constant.
-const historyBudgetPerRound = 96
-
-// repairBudgetPerRound bounds how many holes one pass retries.
-//
-// Small on purpose. Holes are rare — a healthy log has none — and each has
-// already waited out at least an hour of backoff, so there is no urgency. What
-// matters is that the number is nonzero: a gap nobody ever revisits is a
-// permanent subtraction from the coverage claim.
-const repairBudgetPerRound = 4
 
 // withholding tracks consecutive failures per origin, so a persistent problem
 // is distinguishable from the ordinary transient one.
@@ -1868,15 +1836,6 @@ func storedHistory(db *store.Store, origin string) *store.History {
 // rewrites an object nobody re-reads — which is exactly where a rewrite would
 // be put. A daily full walk closes that, at two minutes of listing.
 const fullBackfillEvery = 24 * time.Hour
-
-// governorFor is the pacer the local workers share with the rest of the
-// witness's own load, so the two do not each think they have the machine.
-func governorFor(a *audit.Auditor) *pace.Governor {
-	if a == nil {
-		return nil
-	}
-	return a.Governor
-}
 
 func canaryEvery(n int) int {
 	if n <= 0 {

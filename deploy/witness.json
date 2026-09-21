@@ -25,7 +25,9 @@
   "audit": {
     "prefetch_dir": "/data/proof-cache",
     "prefetch_bytes": 68719476736,
-    "prefetch_workers": 32,
+    "dscp_class": 8,
+    "max_download_mbit": 1400,
+    "prefetch_workers": 64,
     "prefetch_min_free_bytes": 5368709120,
     "pace_backlog": true,
     "sample_rate": 0.1,

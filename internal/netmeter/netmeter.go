@@ -84,27 +84,23 @@ func (t *transport) RoundTrip(r *http.Request) (*http.Response, error) {
 	// bytes we received, not the bytes we were promised, and the whole point of
 	// this is to know what the link really carried.
 	record(t.origin, 0, out, 1)
-	resp.Body = &countingBody{ReadCloser: resp.Body, origin: t.origin}
+	// Counting and pacing are the same wrapper — see limit.go. The count is
+	// flushed per read rather than on Close, so a body that is never closed, or
+	// a process that exits mid-download, still reports what it carried; a long
+	// download is exactly when somebody is watching.
+	resp.Body = &meteredBody{
+		Reader: Reader(r.Context(), t.origin, resp.Body),
+		closer: resp.Body,
+	}
 	return resp, nil
 }
 
-type countingBody struct {
-	io.ReadCloser
-	origin string
-	n      int64
+type meteredBody struct {
+	io.Reader
+	closer io.Closer
 }
 
-func (c *countingBody) Read(p []byte) (int, error) {
-	n, err := c.ReadCloser.Read(p)
-	if n > 0 {
-		c.n += int64(n)
-		// Flush per read rather than on Close: a body that is never closed, or
-		// a process that exits mid-download, would otherwise lose the count
-		// entirely — and a long download is exactly when someone is watching.
-		record(c.origin, int64(n), 0, 0)
-	}
-	return n, err
-}
+func (m *meteredBody) Close() error { return m.closer.Close() }
 
 func record(origin string, in, out, reqs int64) {
 	mu.Lock()

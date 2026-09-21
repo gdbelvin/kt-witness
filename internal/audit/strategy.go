@@ -30,10 +30,17 @@ import (
 //	          newest unaudited epochs are done first and older ones are still
 //	          reached, just less densely.
 //
-//	HISTORY   Everything published before we started watching, swept backwards
+//	HISTORY   Everything published before we started watching, worked backwards
 //	          exhaustively. Those proofs are already fixed, so an operator
 //	          cannot retroactively choose what we replay and sampling buys no
-//	          unpredictability — it only costs coverage. See history.go.
+//	          unpredictability — it only costs coverage.
+//
+//	          This one no longer happens in this package. It used to be a
+//	          cursor here that fetched and verified inline; it is now the work
+//	          generator's backward cursor filling the proof cache and the queue
+//	          handing those epochs to whichever machine has capacity. The
+//	          strategy is unchanged — exhaustive, descending — and only the
+//	          thing carrying it out moved. See cmd/kt-witness/workgen.go.
 //
 // # Not duplicating work
 //
@@ -48,9 +55,8 @@ import (
 //     and the strategy only decides WHETHER to audit it, never revisits it.
 //     Progress advances past every epoch whose decision is settled, audited or
 //     declined, so the forward pass never returns to it.
-//   - HISTORY sweeps strictly below the forward auditor's floor, downward, and
-//     records its own separate high-water mark. The two move away from each
-//     other and can never meet twice.
+//   - HISTORY works strictly below the forward auditor's floor, downward. The
+//     two move away from each other, so they cannot both reach one epoch.
 //   - Every strategy consults the stored decision before doing any work, so an
 //     epoch already settled by any of them is skipped by all of them. That is
 //     the backstop for the case the invariants miss: a restart mid-pass, or a
@@ -66,6 +72,12 @@ type Strategy string
 const (
 	StrategyLive    Strategy = "live"
 	StrategyBacklog Strategy = "backlog"
+
+	// StrategyHistory is no longer written by anything: the backwards pass it
+	// named ran in this package and now runs through the work queue, which
+	// records "worker:<name>" instead. It is kept because the store is full of
+	// records that carry it, and a reader of those records needs the name to
+	// mean something.
 	StrategyHistory Strategy = "history"
 )
 

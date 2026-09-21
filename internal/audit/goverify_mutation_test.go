@@ -64,7 +64,7 @@ func TestTheAssembledVerifierRejectsAMutatedProof(t *testing.T) {
 	if err := os.WriteFile(good, proof, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	res, err := g.VerifyCached(context.Background(), "", epoch, prev, curr, good, time.Minute)
+	res, err := g.VerifyCached(context.Background(), "", "", epoch, prev, curr, good, time.Minute)
 	if err != nil || res == nil || !res.OK {
 		t.Fatalf("the unmodified fixture did not verify: %+v %v", res, err)
 	}
@@ -80,7 +80,7 @@ func TestTheAssembledVerifierRejectsAMutatedProof(t *testing.T) {
 		if err := os.WriteFile(bad, mutated, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		res, err := g.VerifyCached(context.Background(), "", epoch, prev, curr, bad, time.Minute)
+		res, err := g.VerifyCached(context.Background(), "", "", epoch, prev, curr, bad, time.Minute)
 		if err != nil {
 			t.Fatalf("trial %d: %v", i, err)
 		}
@@ -101,7 +101,7 @@ func TestTheAssembledVerifierRejectsAMutatedProof(t *testing.T) {
 func TestAnUnreadableProofIsNotAnAcceptance(t *testing.T) {
 	_, epoch, prev, curr := loadFixture(t)
 	g := &GoVerifier{Concurrent: 1}
-	res, err := g.VerifyCached(context.Background(), "", epoch, prev, curr,
+	res, err := g.VerifyCached(context.Background(), "", "", epoch, prev, curr,
 		filepath.Join(t.TempDir(), "not-there.bin"), time.Minute)
 	if err != nil {
 		t.Fatalf("a missing proof was reported as an error rather than a result: %v", err)

@@ -358,10 +358,15 @@ func recordWorkerResult(ctx context.Context, db *store.Store, q *work.Queue,
 		log.Info("epoch unavailable", "origin", r.Origin, "epoch", r.Epoch,
 			"worker", r.Worker, "attempt", attempt, "rescheduled", again,
 			"err", r.Err)
+		// Once the queue stops rescheduling, the backoff is what will bring
+		// this epoch back; the generator asks for holes whose time has come.
+		// A zero here means nothing ever looks at it again except a backward
+		// sweep that takes days to come round.
+		now := time.Now().UTC()
 		return db.RecordAudit(&store.Audit{
 			Origin: r.Origin, Epoch: r.Epoch, Sampled: true, Rate: 1,
 			Strategy: "worker:" + r.Worker, Verified: false, Attempts: attempt,
-			DecidedAt: time.Now().UTC(),
+			DecidedAt: now, RetryAfter: store.RetryAt(now, attempt),
 		})
 	}
 	// The comparison happens HERE, and only here.

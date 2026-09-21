@@ -47,28 +47,26 @@ func startLocalWorkers(ctx context.Context, cfg *config, db *store.Store, q *wor
 		Name:         name,
 		Log:          log.With("worker", name),
 		EpochTimeout: timeout,
-		// How much of this box to use, asked fresh for each range.
+		// How much of this box to use, asked fresh on every pass of the
+		// request loop.
 		//
-		// Spare, not Permits: the backwards sweep draws on the same allowance
-		// and takes permits as it goes, so what is free is the allowance less
-		// what it holds. Reading Permits would have both size themselves for
-		// the whole budget — two full-width sweeps, sixteen proof replays at
-		// 3.7 GB each against a 44 GB limit, which is an OOM kill of the
-		// witness rather than a slowdown. It would also have looked fine until
-		// the box went quiet enough for both to widen at once.
+		// This is now the ONLY consumer of the governor on this machine, which
+		// is why Spare() is gone: it returned permits less what the backwards
+		// sweep had acquired, and with the sweep deleted nothing acquires.
 		//
 		// A fixed n gated on "wait until there is room for n" was the tempting
 		// alternative and would have starved silently: live witnessing does not
 		// consult this governor and can hold the machine indefinitely, so
-		// permits sit at their floor and the gate would never open.
-		// The origin makes no difference here. This worker runs the Rust
-		// verifications, whose concurrency is the bound, and the governor is already
-		// measuring what the box can afford — so the answer is about the
-		// machine rather than about the log.
+		// permits sit at their floor and the gate would never open. That is
+		// also why there is no BeforeNext below, unlike the laptop's.
+		//
+		// The origin makes no difference here: the verifier's own semaphore is
+		// the bound, and the governor is already measuring what the box can
+		// afford — so the answer is about the machine rather than the log.
 		Parallel: func(string) int {
 			w := n
 			if g != nil {
-				switch p := int(g.Spare()); {
+				switch p := int(g.Permits()); {
 				case p < 1:
 					w = 1 // always some progress; one replay is 3.7 GB of 44
 				case p > n:
@@ -213,6 +211,6 @@ func verifyEpochHere(ctx context.Context, r audit.Resolver, v audit.Verifier,
 	// epochs the generator has already downloaded. Passing "" here would send
 	// this machine to the CDN for bytes sitting on its own disk — the same
 	// mistake the proof server was making for every remote worker.
-	return g.ComputeRoots(ctx, ref.LogDirectory, epoch,
+	return g.ComputeRoots(ctx, origin, ref.LogDirectory, epoch,
 		ref.PrevRoot, ref.CurrRoot, pf.Path(origin, epoch), timeout)
 }

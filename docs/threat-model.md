@@ -272,7 +272,7 @@ There is no gossip.
 | client covers | freshness of the version it fetched; **not** its own key history |
 | Cloudflare covers | L4, M2, M3, M4 globally; epoch/digest uniqueness operationally |
 | **should** a witness do | independent construction audit; independent uniqueness check; comparison with other observers |
-| **can** we do today | tier A+ root-chain continuity across all published history; tier B construction audit, sampled and now sweeping backwards; peer comparison for the logs we share |
+| **can** we do today | tier A+ root-chain continuity across all published history; tier B construction audit, sampled at the tip and worked backwards through history by a fleet of verifiers; peer comparison for the logs we share |
 | **gap** | M1 is unaddressed **by the design**, not by us. And our construction audit currently covers ~0.1% of published history |
 
 ### Proton

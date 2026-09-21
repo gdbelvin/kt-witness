@@ -1,10 +1,17 @@
 package main
 
 import (
+	"context"
+	"io"
+	"log/slog"
+	"net/http"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/gdbsecurity/kt-witness/internal/audit"
 	"github.com/gdbsecurity/kt-witness/internal/store"
 )
 
@@ -186,4 +193,204 @@ func TestTheBackwardSweepReturnsRunsNotSinglets(t *testing.T) {
 			"should come back contiguous, or the queue can only hand out singlets",
 			got, runs)
 	}
+}
+
+// slowFetch is a proof server that never finishes, so a caller that waits for
+// its downloads is a caller that hangs.
+type slowFetch struct{ started chan struct{} }
+
+func (s *slowFetch) RoundTrip(r *http.Request) (*http.Response, error) {
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+	<-r.Context().Done()
+	return nil, r.Context().Err()
+}
+
+type genResolver struct{ origin string }
+
+func (g genResolver) Origin() string { return g.origin }
+func (g genResolver) ResolveEpoch(_ context.Context, e int64) (*audit.EpochRef, error) {
+	return &audit.EpochRef{LogDirectory: "http://proofs.invalid", PrevRoot: "aa", CurrRoot: "bb"}, nil
+}
+
+// TestTheGeneratorDoesNotWaitForItsDownloads is the ceiling nobody could find.
+//
+// Each pass used to fire a wave of twenty-four fetches and block on wg.Wait()
+// until the slowest returned. A Meta proof is 284 MB against WhatsApp's 40, so
+// twenty-three slots idled while one straggler finished, and the pool was empty
+// between waves. The visible symptom was that prefetch_workers did nothing:
+// raising it from 32 to 96 on a 2 Gbit line moved the sustained rate from
+// 746-764 to 717-751 Mbit/s, which is to say not at all. The knob was real, the
+// generator just never asked for more than one wave.
+//
+// So the property is about RETURNING, not about rate: fillMore starts downloads
+// and hands control back while they run. With a fetcher that never completes,
+// the old code cannot return at all.
+func TestTheGeneratorDoesNotWaitForItsDownloads(t *testing.T) {
+	const origin = "whatsapp.kt/v2"
+	db := genStore(t, origin, 1, 500)
+
+	sf := &slowFetch{started: make(chan struct{}, 1)}
+	pf := &audit.Prefetcher{
+		Dir:     t.TempDir(),
+		Origins: []string{origin},
+		Workers: 8,
+		Client:  &http.Client{Transport: sf},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var c cursors
+	var inFlight atomic.Int64
+
+	done := make(chan int, 1)
+	go func() {
+		done <- fillMore(ctx, db, pf, genResolver{origin}, origin, &c, 8, &inFlight, slog.New(
+			slog.NewTextHandler(io.Discard, nil)))
+	}()
+
+	select {
+	case n := <-done:
+		if n == 0 {
+			t.Fatal("nothing was started; the fixture is wrong, not the code")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("fillMore did not return while downloads were in flight; " +
+			"it is waiting for them, which is the barrier this removed")
+	}
+
+	// And they really are still running — otherwise the return proves nothing.
+	select {
+	case <-sf.started:
+	case <-time.After(5 * time.Second):
+		t.Error("no download ever started")
+	}
+	if n := inFlight.Load(); n == 0 {
+		t.Error("in-flight count is zero after returning; the caller cannot pace itself")
+	}
+}
+
+// TestHolesAreOfferedBeforeFreshEpochs is the regression for a hole count that
+// sat at exactly 7,408 for five hours.
+//
+// Three things had to line up for that. The forward cursor advances past every
+// epoch it offers, whether or not the epoch verified, and deliberately never
+// rewinds — so a failure leaves a gap behind it. The only thing that revisited
+// a gap was the backward cursor, one visit per full descent, about twelve days
+// across Meta. And HolesDue, which exists precisely to short-circuit that, skips
+// any record with a zero RetryAfter — a field whose only writer was deleted
+// with the repair pass, so it was universally zero and HolesDue could not
+// return anything at all.
+//
+// The cost was not the holes themselves but where they sit: immediately above
+// the verified region, because that is where the forward cursor fails. They cap
+// the contiguous run, which is the number that earns the tier.
+func TestHolesAreOfferedBeforeFreshEpochs(t *testing.T) {
+	const origin = "whatsapp.kt/v2"
+	db := genStore(t, origin, 1, 10000)
+	now := time.Now().UTC()
+
+	// Verified up to 500, then a hole whose backoff has elapsed, then plenty of
+	// untouched epochs above.
+	//
+	// Progress is set PAST the hole, which is the production situation and the
+	// whole point: the forward cursor advances over whatever it offers and
+	// never rewinds, so once it has passed a failure the only things that can
+	// return to it are the backward descent — days away — and this. With 9,400
+	// fresh epochs above, forward would fill the whole batch on its own.
+	markVerified(t, db, origin, 1, 500)
+	if err := db.RecordAudit(&store.Audit{
+		Origin: origin, Epoch: 501, Sampled: true, Rate: 1,
+		Verified: false, Attempts: store.MaxFetchAttempts, DecidedAt: now.Add(-8 * time.Hour),
+		RetryAfter: now.Add(-time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetAuditProgress(origin, 600); err != nil {
+		t.Fatal(err)
+	}
+
+	sf := &slowFetch{started: make(chan struct{}, 1)}
+	pf := &audit.Prefetcher{Dir: t.TempDir(), Origins: []string{origin}, Workers: 8,
+		Client: &http.Client{Transport: sf}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var c cursors
+	var inFlight atomic.Int64
+	asked := &recordingResolver{origin: origin}
+	if n := fillMore(ctx, db, pf, asked, origin, &c, 8, &inFlight,
+		slog.New(slog.NewTextHandler(io.Discard, nil))); n == 0 {
+		t.Fatal("nothing was fetched at all")
+	}
+
+	if !asked.saw(501) {
+		t.Errorf("epoch 501 is a hole whose backoff elapsed and it was not "+
+			"offered; got %v. Nothing else will revisit it for a full descent", asked.epochs())
+	}
+}
+
+// A hole still inside its backoff must NOT be retried, or the "growing backoff"
+// is just a busy loop against a proof that is genuinely gone.
+func TestAHoleInsideItsBackoffIsLeftAlone(t *testing.T) {
+	const origin = "whatsapp.kt/v2"
+	db := genStore(t, origin, 1, 10000)
+	now := time.Now().UTC()
+	markVerified(t, db, origin, 1, 500)
+	if err := db.RecordAudit(&store.Audit{
+		Origin: origin, Epoch: 501, Sampled: true, Rate: 1,
+		Verified: false, Attempts: store.MaxFetchAttempts, DecidedAt: now,
+		RetryAfter: now.Add(6 * time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetAuditProgress(origin, 600); err != nil {
+		t.Fatal(err)
+	}
+	sf := &slowFetch{started: make(chan struct{}, 1)}
+	pf := &audit.Prefetcher{Dir: t.TempDir(), Origins: []string{origin}, Workers: 8,
+		Client: &http.Client{Transport: sf}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var c cursors
+	var inFlight atomic.Int64
+	asked := &recordingResolver{origin: origin}
+	fillMore(ctx, db, pf, asked, origin, &c, 8, &inFlight,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if asked.saw(501) {
+		t.Error("a hole inside its backoff was retried; the backoff does nothing")
+	}
+}
+
+type recordingResolver struct {
+	origin string
+	mu     sync.Mutex
+	seen   []int64
+}
+
+func (g *recordingResolver) Origin() string { return g.origin }
+func (g *recordingResolver) ResolveEpoch(_ context.Context, e int64) (*audit.EpochRef, error) {
+	g.mu.Lock()
+	g.seen = append(g.seen, e)
+	g.mu.Unlock()
+	return &audit.EpochRef{LogDirectory: "http://proofs.invalid", PrevRoot: "aa", CurrRoot: "bb"}, nil
+}
+func (g *recordingResolver) saw(e int64) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, x := range g.seen {
+		if x == e {
+			return true
+		}
+	}
+	return false
+}
+func (g *recordingResolver) epochs() []int64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]int64(nil), g.seen...)
 }

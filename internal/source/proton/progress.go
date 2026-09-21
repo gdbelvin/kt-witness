@@ -79,34 +79,20 @@ func ReportProgress() {
 	}
 }
 
-// Cores claimed by a rebuild in flight.
+// Cores claimed by a rebuild in flight, published as a metric.
 //
-// Exported as a number rather than a boolean because the consumer — the audit
-// governor — needs to subtract a quantity from a core budget, and a boolean
-// would force it to duplicate the worker-count decision made in tree.go.
-var (
-	coreMu    sync.Mutex
-	coresHeld float64
-)
-
-// ClaimedCores reports the cores currently claimed by a rebuild, for a
-// scheduler that has to plan around them. Zero when no rebuild is running.
-func ClaimedCores() float64 {
-	coreMu.Lock()
-	defer coreMu.Unlock()
-	return coresHeld
-}
-
+// There was a mutex and a float beside it, so that ClaimedCores() could hand
+// the number to the audit governor — which never asked. The governor measures
+// the machine's actual CPU rather than adding up what each component says it
+// intends to use, and that is the better answer: a rebuild that claims four
+// cores and uses one would have had the sweep yield to an idle box.
+//
+// So the only reader is the metric, and a gauge is already safe to set from
+// any goroutine.
 func claimCores(n int) {
-	coreMu.Lock()
-	coresHeld = float64(n)
-	coreMu.Unlock()
 	metrics.Set("kt_witness_proton_claimed_cores", nil, float64(n))
 }
 
 func releaseCores() {
-	coreMu.Lock()
-	coresHeld = 0
-	coreMu.Unlock()
 	metrics.Set("kt_witness_proton_claimed_cores", nil, 0)
 }

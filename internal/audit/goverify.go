@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gdbsecurity/kt-witness/internal/akdtree"
+	"github.com/gdbsecurity/kt-witness/internal/netmeter"
 )
 
 // GoVerifier replays AKD proofs in this process.
@@ -83,7 +84,10 @@ func (g *GoVerifier) init() {
 		}
 		g.sem = make(chan struct{}, n)
 		if g.Client == nil {
-			g.Client = &http.Client{Timeout: 20 * time.Minute}
+			g.Client = &http.Client{
+				Timeout:   20 * time.Minute,
+				Transport: &http.Transport{DialContext: netmeter.Dialer().DialContext},
+			}
 		}
 	})
 }
@@ -94,11 +98,11 @@ func (g *GoVerifier) Size() int {
 	return cap(g.sem)
 }
 
-func (g *GoVerifier) Verify(ctx context.Context, logDirectory string, epoch int64, prevRoot, currRoot string, timeout time.Duration) (*Result, error) {
-	return g.VerifyCached(ctx, logDirectory, epoch, prevRoot, currRoot, "", timeout)
+func (g *GoVerifier) Verify(ctx context.Context, origin, logDirectory string, epoch int64, prevRoot, currRoot string, timeout time.Duration) (*Result, error) {
+	return g.VerifyCached(ctx, origin, logDirectory, epoch, prevRoot, currRoot, "", timeout)
 }
 
-func (g *GoVerifier) VerifyCached(ctx context.Context, logDirectory string, epoch int64, prevRoot, currRoot, proofPath string, timeout time.Duration) (*Result, error) {
+func (g *GoVerifier) VerifyCached(ctx context.Context, origin, logDirectory string, epoch int64, prevRoot, currRoot, proofPath string, timeout time.Duration) (*Result, error) {
 	g.init()
 
 	select {
@@ -125,7 +129,7 @@ func (g *GoVerifier) VerifyCached(ctx context.Context, logDirectory string, epoc
 		}
 	} else {
 		url := fmt.Sprintf("%s/%d/%s/%s", strings.TrimSuffix(logDirectory, "/"), epoch, prevRoot, currRoot)
-		data, err = g.fetch(ctx, url)
+		data, err = g.fetch(ctx, origin, url)
 		if err != nil {
 			return fetchFailure(res, err.Error()), nil
 		}
@@ -185,7 +189,7 @@ func (g *GoVerifier) VerifyCached(ctx context.Context, logDirectory string, epoc
 // prevRoot and currRoot are still taken, but only to build the fetch URL when
 // there is no cached proof: the operator's directory is addressed by them. They
 // have no part in the answer.
-func (g *GoVerifier) ComputeRoots(ctx context.Context, logDirectory string, epoch int64, prevRoot, currRoot, proofPath string, timeout time.Duration) (computedPrev, computedCurr string, err error) {
+func (g *GoVerifier) ComputeRoots(ctx context.Context, origin, logDirectory string, epoch int64, prevRoot, currRoot, proofPath string, timeout time.Duration) (computedPrev, computedCurr string, err error) {
 	g.init()
 
 	select {
@@ -206,7 +210,7 @@ func (g *GoVerifier) ComputeRoots(ctx context.Context, logDirectory string, epoc
 		}
 	} else {
 		url := fmt.Sprintf("%s/%d/%s/%s", strings.TrimSuffix(logDirectory, "/"), epoch, prevRoot, currRoot)
-		data, err = g.fetch(ctx, url)
+		data, err = g.fetch(ctx, origin, url)
 		if err != nil {
 			return "", "", err
 		}
@@ -232,7 +236,7 @@ func fetchFailure(res *Result, msg string) *Result {
 	return res
 }
 
-func (g *GoVerifier) fetch(ctx context.Context, url string) ([]byte, error) {
+func (g *GoVerifier) fetch(ctx context.Context, origin, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -245,7 +249,7 @@ func (g *GoVerifier) fetch(ctx context.Context, url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET %s: HTTP %s", url, resp.Status)
 	}
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(netmeter.Reader(ctx, origin, resp.Body))
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", url, err)
 	}
