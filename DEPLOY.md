@@ -1,6 +1,6 @@
 # Running kt-witness
 
-> For the prepared `witness.kt.gdbsecurity.com` deployment, follow
+> For the prepared `witness.gdbsecurity.com` deployment, follow
 > [deploy/RUNBOOK.md](deploy/RUNBOOK.md) — it has the exact commands in order.
 > This file is the general reference.
 

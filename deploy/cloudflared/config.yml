@@ -56,7 +56,19 @@ ingress:
   #
   # The alternatives were a separate kt.gdbsecurity.com zone, where the name
   # would be first-level again, or Advanced Certificate Manager. Renaming was
-  # free and simpler — but only because nothing had been published yet.
+  # free and simpler, and this comment used to add "because nothing had been
+  # published yet". That was wrong: cosignatures had been going out under the
+  # old name since 2026-09-03. The name is not in what cosignature/v1 signs, but
+  # it IS in the signature line, and the key hash beside it is derived from name
+  # and key together — so every checkpoint issued before the rename presented a
+  # key hash nobody could match to the published key.
+  #
+  # Growing logs fixed themselves on their next round. Two closed 2026h1 shards
+  # could not, and stayed unverifiable for fourteen days until somebody outside
+  # reported it (#1). RepairCosignerName restates those lines on startup.
+  #
+  # Renaming a witness is never free once it has signed anything. If it happens
+  # again, the stored cosignatures are part of the change.
   - hostname: witness.gdbsecurity.com
     service: http://127.0.0.1:8088
     originRequest:

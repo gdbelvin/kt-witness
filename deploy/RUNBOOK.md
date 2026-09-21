@@ -1,4 +1,4 @@
-# Deploying witness.kt.gdbsecurity.com
+# Deploying witness.gdbsecurity.com
 
 Run these on the server. It is amd64, so the build is native and
 quickly — a cross-build from an arm64 laptop works but goes through QEMU and is
@@ -57,7 +57,7 @@ sudo chown -R 65532:65532 data      # the image runs as distroless nonroot
 
 ## Publishing the witness over HTTPS
 
-The identity `witness.kt.gdbsecurity.com` is inside every cosignature already
+The identity `witness.gdbsecurity.com` is inside every cosignature already
 issued, so serving it publicly invites reliance. That is a decision, not a
 deployment step — and the false fork finding against the Go checksum database
 argues for more operating record first.
@@ -83,7 +83,7 @@ inbound ports, and keeps the home address out of public DNS.
    # liv.ns.cloudflare.com.
    ```
 
-   So `witness.kt.gdbsecurity.com` is simply a record in that zone, and
+   So `witness.gdbsecurity.com` is simply a record in that zone, and
    `cloudflared tunnel route dns` creates it directly. No NS records, no
    subdomain zone, no parent to coordinate with.
 
@@ -115,7 +115,7 @@ inbound ports, and keeps the home address out of public DNS.
    # on docker-services
    cloudflared tunnel login                    # opens a browser
    cloudflared tunnel create kt-witness        # prints the tunnel UUID
-   cloudflared tunnel route dns kt-witness witness.kt.gdbsecurity.com
+   cloudflared tunnel route dns kt-witness witness.gdbsecurity.com
    ```
 
 3. **Put the pieces where the config expects them**:
@@ -143,15 +143,15 @@ succeed for the wrong reason:
 
 ```sh
 curl -sS -o /dev/null -w '%{http_code} verify=%{ssl_verify_result}\n' \
-  https://witness.kt.gdbsecurity.com/
-curl -sS https://witness.kt.gdbsecurity.com/ | head -5
+  https://witness.gdbsecurity.com/
+curl -sS https://witness.gdbsecurity.com/ | head -5
 ```
 
 `verify=0` means the chain verified. Then fetch a cosigned checkpoint the way a
 consumer would, since that is the endpoint that matters rather than the pages:
 
 ```sh
-curl -sS https://witness.kt.gdbsecurity.com/<origin-hash>/checkpoint
+curl -sS https://witness.gdbsecurity.com/<origin-hash>/checkpoint
 ```
 
 ### The alternative
@@ -233,7 +233,7 @@ Dockerfile bakes into the binary. Without it a build reports its commit as
 for itself. Check what is actually running with:
 
 ```sh
-curl -s https://witness.kt.gdbsecurity.com/ | head -1
+curl -s https://witness.gdbsecurity.com/ | head -1
 # kt-witness 0.1.0 (commit 4b2c22d, built 2026-09-06T18:55:02Z)
 ```
 
@@ -280,12 +280,23 @@ docker run --rm -v "$PWD/data:/data" -v "$PWD/deploy/witness.json:/config/witnes
 It prints the verifier key — **record it**, that is what others pin:
 
 ```
-witness.kt.gdbsecurity.com+<keyid>+<base64>
+witness.gdbsecurity.com+<keyid>+<base64>
 ```
 
 Then back up `data/witness.key`. Losing it means coming back as a different
 witness, and anyone who pinned the old key stops seeing you. Losing the database
 only costs history.
+
+**The name is as load-bearing as the key.** It is not in what cosignature/v1
+signs, so renaming does not invalidate a signature — but the four-byte key hash
+in every signature line is derived from name and key together, so a consumer
+holding the current verifier cannot match a line issued under the old name and
+skips it as a stranger's. This witness was renamed from
+`witness.kt.gdbsecurity.com` on 2026-09-03 and two closed CT shards, whose trees
+never advance again, served unattributable cosignatures for fourteen days before
+an outside report (#1) found them. `RepairCosignerName` restates such lines on
+startup, preserving the original signature and timestamp. Treat a rename as a
+change to stored state, not to configuration.
 
 ## 5. Backfill
 

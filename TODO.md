@@ -63,7 +63,7 @@ hardware, because publishing is what invites people to depend on it.
       its certificate covers only `*.ts.net`.
 
       **This is a decision, not a deployment step.** The identity
-      `witness.kt.gdbsecurity.com` is already inside every cosignature issued,
+      `witness.gdbsecurity.com` is already inside every cosignature issued,
       so serving it publicly invites reliance. The false fork finding against
       the Go checksum database — a reasoning error that survived review and a
       green suite — is the argument for more operating record first.

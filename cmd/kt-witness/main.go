@@ -585,6 +585,16 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill 
 	}
 	defer db.Close()
 
+	// A rename leaves behind cosignatures nobody can attribute to us. Logs that
+	// are still growing repair themselves on their next round; closed shards
+	// never do, so the correction has to be applied to what is already stored.
+	// Idempotent, so it costs one pass over the heads bucket on every start.
+	if n, err := witness.RepairCosignerName(db, signer.Verifier(), log); err != nil {
+		return err
+	} else if n > 0 {
+		log.Warn("repaired cosignatures issued under a former name", "records", n, "name", cfg.Name)
+	}
+
 	pollInterval, err := time.ParseDuration(cfg.PollInterval)
 	if err != nil {
 		return fmt.Errorf("poll_interval: %w", err)
