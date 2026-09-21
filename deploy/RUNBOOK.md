@@ -47,6 +47,70 @@ tier B auditing enabled  logs=2  concurrent=30
 `logs=0` means no configured source can resolve an epoch to its published roots,
 and tier B has nothing to do.
 
+## 2b. Or don't build here at all: take what CI built
+
+`.github/workflows/ci.yml` builds the image on every push to master and
+publishes it to `ghcr.io/gdbelvin/kt-witness`, tagged both `latest` and with the
+commit's seven-character short SHA. The image job needs the test job, so nothing
+is published from a commit whose tests did not pass.
+
+```sh
+deploy/redeploy.sh pull
+```
+
+That pulls, recreates, waits, and then asks the running witness which commit it
+is — comparing it with `origin/master` and failing if they differ. Checking
+*which* build answered is the part hand-rolled deploys skip: a stale layer, a
+pull that resolved to an older digest, or a container that never recreated all
+look like a healthy witness in the logs.
+
+Prefer this to building on the box. The image comes from a commit master agreed
+to rather than from whatever is in somebody's working tree; nothing compiles on
+a machine that is bandwidth-bound and running tier B; and it needs this laptop
+for two ssh calls rather than for a build, which matters because a deploy that
+dies halfway can leave the witness down.
+
+`deploy/ship.sh` and `deploy/redeploy.sh witness` stay as the fallback, for when
+GitHub is the thing that is down and for trying something before it is worth a
+commit.
+
+### Rolling back
+
+Every commit stays addressable, so going back does not mean rebuilding:
+
+```sh
+# in ~/kt-witness/.env on the host
+KT_IMAGE_TAG=b31cc62
+
+docker compose up -d kt-witness
+```
+
+Leave it set until the fix lands. Unsetting it means `latest` again, which is
+the opposite of what a rollback wants.
+
+### What only you can do, once
+
+The first push creates the GHCR package **private**, even though this repository
+is public, and the host's pull will fail with a 401 until it is changed. In
+GitHub → Packages → `kt-witness` → Package settings → Change visibility →
+Public. Public pulls are anonymous, so the host needs no registry credentials
+and none are stored on it.
+
+## 2c. One-shot commands that need the database
+
+bbolt takes an exclusive lock on `witness.db` with a five-second timeout, so
+anything that opens the store — `-repair-cosigner-name`, `-retract-fork`,
+`-genkey` — cannot run beside a live witness.
+
+```sh
+deploy/oneshot.sh -- -repair-cosigner-name
+```
+
+It stops the witness, runs the command, and brings the witness back **from an
+EXIT trap**, so a command that fails does not leave the log unwitnessed while
+somebody reads the error. It runs detached on the host for the same reason: a
+laptop dropping off the tailnet between `stop` and `up` is not hypothetical.
+
 ## 3. State directory
 
 ```sh
@@ -299,7 +363,7 @@ an outside report (#1) found them.
 So a rename has a second step, on the stored records:
 
 ```sh
-docker compose run --rm kt-witness -config /data/witness.json -repair-cosigner-name
+docker compose run --rm kt-witness -config /config/witness.json -repair-cosigner-name
 # cosigner name repair complete  rewritten=2  name=witness.gdbsecurity.com
 ```
 

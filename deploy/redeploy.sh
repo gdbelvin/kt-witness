@@ -1,8 +1,9 @@
 #!/bin/sh
 # Ship, build, restart, and say what happened — the whole inner loop, once.
 #
-#   usage: deploy/redeploy.sh [witness|mac|gpu|workers|all]   (default: all)
+#   usage: deploy/redeploy.sh [pull|witness|mac|gpu|workers|all]   (default: all)
 #
+#   pull     the server: pull the image CI built, recreate, verify the commit
 #   witness  the server: ship, rebuild the image, recreate the container
 #   mac      this laptop's worker, rebuilt and restarted in place
 #   gpu      the GPU box's worker — NOT part of "all", see below
@@ -34,11 +35,43 @@ here=$(dirname "$0")/..
 # otherwise the LAN address the witness publishes the work channel on.
 MAC_SERVER="${KT_WORK_SERVER:-192.168.0.146:18090}"
 
-echo "==> tests"
-( cd "$here" && go build ./... && go test ./... >/dev/null ) \
-  || { echo "tests failed; nothing shipped" >&2; exit 1; }
+# Not for `pull`, which deploys a commit CI has already built and tested. The
+# working tree is not what is being shipped there, so gating on it would refuse
+# a good rollback because of an unrelated edit in progress — and rolling back is
+# exactly when nobody has a clean tree.
+if [ "$WHAT" != pull ]; then
+  echo "==> tests"
+  ( cd "$here" && go build ./... && go test ./... >/dev/null ) \
+    || { echo "tests failed; nothing shipped" >&2; exit 1; }
+fi
+
+# The normal path once a change has landed on master: take what CI built.
+#
+# It is the better deploy for three reasons this box cares about. The image is
+# built from a commit master agreed to, rather than from whatever is in the
+# working tree of whoever happens to be deploying. It does not compile on a
+# machine that is bandwidth-bound and running tier B. And every commit stays
+# addressable by its short SHA in the registry, so a rollback is KT_IMAGE_TAG in
+# .env and `up -d` rather than checking out an older tree on a host with no git.
+#
+# It also does not need this laptop for anything but the two ssh calls, which
+# matters more than it sounds: a deploy that dies halfway because a tailnet
+# dropped is a deploy that can leave the witness down.
+if [ "$WHAT" = pull ]; then
+  echo "==> witness: pull the published image"
+  ssh -n "$HOST" "cd ~/kt-witness && docker compose pull kt-witness && docker compose up -d kt-witness" >/dev/null
+  echo "==> settling"
+  sleep 12
+  # Against origin/master rather than the working tree: `pull` takes what CI
+  # published for the branch, and the local checkout may be anywhere.
+  git -C "$here" fetch -q origin master 2>/dev/null || true
+  "$here/deploy/assert-running.sh" "$HOST" "$(git -C "$here" rev-parse --short origin/master)"
+  exit 0
+fi
 
 if [ "$WHAT" = all ] || [ "$WHAT" = witness ]; then
+  # Building on the box. Kept as the fallback for when GitHub is the thing that
+  # is down, and for trying something before it is worth a commit.
   echo "==> witness: ship"
   "$here/deploy/ship.sh" "$HOST" >/dev/null
   echo "==> witness: build and restart"
@@ -108,4 +141,11 @@ sleep 12
 echo "==> what came back:"
 timeout 30 ssh -n "$HOST" 'cd ~/kt-witness && docker compose logs --since=30s kt-witness 2>&1 \
   | grep -E "worker connected|scratch space|level=ERROR" | tail -6' || true
+
+# Which build answered, not merely that something did. Advisory here because
+# `all` also restarts workers and a witness mismatch should not be reported as
+# a worker failure; `pull` treats it as fatal, which is where it matters.
+if [ "$WHAT" = all ] || [ "$WHAT" = witness ]; then
+  "$here/deploy/assert-running.sh" "$HOST" || true
+fi
 echo "done. Logs: deploy/loki-tunnel.sh, then query Loki on 127.0.0.1:3100"
