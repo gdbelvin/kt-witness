@@ -27,6 +27,11 @@ import (
 // cosignature is their last forever. Reported as issue #1 against two 2026h1
 // CT shards, fourteen days after the rename.
 //
+// Invoked by -repair-cosigner-name, not on every start. A rename is a thing an
+// operator does, so the repair is a thing an operator runs — and a reconciler
+// that rewrites published attestations unprompted would turn a typo in the
+// config's name into a rewrite of all of them.
+//
 // This rewrites rather than re-signs, which is the honest operation: the
 // attestation and the moment it was made are unchanged, and the timestamp still
 // says when we actually saw that tree. Re-signing would silently restate a

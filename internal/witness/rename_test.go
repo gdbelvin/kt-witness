@@ -151,17 +151,16 @@ func TestRepairLeavesOtherPartiesAlone(t *testing.T) {
 	}
 }
 
-// A note already under the current name is left exactly as it is, and is not
-// even parsed for signature lines.
-func TestRepairSkipsCurrentName(t *testing.T) {
+// A note that already opens under our verifier is returned untouched, and the
+// lines below it are never examined — which is what makes the common case, all
+// eighty of the logs that repaired themselves, cost one note.Open each.
+func TestRepairSkipsANoteAlreadyOurs(t *testing.T) {
 	db, v, _ := renameFixture(t, ckpt)
 	_, priv, _ := ed25519.GenerateKey(nil)
 	cur, err := torchwood.NewCosignatureSigner(v.Name(), priv)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A different key under the same name still opens under its own verifier;
-	// use that verifier so the note is "already ours".
 	ours, err := note.Sign(&note.Note{Text: ckpt}, cur)
 	if err != nil {
 		t.Fatal(err)
@@ -174,5 +173,46 @@ func TestRepairSkipsCurrentName(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatalf("repaired %d already-current records; want 0", n)
+	}
+	rec, _ := db.Get("example.com/log")
+	if !bytes.Equal(rec.Cosigned, ours) {
+		t.Error("a note already ours was rewritten")
+	}
+}
+
+// The name alone does not make a line ours. A cosignature carrying our CURRENT
+// name but signed by somebody else's key is left alone, and does not stop the
+// note's genuinely-ours line, under a former name, from being repaired.
+func TestRepairIgnoresOurNameUnderAnotherKey(t *testing.T) {
+	db, v, signed := renameFixture(t, ckpt)
+
+	_, otherPriv, _ := ed25519.GenerateKey(nil)
+	impostor, err := torchwood.NewCosignatureSigner(v.Name(), otherPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	both, err := note.Sign(&note.Note{Text: ckpt}, impostor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Our old-name line, then the impostor's line under our current name.
+	merged := append(bytes.TrimRight(signed, "\n"), '\n')
+	merged = append(merged, bytes.Split(bytes.TrimRight(both, "\n"), []byte("\n"))[4]...)
+	merged = append(merged, '\n')
+	put(t, db, merged)
+
+	count, err := RepairCosignerName(db, v, quiet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("want 1 repaired, got %d", count)
+	}
+	rec, _ := db.Get("example.com/log")
+	if _, err := note.Open(rec.Cosigned, note.VerifierList(v)); err != nil {
+		t.Fatalf("repaired note does not verify: %v", err)
+	}
+	if !bytes.Contains(rec.Cosigned, bytes.Split(bytes.TrimRight(both, "\n"), []byte("\n"))[4]) {
+		t.Error("the other key's line was modified")
 	}
 }
