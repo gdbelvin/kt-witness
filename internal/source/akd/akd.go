@@ -100,7 +100,7 @@ func New(cfg Config) (*Source, error) {
 	}
 	cfg.LogDirectory = strings.TrimSuffix(cfg.LogDirectory, "/")
 	return &Source{
-		cfg:    cfg,
+		cfg: cfg,
 		client: &http.Client{Timeout: 30 * time.Second, Transport: netmeter.Wrap(
 			&http.Transport{DialContext: netmeter.Dialer().DialContext}, cfg.Origin)},
 	}, nil
