@@ -261,13 +261,35 @@ func (d *dribble) Read(p []byte) (int, error) {
 	if d.i >= len(d.b) {
 		return 0, io.EOF
 	}
-	n := 7
-	if d.i+n > len(d.b) {
-		n = len(d.b) - d.i
-	}
+	// Bounded by the caller's buffer as well as by what is left.
+	//
+	// Returning a fixed 7 regardless of len(p) violates io.Reader, and the
+	// caller that notices is io.ReadAll: it reads into b[len(b):cap(b)], which
+	// is short when its buffer is nearly full, then does b = b[:len(b)+n] with
+	// the n it was handed and panics on the slice bounds. Whether that happens
+	// depends on the growth sequence for a particular length, so this passed on
+	// Go 1.27 and panicked on the 1.25 in go.mod — a reader whose contract is
+	// wrong only sometimes, which is the kind CI is for.
+	n := min(7, len(p), len(d.b)-d.i)
 	copy(p, d.b[d.i:d.i+n])
 	d.i += n
 	return n, nil
+}
+
+// The dribble reader is itself worth one assertion, because the way it was
+// wrong was invisible on the developer's Go version and only appeared on the
+// one go.mod pins. A helper that lies about how much it read makes every test
+// using it meaningless in a way that looks like a bug in the code under test.
+func TestDribbleHonoursTheBufferItIsGiven(t *testing.T) {
+	d := &dribble{b: make([]byte, 100)}
+	small := make([]byte, 3)
+	n, err := d.Read(small)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n > len(small) {
+		t.Fatalf("Read returned %d for a %d-byte buffer; io.Reader forbids n > len(p)", n, len(small))
+	}
 }
 
 // recorder is a minimal ResponseWriter; httptest would pull in a dependency
