@@ -1,0 +1,105 @@
+# Build, test, and publish the witness image.
+#
+# One workflow rather than two, and the image job needs the test job, because a
+# pipeline that publishes in parallel with testing is the failure deploy/redeploy.sh
+# was written to prevent: shipping first and finding out afterwards.
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# The default token needs to write packages for the image job, and nothing else.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # Matches go.mod. The Dockerfile pins the same toolchain and runs with
+          # GOTOOLCHAIN=local, so a go.mod that outgrows this fails the image
+          # build outright — keep the three in step.
+          go-version-file: go.mod
+          cache: true
+
+      - run: go build ./...
+
+      - run: go vet ./...
+
+      # Enforceable as of #6, which fixed the one file that disagreed. Named
+      # files rather than an exit code, because "gofmt -l printed something" is
+      # not a useful failure message at the bottom of a log.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l ./cmd ./internal)
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt'd:"; echo "$unformatted"
+            exit 1
+          fi
+
+      # -short deliberately. Several suites reach real logs when it is absent —
+      # internal/source/sigsum gates on testing.Short(), and the *_live_test.go
+      # files gate on KT_WITNESS_LIVE — so a full run here would tie the health
+      # of this repository's CI to the uptime of third parties it does not
+      # control. deploy/redeploy.sh runs the whole suite before it ships, which
+      # is the right place for tests that need the network: a person is waiting
+      # on the result and can tell a flake from a regression.
+      - run: go test -short ./...
+
+  image:
+    needs: test
+    # Only for what has landed. A pull request builds and tests; it does not
+    # publish, because the tag it would claim is one master has not agreed to.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Short SHA
+        id: sha
+        # Seven characters, to match what `git rev-parse --short` and
+        # deploy/ship.sh's .build-info produce. The served version line is meant
+        # to be comparable by eye with local HEAD, and it cannot be if one of
+        # them is forty characters long.
+        run: echo "short=$(echo ${{ github.sha }} | cut -c1-7)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          # linux/amd64 only: the Dockerfile cross-compiles happily, but the
+          # only machine that runs this image is amd64, and building a second
+          # architecture nobody pulls doubles the wait for nothing.
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ steps.sha.outputs.short }}
+            ghcr.io/${{ github.repository }}:latest
+          # .dockerignore excludes .git/, so the build cannot work the commit
+          # out for itself — the same reason ship.sh writes .build-info. These
+          # args are the override the Dockerfile documents.
+          build-args: |
+            GIT_COMMIT=${{ steps.sha.outputs.short }}
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+          # The Dockerfile mounts a Go build cache, which buys nothing if the
+          # runner starts empty every time: gRPC, protobuf and blake3 do not
+          # change between commits and compiling them again is the bulk of the
+          # build.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

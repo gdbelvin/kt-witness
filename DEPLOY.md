@@ -36,9 +36,15 @@ mkdir -p data && cp witness.example.json data/witness.json
 sudo chown -R 65532:65532 data
 $EDITOR data/witness.json          # set "name" to your witness identity
 
-docker compose run --rm kt-witness -config /data/witness.json -genkey
+docker compose run --rm kt-witness -config /config/witness.json -genkey
 # prints the verifier key to publish — record it
 ```
+
+`/config/witness.json`, not `/data/witness.json`. The image's own default is
+`/data`, and this page said so for a long time; the compose file mounts the
+operator's copy at `/config` and overrides the command to match. A one-shot that
+takes the default exits on a missing file, which reads like a broken image
+rather than a wrong path.
 
 `name` appears in every cosignature and cannot change without changing identity,
 so choose it as carefully as a hostname.
@@ -55,7 +61,7 @@ verifies published history first:
   the API only offers proofs from a size we already witnessed.
 
 ```sh
-docker compose run --rm kt-witness -config /data/witness.json -backfill
+docker compose run --rm kt-witness -config /config/witness.json -backfill
 ```
 
 Results are recorded and served at `/` and `/history`. A backfill that hits a

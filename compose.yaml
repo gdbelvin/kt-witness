@@ -1,9 +1,22 @@
 services:
   kt-witness:
+    # `build` and `image` together, deliberately.
+    #
+    # `docker compose pull` fetches what CI published, which is the normal path:
+    # the image is built on a runner from a commit master agreed to, and this
+    # box — busy with tier B and sharing one residential link — does not compile
+    # anything. `docker compose build` still works and tags its result as the
+    # same name, which is what deploy/ship.sh's path depends on and what to fall
+    # back to when GitHub is the thing that is down.
+    #
+    # KT_IMAGE_TAG is the rollback lever. CI publishes every commit as its short
+    # SHA as well as `latest`, so going back is setting one variable in .env and
+    # running `docker compose up -d` — no rebuild, no checkout of an older tree
+    # on a machine that has no git.
     build:
       context: .
       platforms: [linux/amd64]
-    image: kt-witness:latest
+    image: ghcr.io/gdbelvin/kt-witness:${KT_IMAGE_TAG:-latest}
     restart: unless-stopped
 
     # The witness's identity and its record of what it has attested. Back this
