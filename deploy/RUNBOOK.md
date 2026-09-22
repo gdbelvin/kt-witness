@@ -88,13 +88,22 @@ docker compose up -d kt-witness
 Leave it set until the fix lands. Unsetting it means `latest` again, which is
 the opposite of what a rollback wants.
 
-### What only you can do, once
+### Registry visibility
 
-The first push creates the GHCR package **private**, even though this repository
-is public, and the host's pull will fail with a 401 until it is changed. In
-GitHub → Packages → `kt-witness` → Package settings → Change visibility →
-Public. Public pulls are anonymous, so the host needs no registry credentials
-and none are stored on it.
+The package inherited this repository's visibility and came out **public**, so
+the host pulls anonymously and stores no registry credentials. Confirmed rather
+than assumed, because it is often said to be created private:
+
+```sh
+T=$(curl -s "https://ghcr.io/token?scope=repository:gdbelvin/kt-witness:pull&service=ghcr.io" \
+     | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $T" \
+  https://ghcr.io/v2/gdbelvin/kt-witness/manifests/latest
+# 200
+```
+
+If that ever returns 401, the package has been made private: GitHub → Packages →
+`kt-witness` → Package settings → Change visibility.
 
 ## 2c. One-shot commands that need the database
 

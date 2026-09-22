@@ -16,7 +16,11 @@ set -eu
 HOST="${1:-docker-services-ts}"
 WANT="${2:-$(git -C "$(dirname "$0")/.." rev-parse --short HEAD)}"
 
-LINE=$(ssh -n -o ConnectTimeout=10 "$HOST" 'curl -sS --max-time 10 http://127.0.0.1:8088/ | head -1')
+# head runs here, not there. Closing the pipe on the remote side makes curl
+# fail its write and say so — "curl: (23) Failure writing output to
+# destination" printed beside a successful deploy, which is exactly the kind of
+# noise that teaches people to ignore output.
+LINE=$(ssh -n -o ConnectTimeout=10 "$HOST" 'curl -sS --max-time 10 http://127.0.0.1:8088/' | head -1)
 echo "running: $LINE"
 
 case "$LINE" in
