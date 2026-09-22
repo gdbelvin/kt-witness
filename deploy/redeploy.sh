@@ -58,6 +58,20 @@ fi
 # matters more than it sounds: a deploy that dies halfway because a tailnet
 # dropped is a deploy that can leave the witness down.
 if [ "$WHAT" = pull ]; then
+  # The compose file goes first, because it is what names the image.
+  #
+  # The host has no git: it learns about a change when somebody ships it. So the
+  # first `pull` after compose.yaml changed failed with "pull access denied for
+  # kt-witness" — the host was still reading the pre-CI file, which named a
+  # local tag that exists in no registry. The error points at the registry and
+  # the cause is a stale file, which is a bad enough combination to be worth
+  # removing rather than documenting.
+  #
+  # Only this file. A change to anything else the container mounts —
+  # deploy/cloudflared/config.yml, deploy/witness.json — still needs ship.sh,
+  # and that is the honest boundary: `pull` deploys an image, not a tree.
+  echo "==> witness: sync compose.yaml"
+  scp -q "$here/compose.yaml" "$HOST:~/kt-witness/compose.yaml"
   echo "==> witness: pull the published image"
   ssh -n "$HOST" "cd ~/kt-witness && docker compose pull kt-witness && docker compose up -d kt-witness" >/dev/null
   echo "==> settling"
