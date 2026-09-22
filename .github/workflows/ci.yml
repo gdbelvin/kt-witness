@@ -32,6 +32,17 @@ jobs:
 
       - run: go vet ./...
 
+      # Enforceable as of #6, which fixed the one file that disagreed. Named
+      # files rather than an exit code, because "gofmt -l printed something" is
+      # not a useful failure message at the bottom of a log.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l ./cmd ./internal)
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt'd:"; echo "$unformatted"
+            exit 1
+          fi
+
       # -short deliberately. Several suites reach real logs when it is absent —
       # internal/source/sigsum gates on testing.Short(), and the *_live_test.go
       # files gate on KT_WITNESS_LIVE — so a full run here would tie the health
