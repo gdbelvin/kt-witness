@@ -3,6 +3,12 @@
   "listen": ":8080",
   "db": "witness.db",
   "key_file": "witness.key",
+  "hsm": {
+    "connector": "http://172.17.0.1:12346",
+    "auth_key_id": "0x1001",
+    "key_id": "0x1100",
+    "vkey": "witness.example.com+00000000+AAAA..."
+  },
   "peer_witnesses": [
     "witness.stagemole.eu+67f7aea0+BEqSG3yu9YrmcM3BHvQYTxwFj3uSWakQepafafpUqklv"
   ],

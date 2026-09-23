@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -82,11 +83,13 @@ type config struct {
 	HSM struct {
 		// Connector is yubihsm-connector's address, host:port.
 		Connector string `json:"connector"`
-		// AuthKeyID is the authentication key to open sessions with. It should
-		// hold sign-eddsa and nothing else.
-		AuthKeyID uint16 `json:"auth_key_id"`
-		// KeyID is the asymmetric key object to sign with.
-		KeyID uint16 `json:"key_id"`
+		// AuthKeyID and KeyID are object ids, written the way the device's own
+		// tooling and DEVICE.md write them: "0x1001". Decimal is accepted, but
+		// JSON has no hex literal and every other document about this device
+		// speaks hex, so a config that had to say 4097 would be one
+		// transcription error away from addressing the wrong object.
+		AuthKeyID string `json:"auth_key_id"`
+		KeyID     string `json:"key_id"`
 		// VKey is the verifier key this witness publishes. The public key read
 		// from the device must equal it or the witness refuses to start.
 		//
@@ -534,7 +537,12 @@ func probe(listen string) error {
 		host = "127.0.0.1"
 	}
 	c := &http.Client{Timeout: 5 * time.Second}
-	resp, err := c.Get("http://" + net.JoinHostPort(host, port) + "/")
+	// /healthz, not "/". The status page keeps serving whatever else is wrong —
+	// the cosignatures already issued are still evidence — while this endpoint
+	// answers the narrower question the container runtime is asking: can this
+	// witness do its job right now. With a hardware signer, an unreachable
+	// device makes the answer no.
+	resp, err := c.Get("http://" + net.JoinHostPort(host, port) + "/healthz")
 	if err != nil {
 		return fmt.Errorf("healthcheck: %w", err)
 	}
@@ -605,11 +613,19 @@ func loadHSMSigner(cfg *config) (*torchwood.CosignatureSigner, *hsm.Signer, erro
 	if password == "" {
 		return nil, nil, errors.New("KT_HSM_PASSWORD is not set; it authenticates the signing key and is deliberately not in the config file")
 	}
+	authKeyID, err := objectID(cfg.HSM.AuthKeyID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("hsm.auth_key_id: %w", err)
+	}
+	keyID, err := objectID(cfg.HSM.KeyID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("hsm.key_id: %w", err)
+	}
 	dev, err := hsm.Open(hsm.Config{
 		ConnectorURL: cfg.HSM.Connector,
-		AuthKeyID:    cfg.HSM.AuthKeyID,
+		AuthKeyID:    authKeyID,
 		Password:     password,
-		KeyID:        cfg.HSM.KeyID,
+		KeyID:        keyID,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -625,7 +641,7 @@ func loadHSMSigner(cfg *config) (*torchwood.CosignatureSigner, *hsm.Signer, erro
 	if got := signer.Verifier().String(); got != cfg.HSM.VKey {
 		dev.Close()
 		return nil, nil, fmt.Errorf("hsm: object 0x%04x signs as %s, but this witness publishes %s — refusing to start as a different party",
-			cfg.HSM.KeyID, got, cfg.HSM.VKey)
+			keyID, got, cfg.HSM.VKey)
 	}
 	return signer, dev, nil
 }
@@ -653,8 +669,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill,
 	if device != nil {
 		defer device.Close()
 		log.Info("signing in hardware",
-			"connector", cfg.HSM.Connector, "auth_key", fmt.Sprintf("0x%04x", cfg.HSM.AuthKeyID),
-			"key", fmt.Sprintf("0x%04x", cfg.HSM.KeyID))
+			"connector", cfg.HSM.Connector, "auth_key", cfg.HSM.AuthKeyID, "key", cfg.HSM.KeyID)
 	}
 	vkey := signer.Verifier().String()
 
@@ -966,7 +981,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill,
 
 	srv := &http.Server{
 		Addr: cfg.Listen,
-		Handler: (&server.Server{Store: db, VKey: vkey, Version: version, Commit: gitCommit, Built: buildDate, Workers: workers, Log: log, Tiers: tiers, Kinds: kinds,
+		Handler: (&server.Server{Store: db, VKey: vkey, Version: version, Commit: gitCommit, Built: buildDate, Workers: workers, Log: log, Tiers: tiers, Kinds: kinds, Signer: signerStatus(cfg, device),
 			Events:      events,
 			Storage:     server.StoragePaths{DBPath: cfg.DB, ExportDir: cfg.ExportDir},
 			FundingPath: cfg.FundingPath}).Handler(),
@@ -1956,4 +1971,41 @@ func canaryEvery(n int) int {
 		return 100
 	}
 	return n
+}
+
+// hsmStatus adapts the device to what the server reports. Returned as a nil
+// interface — not a typed nil — when there is no device, because a typed nil
+// would make `s.Signer == nil` false and the page would claim a hardware signer
+// that is not there.
+type hsmStatus struct {
+	dev  *hsm.Signer
+	desc string
+}
+
+func (h hsmStatus) Describe() string { return h.desc }
+func (h hsmStatus) Alive() error     { return h.dev.Alive() }
+
+func signerStatus(cfg *config, dev *hsm.Signer) server.SignerStatus {
+	if dev == nil {
+		return nil
+	}
+	return hsmStatus{dev: dev, desc: fmt.Sprintf("YubiHSM via %s, auth key %s, object %s",
+		cfg.HSM.Connector, cfg.HSM.AuthKeyID, cfg.HSM.KeyID)}
+}
+
+// objectID parses a YubiHSM object id. "0x1001" and "4097" both work; base 0
+// does the choosing, which is what lets the config read the way the device's
+// own tooling and DEVICE.md do.
+func objectID(s string) (uint16, error) {
+	if s == "" {
+		return 0, errors.New("required")
+	}
+	n, err := strconv.ParseUint(s, 0, 16)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not an object id: %w", s, err)
+	}
+	if n == 0 || n == 0xffff {
+		return 0, fmt.Errorf("%q is reserved for internal objects", s)
+	}
+	return uint16(n), nil
 }
