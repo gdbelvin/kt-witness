@@ -160,3 +160,34 @@ func TestOpenRequiresACompleteConfiguration(t *testing.T) {
 		}
 	}
 }
+
+// The first containerised run of this package failed here. The client builds
+// "http://" + addr + "/connector/api" itself, so a config carrying a URL became
+// "http://http//172.17.0.1:12346/connector/api" and the process tried to
+// resolve the host "http" — an error that names DNS and never mentions the
+// address being wrong.
+func TestConnectorAddressAcceptsWhateverTheOperatorWrote(t *testing.T) {
+	for in, want := range map[string]string{
+		"172.17.0.1:12346":                      "172.17.0.1:12346",
+		"http://172.17.0.1:12346":               "172.17.0.1:12346",
+		"http://172.17.0.1:12346/":              "172.17.0.1:12346",
+		"http://172.17.0.1:12346/connector/api": "172.17.0.1:12346",
+		"127.0.0.1:12345":                       "127.0.0.1:12345",
+	} {
+		got, err := connectorAddr(in)
+		if err != nil {
+			t.Errorf("%q: %v", in, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("%q: got %q, want %q", in, got, want)
+		}
+	}
+}
+
+// https would be silently downgraded by stripping the scheme, so it is refused.
+func TestConnectorAddressRefusesHTTPS(t *testing.T) {
+	if _, err := connectorAddr("https://hsm.example.com:12345"); !errors.Is(err, ErrUnavailable) {
+		t.Errorf("got %v, want ErrUnavailable", err)
+	}
+}

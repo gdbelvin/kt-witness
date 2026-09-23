@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/certusone/yubihsm-go"
@@ -36,7 +37,11 @@ var ErrUnavailable = errors.New("hsm: signer unavailable")
 // Password, which comes from an environment variable populated by a file the
 // operator owns.
 type Config struct {
-	// ConnectorURL is yubihsm-connector's HTTP address, host:port.
+	// ConnectorURL is yubihsm-connector's address. Either "host:port" or
+	// "http://host:port" — a scheme is stripped, because the connector's own
+	// config file writes a bare host:port while every other reference to it
+	// here is a URL, and an operator should not have to know which form this
+	// field wants.
 	ConnectorURL string
 
 	// AuthKeyID is the authentication key the witness opens sessions with. It
@@ -85,7 +90,11 @@ func Open(cfg Config) (*Signer, error) {
 	if cfg.ConnectorURL == "" || cfg.AuthKeyID == 0 || cfg.KeyID == 0 || cfg.Password == "" {
 		return nil, fmt.Errorf("%w: incomplete configuration", ErrUnavailable)
 	}
-	c := connector.NewHTTPConnector(cfg.ConnectorURL)
+	addr, err := connectorAddr(cfg.ConnectorURL)
+	if err != nil {
+		return nil, err
+	}
+	c := connector.NewHTTPConnector(addr)
 	sm, err := yubihsm.NewSessionManager(c, cfg.AuthKeyID, cfg.Password)
 	if err != nil {
 		return nil, fmt.Errorf("%w: authenticate key 0x%04x: %w", ErrUnavailable, cfg.AuthKeyID, err)
@@ -198,4 +207,25 @@ func (s *Signer) Close() {
 		s.sm.Destroy()
 		s.sm = nil
 	}
+}
+
+// connectorAddr reduces whatever the operator wrote to the host:port the client
+// wants.
+//
+// The client builds "http://" + addr + "/connector/api" itself, so handing it a
+// URL produces "http://http//host:port/connector/api" and a DNS lookup for the
+// host "http" — which is what the first containerised run of this package did.
+// The error names a resolver failure and says nothing about a malformed
+// address, so it is worth normalising here rather than leaving to a reader.
+func connectorAddr(s string) (string, error) {
+	if strings.HasPrefix(s, "https://") {
+		return "", fmt.Errorf("%w: connector address %q uses https, which this client does not speak; terminate TLS in front of it or use http", ErrUnavailable, s)
+	}
+	s = strings.TrimPrefix(s, "http://")
+	s = strings.TrimSuffix(s, "/connector/api")
+	s = strings.TrimSuffix(s, "/")
+	if s == "" || strings.Contains(s, "/") {
+		return "", fmt.Errorf("%w: %q is not a host:port", ErrUnavailable, s)
+	}
+	return s, nil
 }
