@@ -4,6 +4,12 @@
   "pprof_listen": "0.0.0.0:6060",
   "db": "/data/witness.db",
   "key_file": "/data/witness.key",
+  "hsm": {
+    "connector": "http://172.17.0.1:12346",
+    "auth_key_id": "0x1001",
+    "key_id": "0x1100",
+    "vkey": "witness.gdbsecurity.com+a1398f73+BAbIijGonVIk3ikDac+KKlSm1ELHOzcddhjjB6zB4BNf"
+  },
   "peer_witnesses": [
     "witness.stagemole.eu+67f7aea0+BEqSG3yu9YrmcM3BHvQYTxwFj3uSWakQepafafpUqklv",
     "witness.glasklar.is+90ad80e6+BLIQbbkGXsl/JeCcGIOSFnUabibY7YtB5IWlY9PRSYU2",
