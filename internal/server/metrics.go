@@ -25,6 +25,18 @@ const (
 	MEntries      = "kt_witness_entries_attested"
 	MForksTotal   = "kt_witness_forks_total"
 
+	// Signing, when it happens in hardware.
+	//
+	// Declared unconditionally but only ever Set on the HSM path, so a witness
+	// signing from a key file emits the HELP and TYPE lines and no sample. That
+	// is the right shape: the metric is documented, and its absence says
+	// "nothing here signs in hardware" rather than asserting a value. A gauge
+	// pinned at a constant forever is worse than no gauge — which is what
+	// retired kt_witness_audit_in_flight.
+	MSignerReachable   = "kt_witness_signer_reachable"
+	MSignerErrors      = "kt_witness_signer_errors_total"
+	MSignerLastSuccess = "kt_witness_signer_last_success_timestamp_seconds"
+
 	MBackfillEpochs = "kt_witness_backfill_epochs"
 	MBackfillGaps   = "kt_witness_backfill_gaps"
 
@@ -176,6 +188,9 @@ func Init(version, commit, built string) {
 	d(MCPUMachineCores, metrics.Gauge, "CPU cores busy across the whole host, from /proc/stat, which is not namespaced inside a container.")
 	d(MCPUSampleComplete, metrics.Gauge, "1 if the governor could read both CPU figures. At 0 it is pacing blind and holds a conservative single permit.")
 	d(MCosigned, metrics.Counter, "Cosignatures issued, by origin.")
+	d(MSignerReachable, metrics.Gauge, "1 when the hardware signer answered this round's pre-flight, 0 when it did not. Absent when signing from a key file.")
+	d(MSignerErrors, metrics.Counter, "Hardware signer failures. A rate, so a flapping connector is visible where a level would not be.")
+	d(MSignerLastSuccess, metrics.Gauge, "Unix time of the last successful signer contact.")
 	d(MConsecutiveWithheld, metrics.Gauge, "Consecutive rounds a log has failed to verify. Resets to 0 on success. Alert above ~20: withholding is the enforcement mechanism, so occasional is healthy and sustained is not.")
 	d(MWithheld, metrics.Counter, "Cosignatures withheld because something could not be verified. Withholding is the enforcement mechanism, so a steady rate for one origin is the signal to look at.")
 	d(MForkDetected, metrics.Counter, "Forks detected, by origin.")

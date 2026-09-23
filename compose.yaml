@@ -49,6 +49,19 @@ services:
     # opening it, so an unset variable here fails safe.
     env_file:
       - ./secrets/work.env
+      # KT_HSM_PASSWORD, when signing in hardware. Deliberately not in
+      # witness.json: that file is shipped to this host and readable here, and
+      # this is the credential that authenticates the signing key.
+      #
+      # required: false, because signing from a key file is still the default
+      # and this repository is public — a clone with no HSM should start. The
+      # witness fails closed on its own instead: with an hsm block configured
+      # and no password, it refuses to start and says which variable is unset.
+      # Making compose refuse would move that error somewhere less informative,
+      # and would also block a rollback to key-file signing, which is exactly
+      # the moment nobody wants a second obstacle.
+      - path: ./secrets/yubihsm.env
+        required: false
 
     # Where a worker should dial to fetch proofs. Comes from .env rather than
     # deploy/witness.json because that file is mounted read-only from the

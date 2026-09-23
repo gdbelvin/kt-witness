@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -27,6 +28,7 @@ import (
 	"github.com/gdbsecurity/kt-witness/internal/audit"
 	"github.com/gdbsecurity/kt-witness/internal/cosig"
 	"github.com/gdbsecurity/kt-witness/internal/export"
+	"github.com/gdbsecurity/kt-witness/internal/hsm"
 	"github.com/gdbsecurity/kt-witness/internal/metrics"
 	"github.com/gdbsecurity/kt-witness/internal/netmeter"
 	"github.com/gdbsecurity/kt-witness/internal/server"
@@ -71,6 +73,33 @@ type config struct {
 	PprofListen string `json:"pprof_listen"`
 	DB          string `json:"db"`
 	KeyFile     string `json:"key_file"`
+
+	// HSM moves signing into a YubiHSM reached through yubihsm-connector. When
+	// it is set, key_file is not read.
+	//
+	// The password is deliberately NOT here: this file is shipped to the server
+	// and readable there. It comes from KT_HSM_PASSWORD, populated from a
+	// gitignored file the operator owns.
+	HSM struct {
+		// Connector is yubihsm-connector's address, host:port.
+		Connector string `json:"connector"`
+		// AuthKeyID and KeyID are object ids, written the way the device's own
+		// tooling and DEVICE.md write them: "0x1001". Decimal is accepted, but
+		// JSON has no hex literal and every other document about this device
+		// speaks hex, so a config that had to say 4097 would be one
+		// transcription error away from addressing the wrong object.
+		AuthKeyID string `json:"auth_key_id"`
+		KeyID     string `json:"key_id"`
+		// VKey is the verifier key this witness publishes. The public key read
+		// from the device must equal it or the witness refuses to start.
+		//
+		// Not a convenience: the name and key together determine the key hash
+		// in every signature line, so signing with the wrong object means
+		// coming back as a party nobody can attribute. Unlike a rename that is
+		// not repairable — nothing the old key attested can be re-attested by
+		// a new one.
+		VKey string `json:"vkey"`
+	} `json:"hsm"`
 
 	// PeerStatusURLs maps a witness name to its status page, polled to compare
 	// its view against ours. Detection only: those pages are unsigned, so a
@@ -508,7 +537,12 @@ func probe(listen string) error {
 		host = "127.0.0.1"
 	}
 	c := &http.Client{Timeout: 5 * time.Second}
-	resp, err := c.Get("http://" + net.JoinHostPort(host, port) + "/")
+	// /healthz, not "/". The status page keeps serving whatever else is wrong —
+	// the cosignatures already issued are still evidence — while this endpoint
+	// answers the narrower question the container runtime is asking: can this
+	// witness do its job right now. With a hardware signer, an unreachable
+	// device makes the answer no.
+	resp, err := c.Get("http://" + net.JoinHostPort(host, port) + "/healthz")
 	if err != nil {
 		return fmt.Errorf("healthcheck: %w", err)
 	}
@@ -558,7 +592,61 @@ func generateKey(cfg *config) error {
 	return nil
 }
 
-func loadSigner(cfg *config) (*torchwood.CosignatureSigner, error) {
+// loadSigner returns the cosignature signer and, when signing is done in
+// hardware, the device handle the round's pre-flight asks. The handle is nil on
+// the key-file path.
+func loadSigner(cfg *config) (*torchwood.CosignatureSigner, *hsm.Signer, error) {
+	if cfg.HSM.Connector != "" {
+		return loadHSMSigner(cfg)
+	}
+	s, err := loadFileSigner(cfg)
+	return s, nil, err
+}
+
+// loadHSMSigner opens the device and refuses to start unless it holds the
+// identity this witness publishes.
+func loadHSMSigner(cfg *config) (*torchwood.CosignatureSigner, *hsm.Signer, error) {
+	if cfg.HSM.VKey == "" {
+		return nil, nil, errors.New("hsm.vkey is required: without it there is nothing to check the device's key against")
+	}
+	password := os.Getenv("KT_HSM_PASSWORD")
+	if password == "" {
+		return nil, nil, errors.New("KT_HSM_PASSWORD is not set; it authenticates the signing key and is deliberately not in the config file")
+	}
+	authKeyID, err := objectID(cfg.HSM.AuthKeyID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("hsm.auth_key_id: %w", err)
+	}
+	keyID, err := objectID(cfg.HSM.KeyID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("hsm.key_id: %w", err)
+	}
+	dev, err := hsm.Open(hsm.Config{
+		ConnectorURL: cfg.HSM.Connector,
+		AuthKeyID:    authKeyID,
+		Password:     password,
+		KeyID:        keyID,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	signer, err := torchwood.NewCosignatureSigner(cfg.Name, dev)
+	if err != nil {
+		dev.Close()
+		return nil, nil, fmt.Errorf("hsm: %w", err)
+	}
+	// The assertion that makes all of this safe. A device holding a different
+	// key produces cosignatures nobody can attribute to us, and no repair
+	// exists for that.
+	if got := signer.Verifier().String(); got != cfg.HSM.VKey {
+		dev.Close()
+		return nil, nil, fmt.Errorf("hsm: object 0x%04x signs as %s, but this witness publishes %s — refusing to start as a different party",
+			keyID, got, cfg.HSM.VKey)
+	}
+	return signer, dev, nil
+}
+
+func loadFileSigner(cfg *config) (*torchwood.CosignatureSigner, error) {
 	raw, err := os.ReadFile(cfg.KeyFile)
 	if err != nil {
 		return nil, fmt.Errorf("read key: %w (run -genkey first)", err)
@@ -574,9 +662,14 @@ func loadSigner(cfg *config) (*torchwood.CosignatureSigner, error) {
 }
 
 func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill, repairName bool, retractOrigin, retractReason string) error {
-	signer, err := loadSigner(cfg)
+	signer, device, err := loadSigner(cfg)
 	if err != nil {
 		return err
+	}
+	if device != nil {
+		defer device.Close()
+		log.Info("signing in hardware",
+			"connector", cfg.HSM.Connector, "auth_key", cfg.HSM.AuthKeyID, "key", cfg.HSM.KeyID)
 	}
 	vkey := signer.Verifier().String()
 
@@ -888,7 +981,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill,
 
 	srv := &http.Server{
 		Addr: cfg.Listen,
-		Handler: (&server.Server{Store: db, VKey: vkey, Version: version, Commit: gitCommit, Built: buildDate, Workers: workers, Log: log, Tiers: tiers, Kinds: kinds,
+		Handler: (&server.Server{Store: db, VKey: vkey, Version: version, Commit: gitCommit, Built: buildDate, Workers: workers, Log: log, Tiers: tiers, Kinds: kinds, Signer: signerStatus(cfg, device),
 			Events:      events,
 			Storage:     server.StoragePaths{DBPath: cfg.DB, ExportDir: cfg.ExportDir},
 			FundingPath: cfg.FundingPath}).Handler(),
@@ -974,7 +1067,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill,
 	// Witness once before auditing starts. The auditor works from what we have
 	// already attested, so launching it first would spend its opening pass on an
 	// empty store and then sleep a full interval before doing anything useful.
-	round(ctx, w, sources, db, log)
+	round(ctx, w, sources, db, log, device)
 	mirror()
 	if once {
 		return nil
@@ -1101,7 +1194,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill,
 			return nil
 		case <-time.After(pollInterval):
 		}
-		round(ctx, w, sources, db, log)
+		round(ctx, w, sources, db, log, device)
 		scanApplications(ctx, db, sources, log)
 		mirror()
 	}
@@ -1269,7 +1362,29 @@ func (f *failureTracker) ok(origin string) {
 	metrics.Set(server.MConsecutiveWithheld, labelsFor(origin), 0)
 }
 
-func round(ctx context.Context, w *witness.Witness, sources []source.Source, db *store.Store, log *slog.Logger) {
+func round(ctx context.Context, w *witness.Witness, sources []source.Source, db *store.Store, log *slog.Logger, device *hsm.Signer) {
+	// Ask the signer once, before touching a single origin.
+	//
+	// This is the whole reason the pre-flight exists. An unreachable signer
+	// fails every origin identically, and so does every log equivocating at
+	// once — but only one of those is about the logs. Running the loop anyway
+	// would advance eighty consecutive-withheld counters and fire eighty
+	// SUSTAINED WITHHOLDING alerts, and the operator's first impression would
+	// be an ecosystem-wide catastrophe rather than a dead USB connector.
+	//
+	// So: one error, its own message, and no per-origin state touched. Nothing
+	// was withheld from; the witness simply did not run.
+	if device != nil {
+		if err := device.Alive(); err != nil {
+			metrics.Set(server.MSignerReachable, nil, 0)
+			metrics.Inc(server.MSignerErrors, nil)
+			log.Error("signer unavailable, skipping round — no log was withheld from", "err", err)
+			return
+		}
+		metrics.Set(server.MSignerReachable, nil, 1)
+		metrics.Set(server.MSignerLastSuccess, nil, float64(time.Now().Unix()))
+	}
+
 	sem := make(chan struct{}, roundConcurrency)
 	var wg sync.WaitGroup
 
@@ -1856,4 +1971,41 @@ func canaryEvery(n int) int {
 		return 100
 	}
 	return n
+}
+
+// hsmStatus adapts the device to what the server reports. Returned as a nil
+// interface — not a typed nil — when there is no device, because a typed nil
+// would make `s.Signer == nil` false and the page would claim a hardware signer
+// that is not there.
+type hsmStatus struct {
+	dev  *hsm.Signer
+	desc string
+}
+
+func (h hsmStatus) Describe() string { return h.desc }
+func (h hsmStatus) Alive() error     { return h.dev.Alive() }
+
+func signerStatus(cfg *config, dev *hsm.Signer) server.SignerStatus {
+	if dev == nil {
+		return nil
+	}
+	return hsmStatus{dev: dev, desc: fmt.Sprintf("YubiHSM via %s, auth key %s, object %s",
+		cfg.HSM.Connector, cfg.HSM.AuthKeyID, cfg.HSM.KeyID)}
+}
+
+// objectID parses a YubiHSM object id. "0x1001" and "4097" both work; base 0
+// does the choosing, which is what lets the config read the way the device's
+// own tooling and DEVICE.md do.
+func objectID(s string) (uint16, error) {
+	if s == "" {
+		return 0, errors.New("required")
+	}
+	n, err := strconv.ParseUint(s, 0, 16)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not an object id: %w", s, err)
+	}
+	if n == 0 || n == 0xffff {
+		return 0, fmt.Errorf("%q is reserved for internal objects", s)
+	}
+	return uint16(n), nil
 }

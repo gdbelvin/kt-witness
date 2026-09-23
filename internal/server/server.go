@@ -39,6 +39,14 @@ type Server struct {
 	Commit string
 	Built  string
 
+	// Signer describes what is producing cosignatures, when that is not a key
+	// file. Nil means the key-file path, and the status page says so.
+	//
+	// A reader asking "what signs these?" should not have to scrape metrics to
+	// find out, and an operator asking "is the HSM answering?" should not have
+	// to read the log.
+	Signer SignerStatus
+
 	// Workers, if set, reports which machines are currently verifying for this
 	// witness. The channel itself is gRPC on a separate, LAN-only listener —
 	// see internal/workrpc — and deliberately not reachable through the tunnel
@@ -122,6 +130,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/", s.index)
 	mux.HandleFunc("/status.json", s.statusJSON)
 	mux.HandleFunc("/metrics", s.metricsHandler)
+	mux.HandleFunc("/healthz", s.healthz)
 	mux.HandleFunc("/.well-known/tlog-witness-key", s.key)
 	mux.HandleFunc("/funding.json", s.funding)
 	mux.HandleFunc("/.well-known/funding-manifest-urls", s.fundingManifestURLs)
@@ -195,8 +204,8 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "kt-witness %s (commit %s, built %s)\n\nwitness key:\n  %s\n\nwitnessed logs (%d):\n",
-		s.Version, orUnknown(s.Commit), orUnknown(s.Built), s.VKey, len(recs))
+	fmt.Fprintf(w, "kt-witness %s (commit %s, built %s)\n\nwitness key:\n  %s\n\nsigner:\n  %s\n\nwitnessed logs (%d):\n",
+		s.Version, orUnknown(s.Commit), orUnknown(s.Built), s.VKey, s.signerLine(), len(recs))
 	for _, rec := range recs {
 		fmt.Fprintf(w, "\n  origin: %s\n  size:   %d\n  path:   /%s/checkpoint\n  seen:   %s\n",
 			rec.Origin, rec.Size, originHashes(rec.Origin)[0], rec.WitnessedAt.Format("2006-01-02T15:04:05Z"))
@@ -395,4 +404,50 @@ func orUnknown(s string) string {
 		return "unknown"
 	}
 	return s
+}
+
+// SignerStatus reports what is signing. Nil on the key-file path.
+//
+// An interface rather than a struct of fields because the answer changes
+// between calls: whether the device is answering right now is the whole point,
+// and a snapshot taken at startup would say "reachable" forever.
+type SignerStatus interface {
+	// Describe names the signer for a human: device, credential, object.
+	Describe() string
+	// Alive reports whether it answered just now.
+	Alive() error
+}
+
+func (s *Server) signerLine() string {
+	if s.Signer == nil {
+		return "key file"
+	}
+	if err := s.Signer.Alive(); err != nil {
+		return s.Signer.Describe() + "  —  NOT ANSWERING: " + err.Error()
+	}
+	return s.Signer.Describe() + "  —  answering"
+}
+
+// healthz is what the container healthcheck probes.
+//
+// Deliberately not "/": that page is the public evidence surface and must keep
+// serving whatever else is wrong. This one answers a narrower question — can
+// this witness do its job right now — and a witness that cannot sign cannot.
+//
+// Reporting healthy while producing no cosignatures would be a lie of exactly
+// the kind this project tries not to tell. The counter-argument was recorded
+// and rejected: the evidence already issued is still served either way, because
+// Compose acts on exit rather than on health, so an unhealthy container is a
+// signal and not a restart loop.
+func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if s.Signer != nil {
+		if err := s.Signer.Alive(); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprintf(w, "signer unavailable: %v\n", err)
+			return
+		}
+	}
+	fmt.Fprintln(w, "ok")
 }
