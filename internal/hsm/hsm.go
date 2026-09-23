@@ -58,7 +58,20 @@ type Signer struct {
 	pub ed25519.PublicKey
 
 	mu sync.Mutex
-	sm *yubihsm.SessionManager
+	sm session
+}
+
+// session is the part of yubihsm.SessionManager this package uses.
+//
+// It exists so the logic here — labelling transport failures, refusing a
+// prehash, checking what the device says its key is — can be tested without
+// hardware. The session protocol itself is the library's job and is verified
+// against the real device by the KT_HSM_LIVE test; faking it at the HTTP layer
+// would mean reimplementing its cryptography to test our error handling, which
+// would prove nothing about either.
+type session interface {
+	SendEncryptedCommand(*commands.CommandMessage) (commands.Response, error)
+	Destroy()
 }
 
 // Open connects, reads the public key of cfg.KeyID, and returns a Signer.
@@ -77,6 +90,12 @@ func Open(cfg Config) (*Signer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: authenticate key 0x%04x: %w", ErrUnavailable, cfg.AuthKeyID, err)
 	}
+	return newSigner(cfg, sm)
+}
+
+// newSigner completes construction against any session, which is what lets the
+// tests drive the same path Open does.
+func newSigner(cfg Config, sm session) (*Signer, error) {
 	s := &Signer{cfg: cfg, sm: sm}
 	pub, err := s.publicKey()
 	if err != nil {
