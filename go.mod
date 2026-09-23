@@ -13,6 +13,8 @@ require (
 )
 
 require (
+	github.com/certusone/yubihsm-go v0.3.0 // indirect
+	github.com/enceve/crypto v0.0.0-20160707101852-34d48bb93815 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.12 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
