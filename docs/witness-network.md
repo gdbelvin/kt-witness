@@ -35,16 +35,29 @@ there push only adds timeliness. `/about` states this.
 
 ## Which lists, and why staging
 
-Both staging lists:
+Start with the smaller staging list only:
 
 - `https://raw.githubusercontent.com/transparency-dev/witness-network/main/lists/staging/log-list-10qps-4klogs.1`
+
+and add the larger one once the signer is measured:
+
 - `https://raw.githubusercontent.com/transparency-dev/witness-network/main/lists/staging/log-list-100qps-40klogs.1`
 
 Staging first, because nothing yet depends on this witness and staging is the
 place to find out whether the push path keeps up before anything does. The list
-names state their load envelope (10 qps / 4k logs and 100 qps / 40k logs); the
-larger is the figure to size against. A testing list under `lists/testing/` is
-optional and can be added alongside for integration work.
+names state their load envelope (10 qps / 4k logs and 100 qps / 40k logs).
+
+**Every accepted push is an HSM signature**, re-pushes included. The poller
+signs about 82 times an hour; the 100 qps list's CT logs alone push at about
+one per second each, around 13 signs a second today and a stated envelope of
+100. Nobody has measured how many `sign-eddsa` operations a second the YubiHSM
+sustains, and HSM operations serialise: if pushes saturate it, polled logs
+start missing `max_sign_delay` and are withheld for reasons of our own. Time a
+loop of signs on the device before joining the larger list. Registering for a
+load we cannot carry is the overpromise a witness must not make.
+
+A testing list under `lists/testing/` is optional and can be added alongside
+for integration work.
 
 Production lists come later, once `/about` has been live for a while and the
 push path has run under the staging load without withholding for reasons of
@@ -55,8 +68,7 @@ our own.
 ```json
 "witness_network": {
   "lists": [
-    "https://raw.githubusercontent.com/transparency-dev/witness-network/main/lists/staging/log-list-10qps-4klogs.1",
-    "https://raw.githubusercontent.com/transparency-dev/witness-network/main/lists/staging/log-list-100qps-40klogs.1"
+    "https://raw.githubusercontent.com/transparency-dev/witness-network/main/lists/staging/log-list-10qps-4klogs.1"
   ],
   "refresh": "24h",
   "public_url": "https://witness.gdbsecurity.com",
@@ -91,7 +103,9 @@ add-checkpoint URL, and the lists it follows.
 
 Lists followed (staging):
   https://raw.githubusercontent.com/transparency-dev/witness-network/main/lists/staging/log-list-10qps-4klogs.1
-  https://raw.githubusercontent.com/transparency-dev/witness-network/main/lists/staging/log-list-100qps-40klogs.1
+
+I plan to add the 100qps staging list once I have measured the signer's
+sustained rate; the witness signs with a YubiHSM.
 
 The witness downloads and applies these lists automatically every 24 hours.
 It never removes or updates a log that is already configured; a change to an

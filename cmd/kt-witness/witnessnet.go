@@ -15,6 +15,13 @@ import (
 	"golang.org/x/mod/sumdb/note"
 )
 
+// staticPushQPD bounds pushes from statically configured logs, which state no
+// budget of their own. Every accepted push is a signature on the HSM, which
+// the poller shares; unlimited would let one misbehaving log operator starve
+// every other log of cosignatures. One a minute is well above anything a
+// polled log needs, since we fetch those ourselves.
+const staticPushQPD = 1440
+
 // startWitnessNetwork builds the push endpoint and, when lists are configured,
 // starts discovering logs from witness-network.org.
 //
@@ -32,8 +39,9 @@ func startWitnessNetwork(ctx context.Context, cfg *config, w *witness.Witness, d
 		return nil, about, nil
 	}
 
-	interval := loglist.DefaultInterval
+	interval, intervalText := loglist.DefaultInterval, "24h"
 	if wn.Refresh != "" {
+		intervalText = wn.Refresh
 		d, err := time.ParseDuration(wn.Refresh)
 		if err != nil {
 			return nil, about, fmt.Errorf("witness_network.refresh: %w", err)
@@ -46,7 +54,8 @@ func startWitnessNetwork(ctx context.Context, cfg *config, w *witness.Witness, d
 		interval = d
 	}
 	if len(wn.Lists) > 0 {
-		about.ListRefresh = interval.String()
+		// As the operator wrote it: "24h", not time.Duration's "24h0m0s".
+		about.ListRefresh = intervalText
 	}
 
 	// Every statically configured C2SP log accepts pushes too. Those are the
@@ -64,6 +73,7 @@ func startWitnessNetwork(ctx context.Context, cfg *config, w *witness.Witness, d
 		}
 		static = append(static, &push.Log{
 			Origin: l.Origin, VKey: l.VKey, Verifier: v, From: loglist.FromConfig,
+			QPD: staticPushQPD,
 		})
 	}
 

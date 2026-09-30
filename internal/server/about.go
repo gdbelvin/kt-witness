@@ -46,7 +46,7 @@ type AboutInfo struct {
 const independenceNote = "Logs discovered from a witness-network list come with no monitoring URL, " +
 	"so this witness cosigns them only when their operator pushes a checkpoint: for those logs it sees " +
 	"only what the operator chooses to send it, and is not independent of that operator. " +
-	"The logs it polls on its own schedule it also accepts pushes for, through the same checks."
+	"The C2SP logs it polls on its own schedule it also accepts pushes for, through the same checks."
 
 const noListsNote = "This witness does not follow any witness-network list yet."
 
