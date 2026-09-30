@@ -15,7 +15,7 @@
     "annotations": {
       "summary": "https://witness.gdbsecurity.com is not answering 200 from outside.",
       "description": "Telegraf probes /healthz through Cloudflare, the path every client takes. This catches what 'no metrics' cannot: the process up on the LAN while the tunnel, DNS or Cloudflare is broken, so nobody can fetch or push. NoData fires this too: no probe result means the probe itself failed or stopped.",
-      "dashboardUId": "kt-witness-endpoints"
+      "__dashboardUid__": "kt-witness-endpoints"
     },
     "data": [
       {
@@ -98,7 +98,7 @@
     "annotations": {
       "summary": "Outside clients got more than 5 server errors in 10 minutes.",
       "description": "Counted from tunnelled requests only. See the endpoints dashboard for which route; a 503 from /add-checkpoint is also counted by 'pushes withheld'.",
-      "dashboardUId": "kt-witness-endpoints"
+      "__dashboardUid__": "kt-witness-endpoints"
     },
     "data": [
       {
@@ -180,7 +180,7 @@
     "annotations": {
       "summary": "p95 latency on checkpoint reads and pushes has been over 2s for 15 minutes.",
       "description": "Measured inside the witness, so it excludes Cloudflare. Push latency is dominated by the HSM signature; a slow signer shows here first, then as polled logs going stale.",
-      "dashboardUId": "kt-witness-endpoints"
+      "__dashboardUid__": "kt-witness-endpoints"
     },
     "data": [
       {
@@ -262,7 +262,7 @@
     "annotations": {
       "summary": "More than 10 pushes in 15 minutes were answered 5xx.",
       "description": "503 means the core withheld (stale view, signer unavailable), 500 a store failure. Logs retry, but a log that keeps getting 503 has no fresh cosignature from us.",
-      "dashboardUId": "kt-witness-endpoints"
+      "__dashboardUid__": "kt-witness-endpoints"
     },
     "data": [
       {

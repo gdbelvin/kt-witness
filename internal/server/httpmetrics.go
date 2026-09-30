@@ -74,6 +74,17 @@ func route(path string) string {
 	return "other"
 }
 
+// method bounds the method label the same way route bounds the path: Go's
+// server accepts any token as a method, so a scanner could otherwise mint a
+// series per word it sends.
+func method(m string) string {
+	switch m {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodOptions:
+		return m
+	}
+	return "other"
+}
+
 // via reports whether a request came through the Cloudflare Tunnel.
 func via(r *http.Request) string {
 	if r.Header.Get("Cf-Ray") != "" {
@@ -182,7 +193,7 @@ func instrument(h http.Handler) http.Handler {
 		}
 		rt, v := route(r.URL.Path), via(r)
 		metrics.Inc(MHTTPRequests, map[string]string{
-			"route": rt, "method": r.Method, "code": strconv.Itoa(code), "via": v,
+			"route": rt, "method": method(r.Method), "code": strconv.Itoa(code), "via": v,
 		})
 		lbl := map[string]string{"route": rt, "via": v}
 		metrics.Add(MHTTPDurationSum, lbl, elapsed)

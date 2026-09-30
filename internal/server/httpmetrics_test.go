@@ -47,6 +47,17 @@ func TestRouteIsBounded(t *testing.T) {
 	}
 }
 
+func TestMethodIsBounded(t *testing.T) {
+	for m, want := range map[string]string{
+		"GET": "GET", "POST": "POST", "HEAD": "HEAD", "OPTIONS": "OPTIONS",
+		"FOO": "other", "PROPFIND": "other", "get": "other",
+	} {
+		if got := method(m); got != want {
+			t.Errorf("method(%q) = %q, want %q", m, got, want)
+		}
+	}
+}
+
 // Tunnel traffic and LAN traffic must be told apart, or the Telegraf scrape
 // alone makes an unused witness look relied on.
 func TestInstrumentSplitsTunnelFromDirect(t *testing.T) {
