@@ -96,6 +96,14 @@ type Server struct {
 	coverage coverageCache
 
 	coverageOnce sync.Once
+
+	// AddCheckpoint serves POST /add-checkpoint (c2sp.org/tlog-witness push).
+	// Nil leaves the route unregistered. See internal/push.
+	AddCheckpoint http.Handler
+
+	// About is published at /about: what witness-network.org asks every
+	// witness to state publicly. See about.go.
+	About AboutInfo
 }
 
 // cov returns the coverage cache, applying CoverageTTL on first use.
@@ -129,6 +137,10 @@ func (s *Server) Handler() http.Handler {
 	// the suffix; ServeMux cannot express the variable prefix directly.
 	mux.HandleFunc("/", s.index)
 	mux.HandleFunc("/status.json", s.statusJSON)
+	if s.AddCheckpoint != nil {
+		mux.Handle("/add-checkpoint", s.AddCheckpoint)
+	}
+	mux.HandleFunc("/about", s.about)
 	mux.HandleFunc("/metrics", s.metricsHandler)
 	mux.HandleFunc("/healthz", s.healthz)
 	mux.HandleFunc("/.well-known/tlog-witness-key", s.key)

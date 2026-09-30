@@ -55,6 +55,11 @@ var (
 	// bucketRetractions records fork findings that were withdrawn, alongside
 	// the original evidence, so a reversal is as auditable as the accusation.
 	bucketRetractions = []byte("retractions")
+
+	// bucketPushLogs holds logs discovered from witness-network.org lists.
+	// Add-only: an entry, once written, is never updated or removed by a list
+	// change. See pushlogs.go.
+	bucketPushLogs = []byte("push_logs")
 )
 
 // ErrRaced means the stored head changed between verification and persistence,
@@ -99,7 +104,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bucketHeads, bucketForks, bucketPoisoned, bucketAudits, bucketProgress, bucketHistory, bucketAppHeads, bucketLogEntries, bucketEpochs, bucketRetractions} {
+		for _, b := range [][]byte{bucketHeads, bucketForks, bucketPoisoned, bucketAudits, bucketProgress, bucketHistory, bucketAppHeads, bucketLogEntries, bucketEpochs, bucketRetractions, bucketPushLogs} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
