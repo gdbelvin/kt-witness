@@ -1,0 +1,331 @@
+[
+  {
+    "uid": "kt-witness-public-down",
+    "title": "kt-witness: public endpoint down",
+    "folderUID": "afvyr68dobym8a",
+    "ruleGroup": "kt-witness",
+    "condition": "B",
+    "for": "5m",
+    "noDataState": "Alerting",
+    "execErrState": "Error",
+    "labels": {
+      "service": "kt-witness",
+      "severity": "critical"
+    },
+    "annotations": {
+      "summary": "https://witness.gdbsecurity.com is not answering 200 from outside.",
+      "description": "Telegraf probes /healthz through Cloudflare, the path every client takes. This catches what 'no metrics' cannot: the process up on the LAN while the tunnel, DNS or Cloudflare is broken, so nobody can fetch or push. NoData fires this too: no probe result means the probe itself failed or stopped.",
+      "__dashboardUid__": "kt-witness-endpoints"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 300,
+          "to": 0
+        },
+        "datasourceUid": "efq9ck8t93vnke",
+        "model": {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "query": "from(bucket: \"server\")\n  |> range(start: -5m)\n  |> filter(fn: (r) => r._measurement == \"http_response\" and r.server == \"https://witness.gdbsecurity.com/healthz\" and r._field == \"http_response_code\")\n  |> last() |> group() |> last() |> keep(columns: [\"_value\"])",
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 300,
+          "to": 0
+        },
+        "datasourceUid": "__expr__",
+        "model": {
+          "conditions": [
+            {
+              "evaluator": {
+                "type": "outside_range",
+                "params": [
+                  199,
+                  201
+                ]
+              },
+              "operator": {
+                "type": "and"
+              },
+              "query": {
+                "params": [
+                  "A"
+                ]
+              },
+              "reducer": {
+                "params": [],
+                "type": "last"
+              }
+            }
+          ],
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "A",
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "B",
+          "type": "threshold"
+        }
+      }
+    ]
+  },
+  {
+    "uid": "kt-witness-5xx",
+    "title": "kt-witness: endpoints returning 5xx",
+    "folderUID": "afvyr68dobym8a",
+    "ruleGroup": "kt-witness",
+    "condition": "B",
+    "for": "5m",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "labels": {
+      "service": "kt-witness",
+      "severity": "warning"
+    },
+    "annotations": {
+      "summary": "Outside clients got more than 5 server errors in 10 minutes.",
+      "description": "Counted from tunnelled requests only. See the endpoints dashboard for which route; a 503 from /add-checkpoint is also counted by 'pushes withheld'.",
+      "__dashboardUid__": "kt-witness-endpoints"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 600,
+          "to": 0
+        },
+        "datasourceUid": "efq9ck8t93vnke",
+        "model": {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "query": "from(bucket: \"server\")\n  |> range(start: -10m)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_http_requests_total\" and r.via == \"tunnel\" and r.code =~ /^5/)\n  |> difference(nonNegative: true)\n  |> sum()\n  |> group()\n  |> sum()\n  |> keep(columns: [\"_value\"])",
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 600,
+          "to": 0
+        },
+        "datasourceUid": "__expr__",
+        "model": {
+          "conditions": [
+            {
+              "evaluator": {
+                "type": "gt",
+                "params": [
+                  5
+                ]
+              },
+              "operator": {
+                "type": "and"
+              },
+              "query": {
+                "params": [
+                  "A"
+                ]
+              },
+              "reducer": {
+                "params": [],
+                "type": "last"
+              }
+            }
+          ],
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "A",
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "B",
+          "type": "threshold"
+        }
+      }
+    ]
+  },
+  {
+    "uid": "kt-witness-slow",
+    "title": "kt-witness: endpoints slow (p95 > 2s)",
+    "folderUID": "afvyr68dobym8a",
+    "ruleGroup": "kt-witness",
+    "condition": "B",
+    "for": "15m",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "labels": {
+      "service": "kt-witness",
+      "severity": "warning"
+    },
+    "annotations": {
+      "summary": "p95 latency on checkpoint reads and pushes has been over 2s for 15 minutes.",
+      "description": "Measured inside the witness, so it excludes Cloudflare. Push latency is dominated by the HSM signature; a slow signer shows here first, then as polled logs going stale.",
+      "__dashboardUid__": "kt-witness-endpoints"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 900,
+          "to": 0
+        },
+        "datasourceUid": "efq9ck8t93vnke",
+        "model": {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "query": "import \"math\"\nfrom(bucket: \"server\")\n  |> range(start: -15m)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_http_request_duration_seconds_bucket\" and r.via == \"tunnel\" and (r.route == \"/{origin}/checkpoint\" or r.route == \"/add-checkpoint\"))\n  |> difference(nonNegative: true)\n  |> sum()\n  |> group(columns: [\"le\"])\n  |> sum()\n  |> group()\n  |> map(fn: (r) => ({r with le: if r.le == \"+Inf\" then math.mInf(sign: 1) else float(v: r.le)}))\n  |> histogramQuantile(quantile: 0.95, upperBoundColumn: \"le\", countColumn: \"_value\", valueColumn: \"_value\")\n  |> filter(fn: (r) => not math.isNaN(f: r._value))\n  |> keep(columns: [\"_value\"])",
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 900,
+          "to": 0
+        },
+        "datasourceUid": "__expr__",
+        "model": {
+          "conditions": [
+            {
+              "evaluator": {
+                "type": "gt",
+                "params": [
+                  2
+                ]
+              },
+              "operator": {
+                "type": "and"
+              },
+              "query": {
+                "params": [
+                  "A"
+                ]
+              },
+              "reducer": {
+                "params": [],
+                "type": "last"
+              }
+            }
+          ],
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "A",
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "B",
+          "type": "threshold"
+        }
+      }
+    ]
+  },
+  {
+    "uid": "kt-witness-push-withheld",
+    "title": "kt-witness: pushes withheld",
+    "folderUID": "afvyr68dobym8a",
+    "ruleGroup": "kt-witness",
+    "condition": "B",
+    "for": "5m",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "labels": {
+      "service": "kt-witness",
+      "severity": "warning"
+    },
+    "annotations": {
+      "summary": "More than 10 pushes in 15 minutes were answered 5xx.",
+      "description": "503 means the core withheld (stale view, signer unavailable), 500 a store failure. Logs retry, but a log that keeps getting 503 has no fresh cosignature from us.",
+      "__dashboardUid__": "kt-witness-endpoints"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 900,
+          "to": 0
+        },
+        "datasourceUid": "efq9ck8t93vnke",
+        "model": {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "query": "from(bucket: \"server\")\n  |> range(start: -15m)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_push_requests_total\" and (r.status == \"503\" or r.status == \"500\"))\n  |> difference(nonNegative: true)\n  |> sum()\n  |> group()\n  |> sum()\n  |> keep(columns: [\"_value\"])",
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 900,
+          "to": 0
+        },
+        "datasourceUid": "__expr__",
+        "model": {
+          "conditions": [
+            {
+              "evaluator": {
+                "type": "gt",
+                "params": [
+                  10
+                ]
+              },
+              "operator": {
+                "type": "and"
+              },
+              "query": {
+                "params": [
+                  "A"
+                ]
+              },
+              "reducer": {
+                "params": [],
+                "type": "last"
+              }
+            }
+          ],
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "A",
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "B",
+          "type": "threshold"
+        }
+      }
+    ]
+  }
+]

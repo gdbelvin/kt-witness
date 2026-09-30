@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gdbsecurity/kt-witness/internal/metrics"
 	"github.com/gdbsecurity/kt-witness/internal/store"
 )
 
@@ -96,6 +97,14 @@ type Server struct {
 	coverage coverageCache
 
 	coverageOnce sync.Once
+
+	// AddCheckpoint serves POST /add-checkpoint (c2sp.org/tlog-witness push).
+	// Nil leaves the route unregistered. See internal/push.
+	AddCheckpoint http.Handler
+
+	// About is published at /about: what witness-network.org asks every
+	// witness to state publicly. See about.go.
+	About AboutInfo
 }
 
 // cov returns the coverage cache, applying CoverageTTL on first use.
@@ -129,6 +138,10 @@ func (s *Server) Handler() http.Handler {
 	// the suffix; ServeMux cannot express the variable prefix directly.
 	mux.HandleFunc("/", s.index)
 	mux.HandleFunc("/status.json", s.statusJSON)
+	if s.AddCheckpoint != nil {
+		mux.Handle("/add-checkpoint", s.AddCheckpoint)
+	}
+	mux.HandleFunc("/about", s.about)
 	mux.HandleFunc("/metrics", s.metricsHandler)
 	mux.HandleFunc("/healthz", s.healthz)
 	mux.HandleFunc("/.well-known/tlog-witness-key", s.key)
@@ -142,7 +155,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/gossip", s.gossip)
 	mux.HandleFunc("/graph", s.graphPage)
 	mux.HandleFunc("/events", s.events)
-	return mux
+	return instrument(mux)
 }
 
 func (s *Server) key(w http.ResponseWriter, r *http.Request) {
@@ -170,6 +183,7 @@ func (s *Server) checkpoint(w http.ResponseWriter, r *http.Request) {
 			if h == want {
 				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 				w.Header().Set("Cache-Control", "no-store")
+				metrics.Inc(MCheckpointFetches, map[string]string{"origin": rec.Origin, "via": via(r)})
 				w.Write(rec.Cosigned)
 				return
 			}

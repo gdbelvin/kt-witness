@@ -59,6 +59,27 @@ type Outcome struct {
 	// Refreshed is true when we re-cosigned an unchanged log to keep our
 	// published timestamp fresh.
 	Refreshed bool
+
+	// Note is the signed note we produced, including our cosignature, when
+	// Cosigned is true. A caller that must hand the cosignature to somebody —
+	// the push endpoint, answering the log that submitted the checkpoint — needs
+	// exactly these bytes, and re-reading the store for them would race the
+	// poller.
+	Note []byte
+}
+
+// Refresher is an optional Source interface for a source that needs an
+// unchanged tree cosigned now rather than when RefreshInterval says.
+//
+// A polled log that has not advanced needs nothing from us until our timestamp
+// ages. A log that PUSHES the same tree is different: the protocol obliges us
+// to answer with a cosignature on the note it sent, and when that note's body
+// differs from the one we stored — an extension line changed, say — the stored
+// cosignature is over different bytes and does not verify against it. The
+// tree is bit-for-bit one we already proved, so re-cosigning it is a refresh
+// and nothing more; it still goes through every other gate here.
+type Refresher interface {
+	RefreshNow() bool
 }
 
 // ErrStale means we took too long between fetching and signing.
@@ -189,7 +210,11 @@ func (w *Witness) Process(ctx context.Context, src source.Source) (*Outcome, err
 			// Identical tree: same size, and the hash matched above. There is
 			// no new history to attest, but we re-cosign periodically so our
 			// timestamp remains a liveness signal.
-			if w.RefreshInterval <= 0 || time.Since(prevRec.WitnessedAt) < w.RefreshInterval {
+			force := false
+			if r, ok := src.(Refresher); ok {
+				force = r.RefreshNow()
+			}
+			if !force && (w.RefreshInterval <= 0 || time.Since(prevRec.WitnessedAt) < w.RefreshInterval) {
 				return &Outcome{Origin: origin, Tier: src.Tier(), Size: next.Size, Unchanged: true}, nil
 			}
 			refresh = true
@@ -238,7 +263,7 @@ func (w *Witness) Process(ctx context.Context, src source.Source) (*Outcome, err
 
 	return &Outcome{
 		Origin: origin, Tier: src.Tier(), Size: next.Size,
-		Cosigned: true, Refreshed: refresh,
+		Cosigned: true, Refreshed: refresh, Note: cosigned,
 	}, nil
 }
 

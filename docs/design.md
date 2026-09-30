@@ -231,8 +231,36 @@ only an implementation.
 ## Polling and re-signing
 
 The witness polls rather than waiting to be pushed, because a witness that only
-sees what an operator chooses to send it is not independent. Push is also
-accepted, for native C2SP logs whose operators expect it.
+sees what an operator chooses to send it is not independent.
+
+Push is accepted too, at `POST /add-checkpoint` (c2sp.org/tlog-witness), for
+native C2SP logs whose operators expect it (`internal/push`). A pushed
+checkpoint is not a second path into the store: it goes through the same
+`witness.Process` gates as a polled one — permanent fork state, rollback,
+consistency, freshness — so a head is judged the same way whichever way it
+arrived. A re-push at the size we already hold is cosigned afresh, as
+litewitness does, so the log gets a current timestamp. Each pushing log has a requests-per-day budget; a
+`409 Conflict` carries our current size, so an operator whose view differs from
+ours learns where we are instead of retrying blind.
+
+Which logs may push is discovered as well as configured. The witness can follow
+[witness-network.org](https://witness-network.org/) `logs/v0` lists
+(`internal/loglist`), re-reading them on a configured interval of at most seven
+days. Discovery is add-only: a list that changes never updates or removes a log
+already configured, whether it came from the file or from an earlier read of a
+list, and a statically configured log always takes precedence over a listed
+one. A list is an input we do not control, and letting it rewrite a log's key
+would hand whoever edits it the power to redirect our signature.
+
+This is where the opening sentence of this section stops being true. A log
+discovered from a list comes with no monitoring URL, so it is accepted by push
+only: for those logs the witness sees exactly what the operator chooses to send
+it, and is not independent of that operator in the sense above. It still
+refuses to sign a fork, a rollback or a stale head, which is what a witness in
+the network is for, but it cannot notice a head it was never shown. The logs it
+polls it also accepts pushes for, and for those push only adds timeliness. The
+`/about` page says this in so many words; see
+[witness-network.md](witness-network.md).
 
 Unchanged logs are re-cosigned hourly. A cosignature carries a timestamp, so
 re-signing an unchanged head turns that timestamp into a liveness signal: a

@@ -130,6 +130,7 @@ func Init(version, commit, built string) {
 	d(MBuildInfo, metrics.Gauge, "Build information; always 1, labelled with the version, the git commit and the build date. The version constant only changes at a release, so the commit is what actually identifies a running binary — and answers whether a deploy took effect.")
 	d(MStartTime, metrics.Gauge, "Unix timestamp of process start. Subtract from now for uptime: a phase duration that equals uptime means the work began at startup, which is the difference between slow and wedged-since-restart.")
 	d(MLogsTotal, metrics.Gauge, "Number of logs currently witnessed.")
+	describeHTTP()
 	d(MEntries, metrics.Gauge, "Sum of every witnessed log's size: records whose append-only shape is currently attested.")
 	d(MLogSize, metrics.Gauge, "Current witnessed size of a log.")
 	d(MLogWitnessed, metrics.Gauge, "Unix timestamp of the most recent cosignature for a log.")
@@ -225,6 +226,7 @@ func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
 	// coverage that had stopped moving — the failure this codebase has now
 	// rediscovered three times. Export the age so the two are distinguishable.
 	metrics.Set(MCoverageAge, nil, s.coverage.oldest().Seconds())
+	clients.publish(time.Now())
 	metrics.Set(MScrapeSeconds, nil, time.Since(start).Seconds())
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
