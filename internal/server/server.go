@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gdbsecurity/kt-witness/internal/metrics"
 	"github.com/gdbsecurity/kt-witness/internal/store"
 )
 
@@ -154,7 +155,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/gossip", s.gossip)
 	mux.HandleFunc("/graph", s.graphPage)
 	mux.HandleFunc("/events", s.events)
-	return mux
+	return instrument(mux)
 }
 
 func (s *Server) key(w http.ResponseWriter, r *http.Request) {
@@ -182,6 +183,7 @@ func (s *Server) checkpoint(w http.ResponseWriter, r *http.Request) {
 			if h == want {
 				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 				w.Header().Set("Cache-Control", "no-store")
+				metrics.Inc(MCheckpointFetches, map[string]string{"origin": rec.Origin, "via": via(r)})
 				w.Write(rec.Cosigned)
 				return
 			}

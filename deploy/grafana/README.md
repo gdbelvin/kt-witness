@@ -30,6 +30,92 @@ curl -sS -u "$GRAFANA_USER:$GRAFANA_PASS" \
 `id` and `version` are stripped: Grafana assigns them per instance, and keeping
 them makes the file look like it belongs to one particular server.
 
+## The endpoints dashboard: is anyone relying on this?
+
+`kt-witness-endpoints.json` (uid `kt-witness-endpoints`) answers a different
+question from the performance dashboard: not "is the witness keeping up" but
+"does anybody use what it signs". A witness can cosign every log on time and
+still be worth nothing, if nobody fetches its cosignatures or pushes to it.
+
+It reads the per-endpoint metrics from `internal/server/httpmetrics.go`:
+
+| metric | labels | what it says |
+|---|---|---|
+| `kt_witness_http_requests_total` | route, method, code, via | every request |
+| `kt_witness_http_request_duration_seconds_{bucket,sum,count}` | route, via, le | latency, as served by the witness |
+| `kt_witness_http_distinct_clients` | route | distinct outside clients, trailing 24h |
+| `kt_witness_checkpoint_fetches_total` | origin, via | whose cosignatures people read |
+| `kt_witness_push_requests_total` | status | push outcomes (`internal/push`) |
+
+**`via="tunnel"` is the whole trick.** Telegraf scrapes `/metrics` over the LAN
+every 15s and Docker probes `/healthz`; counted together with real traffic, they
+make an unused witness look busy. Requests that came through the Cloudflare
+Tunnel carry `Cf-Ray`, and only those are outside parties. The reliance panels
+filter to `via="tunnel"` and drop `/metrics` and `/healthz`. `route` is a fixed
+set (unknown paths are `other`), so scanners cannot grow the series count.
+
+Import it the same way as the main dashboard:
+
+```sh
+jq '{dashboard: ., overwrite: true}' deploy/grafana/kt-witness-endpoints.json \
+  | curl -sS -u "$GRAFANA_USER:$GRAFANA_PASS" \
+      -X POST https://grafana.${KT_TAILNET}.ts.net/api/dashboards/db \
+      -H 'Content-Type: application/json' --data-binary @-
+```
+
+## Endpoint alerts
+
+`alerts/kt-witness-endpoints.json` adds four rules to the existing `kt-witness`
+group in the "Server Alerts" folder, so they route to the same contact point as
+the rest:
+
+| rule | fires when | severity |
+|---|---|---|
+| public endpoint down | the outside `/healthz` probe is not 200 for 5m, or has no result | critical |
+| endpoints returning 5xx | > 5 server errors to outside clients in 10m | warning |
+| endpoints slow (p95 > 2s) | checkpoint reads + pushes, for 15m | warning |
+| pushes withheld | > 10 pushes answered 5xx in 15m | warning |
+
+The existing "kt-witness: no metrics" already covers the process being down.
+What it cannot see is the process up on the LAN while the tunnel, DNS or
+Cloudflare is broken — to every client that is an outage. "public endpoint
+down" covers that, and needs Telegraf to probe the public URL. Add to
+`/home/<user>/monitoring/telegraf.conf` and restart Telegraf:
+
+```toml
+[[inputs.http_response]]
+  urls = ["https://witness.gdbsecurity.com/healthz"]
+  method = "GET"
+  response_timeout = "10s"
+  interval = "60s"
+  follow_redirects = false
+```
+
+Until that probe exists the rule is in NoData, which is deliberately Alerting.
+
+```sh
+jq -c '.[]' deploy/grafana/alerts/kt-witness-endpoints.json | while read -r rule; do
+  uid=$(jq -r .uid <<<"$rule")
+  # PUT updates an existing rule; POST creates it the first time.
+  curl -sS -u "$GRAFANA_USER:$GRAFANA_PASS" -H 'Content-Type: application/json' \
+    -H 'X-Disable-Provenance: true' \
+    -X PUT "https://grafana.${KT_TAILNET}.ts.net/api/v1/provisioning/alert-rules/$uid" \
+    --data-binary "$rule" | grep -q '"uid"' \
+  || curl -sS -u "$GRAFANA_USER:$GRAFANA_PASS" -H 'Content-Type: application/json' \
+    -H 'X-Disable-Provenance: true' \
+    -X POST "https://grafana.${KT_TAILNET}.ts.net/api/v1/provisioning/alert-rules" \
+    --data-binary "$rule"
+done
+```
+
+`X-Disable-Provenance` keeps the rules editable in the UI, like the existing
+ones. The folder uid (`afvyr68dobym8a`) and datasource uid are this Grafana's;
+rewrite both if the rules are ever moved.
+
+Every query in both files was run against this InfluxDB (`influx query` inside
+the `influxdb` container) before being committed, and the histogram-quantile
+pipeline was checked against hand-computed values on synthetic buckets.
+
 ## The datasource
 
 Panels reference the InfluxDB datasource by uid `efq9ck8t93vnke`. On a different
@@ -51,10 +137,10 @@ the graph reports sampling rather than behaviour. If the scrape interval in
 ## The Loki datasource
 
 `loki-datasource.json` adds the log store from `deploy/loki` to this Grafana.
-Grafana on docker-services has no provisioning directory mounted — its compose
-file mounts only `./data` — so a file under `provisioning/datasources` would
-require restarting Grafana with a new mount. The HTTP API does the same job
-without a restart, in the same style as the dashboard import above:
+Grafana on docker-services now mounts `/home/<user>/grafana/provisioning`, but
+only a dashboards provider and an empty `datasources/` are in it, and provisioned
+objects become read-only in the UI. The HTTP API does the same job without a
+restart, in the same style as the dashboard import above:
 
 ```sh
 curl -sS -u "$GRAFANA_USER:$GRAFANA_PASS" \

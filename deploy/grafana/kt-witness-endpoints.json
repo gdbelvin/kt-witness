@@ -1,0 +1,932 @@
+{
+  "uid": "kt-witness-endpoints",
+  "title": "kt-witness \u2014 endpoints and reliance",
+  "description": "Is anyone relying on this witness? Outside traffic per endpoint, latency, and availability. Companion to the kt-witness performance dashboard.",
+  "tags": [
+    "kt-witness"
+  ],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "links": [
+    {
+      "title": "kt-witness performance",
+      "type": "link",
+      "url": "/d/kt-witness",
+      "icon": "dashboard"
+    }
+  ],
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Is anyone relying on it? \u2014 outside traffic only (arrived via the tunnel; excludes /metrics and /healthz)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "External requests (time range)",
+      "description": "Every request from an outside party in the selected range. Zero means nobody used the witness in that window.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_http_requests_total\" and r.via == \"tunnel\" and r.route != \"/metrics\" and r.route != \"/healthz\")\n  |> difference(nonNegative: true)\n  |> sum()\n  |> group()\n  |> sum()\n  |> keep(columns: [\"_value\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Distinct external clients (24h)",
+      "description": "Distinct Cf-Connecting-Ip addresses seen through the tunnel in the trailing 24 hours, across all routes. Held only as a hash, in memory; resets on restart.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_http_distinct_clients\" and r.route == \"all\")\n  |> last() |> keep(columns: [\"_value\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Cosigned checkpoints read (time range)",
+      "description": "Successful GET /<origin-hash>/checkpoint from outside: someone fetching what this witness signed. This is the strongest signal of reliance.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_http_requests_total\" and r.via == \"tunnel\" and r.route != \"/metrics\" and r.route != \"/healthz\" and r.route == \"/{origin}/checkpoint\" and r.code == \"200\")\n  |> difference(nonNegative: true)\n  |> sum()\n  |> group()\n  |> sum()\n  |> keep(columns: [\"_value\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Pushes cosigned (time range)",
+      "description": "POST /add-checkpoint answered 200: a log asked for, and got, our cosignature. Counted by the push handler, so it includes pushes over the LAN.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_push_requests_total\" and r.status == \"200\")\n  |> difference(nonNegative: true)\n  |> sum()\n  |> group()\n  |> sum()\n  |> keep(columns: [\"_value\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "External requests / min, by route",
+      "description": "Per-series rate, then summed by route.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "// Rate windows are floored at four scrapes (15s): see deploy/RUNBOOK.md.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_http_requests_total\" and r.via == \"tunnel\" and r.route != \"/metrics\" and r.route != \"/healthz\")\n  |> aggregateWindow(every: w, fn: last, createEmpty: false)\n  |> derivative(unit: 1m, nonNegative: true)\n  |> group(columns: [\"route\"])\n  |> aggregateWindow(every: w, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"route\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqpm",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "External requests / min, by status class",
+      "description": "4xx on /{origin}/checkpoint means a client asked for a log we have no cosignature for (or have withheld); 4xx on /add-checkpoint is the protocol talking (409 = size mismatch).",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "import \"strings\"\n// Rate windows are floored at four scrapes (15s): see deploy/RUNBOOK.md.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_http_requests_total\" and r.via == \"tunnel\" and r.route != \"/metrics\" and r.route != \"/healthz\")\n  |> map(fn: (r) => ({r with class: strings.substring(v: r.code, start: 0, end: 1) + \"xx\"}))\n  |> aggregateWindow(every: w, fn: last, createEmpty: false)\n  |> derivative(unit: 1m, nonNegative: true)\n  |> group(columns: [\"class\"])\n  |> aggregateWindow(every: w, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"class\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqpm",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Most-read cosignatures (time range), by log",
+      "description": "Which logs' cosigned checkpoints outside parties fetch. A log never read here is one nobody checks our signature on.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_checkpoint_fetches_total\" and r.via == \"tunnel\")\n  |> difference(nonNegative: true)\n  |> sum()\n  |> group()\n  |> filter(fn: (r) => r._value > 0.0)\n  |> sort(columns: [\"_value\"], desc: true)\n  |> limit(n: 25)\n  |> keep(columns: [\"origin\", \"_value\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "_value"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "fetches"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "_value",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Push outcomes / min, by status",
+      "description": "200 cosigned \u00b7 409 size mismatch or race (the log retries) \u00b7 403 bad log signature or forked log \u00b7 422 bad proof \u00b7 429 over qpd \u00b7 503 withheld (stale, signer).",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "// Rate windows are floored at four scrapes (15s): see deploy/RUNBOOK.md.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_push_requests_total\")\n  |> aggregateWindow(every: w, fn: last, createEmpty: false)\n  |> derivative(unit: 1m, nonNegative: true)\n  |> group(columns: [\"status\"])\n  |> aggregateWindow(every: w, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"status\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqpm",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Distinct external clients (trailing 24h), by route",
+      "description": "A gauge over a rolling 24h window; it resets to zero on restart.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_http_distinct_clients\" and r.route != \"all\")\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> group(columns: [\"route\"])\n  |> keep(columns: [\"_time\", \"_value\", \"route\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "Latency \u2014 outside traffic, as served by the witness (excludes Cloudflare's own time)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "p50 latency by route",
+      "description": "From the cumulative le buckets (1ms \u2026 10s).",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 30
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "import \"math\"\n// Rate windows are floored at four scrapes (15s): see deploy/RUNBOOK.md.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_http_request_duration_seconds_bucket\" and r.via == \"tunnel\" and r.route != \"/metrics\" and r.route != \"/healthz\")\n  |> group(columns: [\"route\", \"le\"])\n  |> aggregateWindow(every: w, fn: last, createEmpty: false)\n  |> difference(nonNegative: true)\n  |> map(fn: (r) => ({r with le: if r.le == \"+Inf\" then math.mInf(sign: 1) else float(v: r.le)}))\n  |> group(columns: [\"route\", \"_time\"])\n  |> histogramQuantile(quantile: 0.5, upperBoundColumn: \"le\", countColumn: \"_value\", valueColumn: \"_value\")\n  |> filter(fn: (r) => not math.isNaN(f: r._value))\n  |> group(columns: [\"route\"])\n  |> keep(columns: [\"_time\", \"_value\", \"route\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "p95 latency by route",
+      "description": "From the cumulative le buckets (1ms \u2026 10s). A value in the top bucket means over 10s.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 30
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "import \"math\"\n// Rate windows are floored at four scrapes (15s): see deploy/RUNBOOK.md.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_http_request_duration_seconds_bucket\" and r.via == \"tunnel\" and r.route != \"/metrics\" and r.route != \"/healthz\")\n  |> group(columns: [\"route\", \"le\"])\n  |> aggregateWindow(every: w, fn: last, createEmpty: false)\n  |> difference(nonNegative: true)\n  |> map(fn: (r) => ({r with le: if r.le == \"+Inf\" then math.mInf(sign: 1) else float(v: r.le)}))\n  |> group(columns: [\"route\", \"_time\"])\n  |> histogramQuantile(quantile: 0.95, upperBoundColumn: \"le\", countColumn: \"_value\", valueColumn: \"_value\")\n  |> filter(fn: (r) => not math.isNaN(f: r._value))\n  |> group(columns: [\"route\"])\n  |> keep(columns: [\"_time\", \"_value\", \"route\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "p99 latency by route",
+      "description": "From the cumulative le buckets (1ms \u2026 10s).",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 30
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "import \"math\"\n// Rate windows are floored at four scrapes (15s): see deploy/RUNBOOK.md.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_http_request_duration_seconds_bucket\" and r.via == \"tunnel\" and r.route != \"/metrics\" and r.route != \"/healthz\")\n  |> group(columns: [\"route\", \"le\"])\n  |> aggregateWindow(every: w, fn: last, createEmpty: false)\n  |> difference(nonNegative: true)\n  |> map(fn: (r) => ({r with le: if r.le == \"+Inf\" then math.mInf(sign: 1) else float(v: r.le)}))\n  |> group(columns: [\"route\", \"_time\"])\n  |> histogramQuantile(quantile: 0.99, upperBoundColumn: \"le\", countColumn: \"_value\", valueColumn: \"_value\")\n  |> filter(fn: (r) => not math.isNaN(f: r._value))\n  |> group(columns: [\"route\"])\n  |> keep(columns: [\"_time\", \"_value\", \"route\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Mean latency by route",
+      "description": "Sum / count per window: moves with every request, where the quantiles need enough samples to be meaningful.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 38
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "// Rate windows are floored at four scrapes (15s): see deploy/RUNBOOK.md.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\ns = from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_http_request_duration_seconds_sum\" and r.via == \"tunnel\" and r.route != \"/metrics\" and r.route != \"/healthz\")\n  |> aggregateWindow(every: w, fn: last, createEmpty: false)\n  |> difference(nonNegative: true)\n  |> group(columns: [\"route\", \"_time\"]) |> sum()\nc = from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_http_request_duration_seconds_count\" and r.via == \"tunnel\" and r.route != \"/metrics\" and r.route != \"/healthz\")\n  |> aggregateWindow(every: w, fn: last, createEmpty: false)\n  |> difference(nonNegative: true)\n  |> group(columns: [\"route\", \"_time\"]) |> sum()\njoin(tables: {s: s, c: c}, on: [\"route\", \"_time\"])\n  |> filter(fn: (r) => r._value_c > 0.0)\n  |> map(fn: (r) => ({_time: r._time, route: r.route, _value: r._value_s / r._value_c}))\n  |> group(columns: [\"route\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 16,
+      "type": "row",
+      "title": "Availability",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 45
+      },
+      "panels": []
+    },
+    {
+      "id": 17,
+      "type": "stat",
+      "title": "Public /healthz probe (HTTP code)",
+      "description": "Telegraf http_response probing https://witness.gdbsecurity.com/healthz through Cloudflare \u2014 the path clients take. Empty means the probe input is not configured: see deploy/grafana/README.md.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 46
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"http_response\" and r.server == \"https://witness.gdbsecurity.com/healthz\" and r._field == \"http_response_code\")\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 200
+              },
+              {
+                "color": "red",
+                "value": 201
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      }
+    },
+    {
+      "id": 18,
+      "type": "stat",
+      "title": "Uptime",
+      "description": "Since process start. No value means the scrape is failing, i.e. the witness is down or unreachable on the LAN.",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 6,
+        "y": 46
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "from(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_process_start_time_seconds\")\n  |> last()\n  |> map(fn: (r) => ({_value: float(v: uint(v: now()) / uint(v: 1000000000)) - r._value}))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      }
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "5xx responses / min (all traffic)",
+      "description": "",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "efq9ck8t93vnke"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 12,
+        "y": 46
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "query": "// Rate windows are floored at four scrapes (15s): see deploy/RUNBOOK.md.\nw = if int(v: v.windowPeriod) < 60000000000 then 1m else v.windowPeriod\n\nfrom(bucket: \"server\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_http_requests_total\" and r.code =~ /^5/)\n  |> aggregateWindow(every: w, fn: last, createEmpty: false)\n  |> derivative(unit: 1m, nonNegative: true)\n  |> group(columns: [\"route\"])\n  |> aggregateWindow(every: w, fn: sum, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"route\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqpm",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    }
+  ]
+}

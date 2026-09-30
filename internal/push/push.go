@@ -241,7 +241,18 @@ func (h *Handler) serve(rw http.ResponseWriter, r *http.Request) *response {
 	// contradicting its own signature. Process records it as a fork; the spec
 	// answers it with a 409. Noted here, before Process, because afterwards a
 	// ForkError alone cannot tell this from a log that was already poisoned.
+	//
+	// Only the push that reveals the split gets the 409. Once the fork is on
+	// record, the same conflicting root pushed again is a forked log asking,
+	// and gets the forked log's 403 — a 409 would invite it to retry forever.
 	split := rec != nil && cp.N == rec.Size && cp.Hash != rec.Hash
+	if split {
+		forked, err := h.cfg.Store.IsForked(lg.Origin)
+		if err != nil {
+			return plain(http.StatusInternalServerError, "store: %v", err)
+		}
+		split = !forked
+	}
 
 	src := &pushedSource{
 		old:   req.old,
