@@ -14,6 +14,8 @@ per-ecosystem adapters, intended to be *operated*, not just published.
 deployment. One file per ecosystem covers what is unique to it:
 [c2sp](docs/c2sp.md) · [meta](docs/meta.md) · [proton](docs/proton.md) ·
 [signal](docs/signal.md) · [apple](docs/apple.md).
+[`docs/witness-network.md`](docs/witness-network.md) covers joining
+witness-network.org: the lists followed, the push-only caveat, and the config.
 
 [`docs/threat-model.md`](docs/threat-model.md) enumerates what a dishonest
 server can actually do and which role — client, auditor, or witness — is capable
@@ -142,6 +144,8 @@ Endpoints:
 | Path | Purpose |
 |---|---|
 | `GET /<origin-hash>/checkpoint` | Latest cosigned checkpoint (C2SP `tlog-witness` monitoring endpoint) |
+| `POST /add-checkpoint` | Push a checkpoint (C2SP `tlog-witness`); same checks as polling, when push is enabled |
+| `GET /about` | Operator, verifier key, add-checkpoint URL and lists followed, as witness-network.org asks — see [docs/witness-network.md](docs/witness-network.md) |
 | `GET /.well-known/tlog-witness-key` | Our published cosignature verifier key |
 | `GET /forks` | Recorded misbehaviour evidence |
 | `GET /history` | Verified published history, from a backfill pass |

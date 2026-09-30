@@ -197,6 +197,8 @@ const uiHTML = `<!doctype html>
   <tr><td><code>/status.json</code></td><td>everything on this page, as JSON</td></tr>
   <tr><td><code>/&lt;origin-hash&gt;/checkpoint</code></td><td>the cosigned checkpoint (C2SP <code>tlog-witness</code>)</td></tr>
   <tr><td><code>/.well-known/tlog-witness-key</code></td><td>the verifier key above</td></tr>
+  <tr><td><code>POST /add-checkpoint</code></td><td>push a checkpoint for cosigning (C2SP <code>tlog-witness</code>), when push is enabled</td></tr>
+  <tr><td><code>/about</code></td><td>operator, key, add-checkpoint URL and the witness-network lists followed</td></tr>
   <tr><td><code>/history</code></td><td>what backfill established about published history</td></tr>
   <tr><td><code>/audits</code></td><td>every sampling decision, with the beacon evidence to recompute it</td></tr>
   <tr><td><code>/applications</code></td><td>observed per-application heads (never cosigned)</td></tr>

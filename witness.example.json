@@ -19,6 +19,16 @@
   "poll_interval": "60s",
   "max_sign_delay": "30s",
   "refresh_interval": "1h",
+  "witness_network": {
+    "lists": [
+      "https://raw.githubusercontent.com/transparency-dev/witness-network/main/lists/staging/log-list-10qps-4klogs.1",
+      "https://raw.githubusercontent.com/transparency-dev/witness-network/main/lists/staging/log-list-100qps-40klogs.1"
+    ],
+    "refresh": "24h",
+    "public_url": "https://witness.example.com",
+    "operator": "Example Operator",
+    "contact": "witness@example.com"
+  },
   "audit": {
     "prefetch_dir": "/data/proof-cache",
     "prefetch_bytes": 32212254720,

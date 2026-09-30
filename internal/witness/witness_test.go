@@ -308,6 +308,44 @@ func TestUnchangedLogIsRefreshedAfterInterval(t *testing.T) {
 	}
 }
 
+// refreshingSource asks for an unchanged tree to be re-cosigned immediately.
+type refreshingSource struct {
+	stubSource
+	now bool
+}
+
+func (s *refreshingSource) RefreshNow() bool { return s.now }
+
+// A Refresher overrides the interval for an unchanged tree, goes through the
+// refresh path (no proof), and hands back the note it signed.
+func TestRefresherForcesRefresh(t *testing.T) {
+	w, db := newTestWitness(t)
+	w.RefreshInterval = time.Hour
+	origin := "example.com/log"
+	src := &refreshingSource{stubSource: stubSource{origin: origin, head: head(t, origin, 10, hashOf(1))}}
+
+	out, err := w.Process(context.Background(), src)
+	if err != nil || !out.Cosigned || len(out.Note) == 0 {
+		t.Fatalf("first observation: %+v (%v)", out, err)
+	}
+	if out, err := w.Process(context.Background(), src); err != nil || !out.Unchanged {
+		t.Fatalf("without RefreshNow, want Unchanged: %+v (%v)", out, err)
+	}
+
+	src.now, src.verifyCalled = true, false
+	out, err = w.Process(context.Background(), src)
+	if err != nil || !out.Cosigned || !out.Refreshed {
+		t.Fatalf("want a forced refresh, got %+v (%v)", out, err)
+	}
+	if src.verifyCalled {
+		t.Error("a forced refresh must not ask for a consistency proof")
+	}
+	rec, _ := db.Get(origin)
+	if string(rec.Cosigned) != string(out.Note) {
+		t.Error("Outcome.Note must be the note that was persisted")
+	}
+}
+
 // Failing to obtain a proof is NOT evidence of a fork, but must still withhold.
 func TestUnprovenConsistencyWithholdsWithoutRecordingFork(t *testing.T) {
 	w, db := newTestWitness(t)

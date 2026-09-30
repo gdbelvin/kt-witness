@@ -97,10 +97,28 @@ This is also the adapter that closes the loop with the wider ecosystem:
 ```
 GET  /<origin-hash>/checkpoint     C2SP monitoring endpoint
 POST /add-checkpoint               accept pushes for native C2SP logs
+GET  /about                        what witness-network.org asks a witness to state
 ```
 
 The acceptance bar for the project is that existing tooling consumes this output
 unmodified.
+
+Push (`internal/push`) feeds the same `witness.Process` gates as polling: a
+pushed checkpoint is checked for fork state, rollback, consistency and
+freshness exactly as a fetched one is. A re-push at the size we already hold
+is cosigned afresh with a current timestamp; each pushing log has a requests-per-day limit;
+and a `409 Conflict` carries our size, as the spec asks, so the log can send the
+proof we need.
+
+The logs allowed to push come from the config and, optionally, from
+witness-network `logs/v0` lists (`internal/loglist`), re-read on an interval of
+at most seven days. A list only ever adds: a changed list never updates or
+removes a log already configured, and a statically configured log wins over a
+listed one. A listed log has no monitoring URL, so it is witnessed by push only
+— this witness then sees only what that operator sends, which is weaker than
+the independence argued for in
+[design.md](design.md#polling-and-re-signing). See
+[witness-network.md](witness-network.md).
 
 One unresolved detail: the server currently answers to **both** hex and unpadded
 base64url encodings of `SHA-256(origin)`, because the spec text was never
