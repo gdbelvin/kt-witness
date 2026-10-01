@@ -75,9 +75,9 @@ func (s *Server) about(w http.ResponseWriter, r *http.Request) {
 		AddCheckpoint: s.publicURL(r) + "/add-checkpoint",
 		PushEnabled:   s.AddCheckpoint != nil,
 		Lists:         s.About.Lists,
-		Refresh:       orNotStated(s.About.ListRefresh),
-		Operator:      orNotStated(s.About.Operator),
-		Contact:       orNotStated(s.About.Contact),
+		Refresh:       s.About.ListRefresh,
+		Operator:      s.About.Operator,
+		Contact:       s.About.Contact,
 		NoLists:       noListsNote,
 		Independence:  independenceNote,
 	}
@@ -93,7 +93,14 @@ func (s *Server) about(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	fmt.Fprintf(w, "%s — witness-network participation\n\n", orUnknown(v.WitnessName))
-	fmt.Fprintf(w, "operator:\n  %s\n\ncontact:\n  %s\n\n", v.Operator, v.Contact)
+	// Unset fields are left out rather than printed as placeholders: a page
+	// saying "not stated" reads as a witness that is half configured.
+	if v.Operator != "" {
+		fmt.Fprintf(w, "operator:\n  %s\n\n", v.Operator)
+	}
+	if v.Contact != "" {
+		fmt.Fprintf(w, "contact:\n  %s\n\n", v.Contact)
+	}
 	fmt.Fprintf(w, "witness verifier key (%s):\n  %s\n\n", v.KeyType, v.VKey)
 	fmt.Fprintf(w, "add-checkpoint URL:\n  %s\n", v.AddCheckpoint)
 	if !v.PushEnabled {
@@ -107,7 +114,9 @@ func (s *Server) about(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "  %s\n", l)
 		}
 	}
-	fmt.Fprintf(w, "\nlist refresh interval:\n  %s\n", v.Refresh)
+	if len(v.Lists) > 0 && v.Refresh != "" {
+		fmt.Fprintf(w, "\nlist refresh interval:\n  %s\n", v.Refresh)
+	}
 	fmt.Fprintf(w, "\nindependence:\n  %s\n", v.Independence)
 }
 
@@ -149,13 +158,6 @@ func vkeyType(vkey string) string {
 	return fmt.Sprintf("vkey, key type 0x%02x — NOT cosignature/v1", b[0])
 }
 
-func orNotStated(s string) string {
-	if s == "" {
-		return "not stated"
-	}
-	return s
-}
-
 var aboutTmpl = template.Must(template.New("about").Parse(aboutPageHTML))
 
 const aboutPageHTML = `<!doctype html>
@@ -175,12 +177,12 @@ const aboutPageHTML = `<!doctype html>
   participating witness to state. Also served as plain text to a non-browser client.</p>
 </header>
 
-<h2>Operator</h2>
+{{if or .Operator .Contact}}<h2>Operator</h2>
 <div class="fact">
-  <div class="klabel">name</div><div>{{.Operator}}</div>
-  <div class="klabel" style="margin-top:.5rem">contact</div><div>{{.Contact}}</div>
+  {{if .Operator}}<div class="klabel">name</div><div>{{.Operator}}</div>{{end}}
+  {{if .Contact}}<div class="klabel" style="margin-top:.5rem">contact</div><div>{{.Contact}}</div>{{end}}
 </div>
-
+{{end}}
 <h2>Witness verifier key</h2>
 <div class="fact">
   <div class="klabel">{{.KeyType}}</div>
@@ -200,7 +202,7 @@ const aboutPageHTML = `<!doctype html>
   {{else}}
   <p>None. {{.NoLists}}</p>
   {{end}}
-  <div class="klabel" style="margin-top:.8rem">re-read every</div><div><code>{{.Refresh}}</code></div>
+  {{if and .Lists .Refresh}}<div class="klabel" style="margin-top:.8rem">re-read every</div><div><code>{{.Refresh}}</code></div>{{end}}
 </div>
 
 <h2>Independence</h2>
