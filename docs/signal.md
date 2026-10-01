@@ -340,3 +340,77 @@ Reimplemented from libsignal `rust/keytrans/`: `prefix.rs`, `commitments.rs`,
 `implicit.rs`, `guide.rs`, `log.rs`, `left_balanced.rs`, `verify.rs`, and the
 wire definitions in `src/proto/`. Endpoint behaviour from
 signalapp/Signal-Server `KeyTransparencyController.java`, confirmed by probing.
+
+## Replaying the auditor stream (ready, not connected)
+
+The gap named above — whether each update legally transformed the prefix tree —
+closes only by seeing every update. `internal/signalaudit` is the verifier for
+that stream, built and tested ahead of access. It replays
+`AuditorUpdate` messages, as Signal's `Audit` RPC returns them, from the first
+update onward, and needs nothing but the updates themselves.
+
+What it checks, per update (rules from Signal's *Key Transparency Auditor Spec*
+and Trail of Bits' reference auditor, reimplemented; each is documented in the
+code where it is enforced):
+
+- **`newTree`** only as the very first update, and only real.
+- **`differentKey`** — a non-inclusion proof: the copath, ended by a stand-in
+  regenerated from `old_seed`, must hash to our current prefix root. The
+  stand-in is then replaced by a new leaf (real: counter 0, position = our own
+  update count) or a new stand-in (fake). Copath 1–256 entries.
+- **`sameKey`** — an inclusion proof for the existing leaf (counter, position),
+  padded with stand-ins from the key's seed, must hash to our root; the new leaf
+  has counter+1 and the *same* position. Never fake; never past 2³²−1.
+- The log leaf is SHA-256(new prefix root ‖ commitment), appended to a
+  left-balanced frontier (`signal.LogFrontier`, sharing `treeHash` with the
+  client-side proof code, so the two cannot disagree).
+
+A proof that does not reproduce the current root is a `*ProofError` — Signal
+presenting two directories, and the spec says stop. An unreadable or
+self-inconsistent message is a `*MalformedError`. Either way the state is
+untouched. The decoder is stricter than protobuf requires (duplicate fields,
+wrong wire types, non-0/1 bools and over-wide counters are refused) because the
+decoded fields are what is being verified.
+
+**State.** Size, prefix root, and one hash per set bit of the size: JSON under
+2 KiB at Signal's scale. It is not yet signed at rest, which the spec
+recommends; that belongs with the code that stores it.
+
+**Tested against.** Signal's own vectors from the reference auditor (AGPL, so
+fetched rather than committed — see the package doc): all 1,000
+`should_succeed` updates reproduce the expected log root at every step and
+re-encode byte-identically; all 6 `should_fail` vectors are rejected at their
+last update with the expected error kind (the reference test shares one log
+across them, so its later cases fail for the wrong reason; ours use a fresh
+state each). Self-contained tests use a test-only *writer* that keeps a full
+prefix tree and emits honest updates, with hashing written out from the spec:
+generated streams replay to an independently computed root; one bit in every
+byte of every field of every generated update, one bit in every wire byte, and
+every bit of every fifth vector update are flipped, and each mutant is
+rejected or moves the log root (the only exceptions are bits the protocol does
+not bind: a fake update's index below its copath, and the seed of a full-depth
+copath).
+
+**Cost.** On an Apple M4, one core: ~40,000 updates/s decoding and replaying
+Signal's vectors; by kind, ~33 µs for a new key, ~45 µs for a same-key update
+(both hash the full 256-level path, twice for same-key), ~10 µs for a fake one
+at the generator's deep copaths (a fake update hashes only its copath, twice,
+so an estimated ~4 µs at a depth of 30). At that rate
+the ~855M-update history is about 6 CPU-hours. It also parallelises: each
+update's old and new prefix roots depend only on that update, so the chain check
+is "update *i*'s old root equals update *i−1*'s new root" and only the cheap log
+append is sequential. Not done yet; not needed at this rate.
+
+**Bandwidth** dominates. The vectors average 410 bytes/update with copaths of
+8.9 entries (a ~400-key tree): 108 bytes fixed plus 34 per copath entry. In
+Signal's tree a copath is about log₂(keys)+1 deep — ~30 for some hundreds of
+millions of keys — giving ~1.1 KB/update and **roughly 0.9–1 TB** to sync the
+full history. That is an estimate from the encoding, not a measurement of
+Signal's stream.
+
+**Awaiting a client certificate.** The `Audit` endpoint
+(`audit.kt.signal.org`) requires mutual TLS with a Signal-issued client
+certificate, which has been requested. Until then `cmd/kt-signal-replay`
+exercises the core offline — `-vectors kt_test_vectors.pb`, or a file of
+length-delimited updates with `-state` to resume — and the remaining work is the
+gRPC client and, if Signal wants it, `SetAuditorHead` signing.
