@@ -296,6 +296,51 @@ func TestFetchOverlappingLists(t *testing.T) {
 	}
 }
 
+// Which lists name an origin is recorded for every entry — including a
+// statically configured origin and one already introduced by another list —
+// but only as an index: the key in force does not move.
+func TestListsForRecordsEveryMentionWithoutRekeying(t *testing.T) {
+	fx := newFixture(t)
+	second := &listServer{status: http.StatusOK}
+	srv2 := httptest.NewServer(second)
+	defer srv2.Close()
+	fx.f.URLs = append(fx.f.URLs, srv2.URL)
+
+	k1 := testVKey(t, "shared.example/log")
+	k2 := testVKey(t, "shared.example/log")
+	fx.ls.set(http.StatusOK, "logs/v0\n"+entry(k1, 24, "one")+entry(fx.stat2, 1, "static"))
+	second.set(http.StatusOK, "logs/v0\n"+entry(k2, 48, "two"))
+	for i := 0; i < 2; i++ { // twice: mentions must not duplicate
+		if err := fx.f.FetchOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := fx.reg.ListsFor("shared.example/log"); len(got) != 2 || got[0] != fx.srv.URL || got[1] != srv2.URL {
+		t.Errorf("shared: ListsFor = %v", got)
+	}
+	if got := fx.reg.ListsFor("static.example/log"); len(got) != 1 || got[0] != fx.srv.URL {
+		t.Errorf("static: ListsFor = %v", got)
+	}
+	if l, _ := fx.reg.Lookup("shared.example/log"); l.VKey != k1 {
+		t.Error("a second mention re-keyed the log")
+	}
+	if l, _ := fx.reg.Lookup("static.example/log"); l.VKey != fx.stat.VKey {
+		t.Error("a mention re-keyed the static log")
+	}
+	if got := fx.reg.ListsFor("nobody.example/log"); got != nil {
+		t.Errorf("unlisted origin: %v", got)
+	}
+
+	// After a restart the discovering list is known from the store alone.
+	reg := NewRegistry(nil)
+	if err := reg.Load(fx.db); err != nil {
+		t.Fatal(err)
+	}
+	if got := reg.ListsFor("shared.example/log"); len(got) != 1 || got[0] != fx.srv.URL {
+		t.Errorf("after Load: ListsFor = %v", got)
+	}
+}
+
 // Real published lists end to end, including the overlap between them.
 func TestFetchRealLists(t *testing.T) {
 	fx := newFixture(t)

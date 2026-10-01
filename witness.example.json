@@ -21,13 +21,22 @@
   "refresh_interval": "1h",
   "witness_network": {
     "lists": [
-      "https://raw.githubusercontent.com/transparency-dev/witness-network/main/lists/staging/log-list-10qps-4klogs.1",
-      "https://raw.githubusercontent.com/transparency-dev/witness-network/main/lists/staging/log-list-100qps-40klogs.1"
+      "https://staging.witness-network.org/log-list-10qps-4klogs.1"
     ],
     "refresh": "24h",
     "public_url": "https://witness.example.com",
     "operator": "Example Operator",
-    "contact": "witness@example.com"
+    "contact": "witness@example.com",
+    "witnesses": [
+      {"operator": "Geomys", "env": "staging", "lists": ["testing/log-list.1", "staging/log-list-10qps-4klogs.1", "staging/log-list-100qps-40klogs.1"], "about": "https://geomys.org/witness/navigli", "vkey": "witness.navigli.sunlight.geomys.org+a3e00fe2+BNy/co4C1Hn1p+INwJrfUlgz7W55dSZReusH/GhUhJ/G"},
+      {"operator": "Mullvad VPN AB", "env": "staging", "lists": ["testing/log-list.1", "staging/log-list-10qps-4klogs.1", "staging/log-list-100qps-40klogs.1"], "about": "https://witness.stagemole.eu/about", "vkey": "witness.stagemole.eu+67f7aea0+BEqSG3yu9YrmcM3BHvQYTxwFj3uSWakQepafafpUqklv"},
+      {"operator": "TrustFabric", "env": "staging", "lists": ["testing/log-list.1", "staging/log-list-10qps-4klogs.1"], "about": "https://transparency.dev/witnesses", "vkey": "staging.witness.transparency.goog/ring-any-bells+2e1a8dc9+BG5JTpLc3FJtwzgh1Uv+Qelz9qeOH2bfWjS1s0s+y4rL"},
+      {"operator": "Elias Rudberg", "env": "testing", "lists": ["testing/log-list.1"], "about": "https://witness1.smartit.nu/witness1/about.txt", "vkey": "witness1.smartit.nu/witness1+a48c820f+BPSFWg9G6KPiO7QPryYO5Xq4oYJJ+kAvLKLSimDhoxMO"},
+      {"operator": "Florian Larysch", "env": "testing", "lists": ["testing/log-list.1"], "about": "https://remora.n621.de", "vkey": "remora.n621.de+da77ade7+BOvN63jn/bLvkieywe8R6UYAtVtNbZpXh34x7onlmtw2"},
+      {"operator": "Markovian Protocol", "env": "testing", "lists": ["testing/log-list.1", "staging/log-list-10qps-4klogs.1", "staging/log-list-100qps-40klogs.1"], "about": "https://witness.markovianprotocol.com/about", "vkey": "markovianprotocol.com/witness+41b8827f+BJKLl8rBYM0oUxSaWh9rjTldTprEpYj/SWVIGgacA9XC"},
+      {"operator": "rgdd", "env": "testing", "lists": ["testing/log-list.1"], "about": "https://www.rgdd.se/poc-witness/about", "vkey": "rgdd.se/poc-witness+db03732e+BCjJKlo6BU0xfIb8LutqerIFTWIXEA0L5n3tW3QyPFgG"},
+      {"operator": "TrustFabric", "env": "testing", "lists": ["testing/log-list.1"], "about": "https://transparency.dev/witnesses/", "vkey": "transparency.dev/DEV:witness-little-garden+d8042a87+BCtusOxINQNUTN5Oj8HObRkh2yHf/MwYaGX4CPdiVEPM"}
+    ]
   },
   "audit": {
     "prefetch_dir": "/data/proof-cache",

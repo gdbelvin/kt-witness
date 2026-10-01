@@ -153,9 +153,12 @@ func (f *Fetcher) fetchList(ctx context.Context, url string) error {
 
 // apply adds one entry if it is new, and reports whether it did.
 func (f *Fetcher) apply(url string, e Entry, now time.Time) (bool, error) {
+	// Which lists name which origins is recorded for display whatever happens
+	// next. It is an index, not a key: nothing below consults it.
+	f.Registry.mention(e.Origin, url)
 	if f.Registry.IsStatic(e.Origin) {
 		// The operator's configuration wins; the list's opinion of this
-		// log is not recorded at all.
+		// log — its key, budget and contact — is not recorded at all.
 		return false, nil
 	}
 	if _, known := f.Registry.Lookup(e.Origin); known {

@@ -46,6 +46,7 @@ var kindOrder = []struct{ kind, label, blurb string }{
 	{"kt", "Key transparency", "Directories binding people to public keys. This is the ecosystem the project exists for, and the only one where construction auditing is possible at all — a map can be mutated in ways an append-only log cannot."},
 	{"ct", "Certificate transparency", "Append-only logs of issued TLS certificates. Tier A is the honest ceiling here: these are entry logs with no mutable map, so append-only IS the whole construction property."},
 	{"software", "Software transparency", "Logs binding published artifacts to what was actually built."},
+	{networkKind, "Witness network (push)", "Logs discovered from witness-network.org lists. They push their checkpoints to us with a consistency proof, so what we establish is append-only; we never fetch from them."},
 	{"generic", "Other", "Logs whose ecosystem is not declared in the configuration."},
 }
 

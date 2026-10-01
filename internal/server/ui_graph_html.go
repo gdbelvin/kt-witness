@@ -33,6 +33,14 @@ const graphPageHTML = `<!doctype html>
 .peeredge.bad{stroke:var(--bad);opacity:.9}
 .peerlab{font-family:var(--sans);font-size:11px;font-weight:600;fill:var(--ink)}
 .peernum{font-family:var(--mono);font-size:9.5px;fill:var(--muted)}
+/* The witness network. Declared relationships are dashed and faint; only a
+   verified one gets the solid peer styling above. Listed-but-unpushed logs are
+   hollow and dashed: an outline where a measurement would be. */
+.netwit{fill:var(--panel);stroke:var(--muted);stroke-width:1.4;stroke-dasharray:3 2.5}
+.netedge{stroke:var(--muted);stroke-width:1;stroke-dasharray:4 4;opacity:.55;fill:none}
+.netenv{font-size:10px;letter-spacing:.1em;fill:var(--faint)}
+.node.listed{fill:none;stroke:var(--muted);stroke-width:1.1;stroke-dasharray:2 1.8}
+.nettick{stroke:var(--ink);stroke-width:1.6;stroke-linecap:round}
 .ring.dash{stroke:var(--warn);stroke-dasharray:5 5;opacity:.85}
 .ringlab{font-family:var(--mono);font-size:10.5px;fill:var(--faint)}
 .ringlab.warn{fill:var(--warn)}
@@ -105,7 +113,8 @@ const graphPageHTML = `<!doctype html>
   </g>
 
   <g>
-  {{range .Nodes}}<line class="spoke{{if .Forked}} fork{{else if .Stale}} stale{{end}}" x1="{{f $.CX}}" y1="{{f $.CY}}" x2="{{f .X}}" y2="{{f .Y}}"/>{{end}}
+  {{range .Nodes}}{{if not .Awaiting}}<line class="spoke{{if .Forked}} fork{{else if .Stale}} stale{{end}}" x1="{{f $.CX}}" y1="{{f $.CY}}" x2="{{f .X}}" y2="{{f .Y}}"/>{{end}}{{end}}
+  {{range .Nodes}}{{if .AlsoListed}}<line class="nettick" x1="{{f .TickX1}}" y1="{{f .TickY1}}" x2="{{f .TickX2}}" y2="{{f .TickY2}}"/>{{end}}{{end}}
   </g>
 
   <g>
@@ -116,7 +125,7 @@ const graphPageHTML = `<!doctype html>
   {{range .Sectors}}
     <path class="arc" d="{{.Arc}}"/>
     <text class="slabel" x="{{f .LabelX}}" y="{{f .LabelY}}" text-anchor="{{.LabelAnchor}}">{{.Label}}
-      <tspan x="{{f .LabelX}}" dy="14">{{commai .Count}} log{{if ne .Count 1}}s{{end}}{{if .Stale}} · {{commai .Stale}} stale{{end}}{{if .Forked}} · {{commai .Forked}} forked{{end}}</tspan>
+      <tspan x="{{f .LabelX}}" dy="14">{{commai .Count}} log{{if ne .Count 1}}s{{end}}{{if .Awaiting}} · {{commai .Awaiting}} awaiting push{{end}}{{if .Stale}} · {{commai .Stale}} stale{{end}}{{if .Forked}} · {{commai .Forked}} forked{{end}}</tspan>
     </text>
   {{end}}
   </g>
@@ -130,23 +139,50 @@ const graphPageHTML = `<!doctype html>
 
   {{if .Peers}}
   <g class="peers">
-    {{range .Peers}}
+    {{range .Peers}}{{if not .OnRight}}
     <line class="peeredge{{if .Divergent}} bad{{end}}" x1="{{f $.CX}}" y1="{{f $.CY}}"
           x2="{{f .X}}" y2="{{f .Y}}" stroke-width="{{f .Width}}"/>
-    {{end}}
-    {{range .Peers}}
+    {{end}}{{end}}
+    {{range .Peers}}{{if not .OnRight}}
     <a class="nd" href="/gossip" tabindex="0">
       <title>{{.Title}}</title>
       <circle class="peer{{if .Divergent}} bad{{end}}" cx="{{f .X}}" cy="{{f .Y}}" r="{{f .R}}"/>
       <text class="peerlab" x="{{f .LabelX}}" y="{{f .LabelY}}" text-anchor="middle">{{.Label}}</text>
       <text class="peernum" x="{{f .LabelX}}" y="{{f .LabelY}}" dy="14" text-anchor="middle">{{commai .Comparable}} comparable</text>
     </a>
+    {{end}}{{end}}
+  </g>
+  {{end}}
+
+  {{if .NetWitnesses}}
+  <g class="network">
+    {{range .NetWitnesses}}{{if .Verified}}
+    <line class="peeredge{{if .Divergent}} bad{{end}}" x1="{{f $.CX}}" y1="{{f $.CY}}"
+          x2="{{f .X}}" y2="{{f .Y}}" stroke-width="{{f .Width}}"/>
+    {{else if .Dashed}}
+    <line class="netedge" x1="{{f .X}}" y1="{{f .Y}}" x2="{{f .EdgeX}}" y2="{{f .EdgeY}}"><title>{{.Title}}</title></line>
+    {{end}}{{end}}
+    {{range .NetEnvs}}<text class="netenv" x="{{f .X}}" y="{{f .Y}}" text-anchor="middle">{{.Label}}</text>{{end}}
+    {{range .NetWitnesses}}
+    <a class="nd" href="{{if .About}}{{.About}}{{else}}/gossip{{end}}" tabindex="0">
+      <title>{{.Title}}</title>
+      <circle class="{{if .Verified}}peer{{if .Divergent}} bad{{end}}{{else}}netwit{{end}}" cx="{{f .X}}" cy="{{f .Y}}" r="{{f .R}}"/>
+      <text class="peerlab" x="{{f .LabelX}}" y="{{f .LabelY}}" text-anchor="middle">{{.Operator}}</text>
+      <text class="peernum" x="{{f .LabelX}}" y="{{f .LabelY}}" dy="13" text-anchor="middle">{{.Sub}}</text>
+      {{if .Verified}}<text class="peernum" x="{{f .LabelX}}" y="{{f .LabelY}}" dy="25" text-anchor="middle">{{commai .Comparable}} comparable</text>{{end}}
+    </a>
     {{end}}
   </g>
   {{end}}
 
   <g>
-  {{range .Nodes}}
+  {{range .Nodes}}{{if .Awaiting}}
+    <g class="nd" tabindex="0">
+      <title>{{.Title}}</title>
+      <circle class="node listed" cx="{{f .X}}" cy="{{f .Y}}" r="{{f .R}}"/>
+      <text class="nlabel hov" x="{{f .LabelX}}" y="{{f .LabelY}}" text-anchor="{{.LabelAnchor}}">{{.Label}} — awaiting first push</text>
+    </g>
+  {{else}}
     <a class="nd" href="{{.Href}}" tabindex="0">
       <title>{{.Title}}</title>
       {{if .Corroborated}}<circle class="corro" cx="{{f .X}}" cy="{{f .Y}}" r="{{f .R}}"/>{{end}}
@@ -154,10 +190,23 @@ const graphPageHTML = `<!doctype html>
       {{if .Ring}}<circle class="inner" cx="{{f .X}}" cy="{{f .Y}}" r="{{f .InnerR}}"/>{{end}}
       <text class="nlabel{{if .Forked}} fork{{else if .Stale}} stale{{end}}{{if not .Labelled}} hov{{end}}" x="{{f .LabelX}}" y="{{f .LabelY}}" text-anchor="{{.LabelAnchor}}">{{.Label}}{{if .Stale}} — {{.Age}}{{end}}</text>
     </a>
-  {{end}}
+  {{end}}{{end}}
   </g>
 </svg>
 </div>
+
+{{if .Network}}
+<p class="note" id="network-summary">
+  witness-network: {{commai (len .NetWitnesses)}} witness{{if ne (len .NetWitnesses) 1}}es{{end}}
+  ({{commai .NetStaging}} staging, {{commai .NetTesting}} testing); we verify cosignatures from
+  {{commai .NetVerified}} of them ({{commai .NetComparable}} with roots comparable to ours so far); {{commai .NetLogs}} logs listed across {{commai .NetLists}}
+  list{{if ne .NetLists 1}}s{{end}}, of which {{commai .NetPushed}} have pushed to us.{{if .AwaitingCount}}
+  {{commai .AwaitingCount}} listed log{{if ne .AwaitingCount 1}}s have{{else}} has{{end}} not pushed yet: they
+  are the hollow dots just outside the outer ring, and nothing about them is counted as witnessed.{{end}}{{if .NetMoved}}
+  {{range $i, $n := .NetMoved}}{{if $i}}, {{end}}<code>{{$n}}</code>{{end}} {{if gt (len .NetMoved) 1}}are{{else}}is{{end}} both a
+  peer we already compare against and in the network's table, and is drawn once, on the right.{{end}}
+</p>
+{{end}}
 
 <h2>How to read it</h2>
 <div class="legend">
@@ -202,6 +251,19 @@ const graphPageHTML = `<!doctype html>
       <li>Hover or tab to any dot for its origin; click to open its page.</li>
     </ul>
   </div>
+  {{if .Network}}
+  <div class="cell">
+    <h4>Witness network</h4>
+    <ul>
+      <li><svg width="20" height="20" viewBox="0 0 20 20"><circle class="node listed" cx="10" cy="10" r="6"/></svg><b>hollow</b> listed, awaiting first push — not witnessed</li>
+      <li><svg width="20" height="20" viewBox="0 0 20 20"><line class="spoke" x1="0" y1="10" x2="20" y2="10"/><line class="nettick" x1="4" y1="10" x2="11" y2="10"/><circle class="node" cx="15" cy="10" r="4" fill-opacity=".32"/></svg><b>notch</b> a log we poll that a list also names</li>
+      <li><svg width="20" height="20" viewBox="0 0 20 20"><line class="peeredge" x1="0" y1="10" x2="20" y2="10" stroke-width="2.5"/></svg><b>solid</b> verified: we hold its key and share comparable roots</li>
+      <li><svg width="20" height="20" viewBox="0 0 20 20"><line class="netedge" x1="0" y1="10" x2="20" y2="10"/></svg><b>dashed</b> declared in the network's table; nothing checked</li>
+      <li>In the network wedge, distance is time since the log last <em>pushed</em>: we never fetch
+          from these logs, so one drifting outward has stopped sending, not we stopped looking.</li>
+    </ul>
+  </div>
+  {{end}}
 </div>
 <p class="note">
   The one thing this map deliberately does not do is move a node's distance for aesthetic reasons.
