@@ -106,6 +106,20 @@ func TestAboutSaysWhenNoListsFollowed(t *testing.T) {
 
 // A key of the wrong type must be called out rather than labelled as what
 // witness-network expects.
+// An unconfigured witness prints no placeholders: no "not stated", no empty
+// operator section, and no refresh interval for lists it does not follow.
+func TestAboutOmitsUnsetFields(t *testing.T) {
+	s := &Server{VKey: testWitnessVKey}
+	for _, accept := range []string{"", "text/html"} {
+		body := getAbout(t, s, "witness.example", accept, nil)
+		for _, bad := range []string{"not stated", "re-read every", "list refresh interval", "operator:", ">Operator<"} {
+			if strings.Contains(body, bad) {
+				t.Errorf("accept=%q: page contains %q", accept, bad)
+			}
+		}
+	}
+}
+
 func TestAboutFlagsWrongKeyType(t *testing.T) {
 	s := &Server{VKey: "witness+00000000+AAAA"}
 	body := getAbout(t, s, "w.example", "", nil)
