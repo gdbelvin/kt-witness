@@ -127,6 +127,12 @@ type config struct {
 		PublicURL string `json:"public_url"`
 		Operator  string `json:"operator"`
 		Contact   string `json:"contact"`
+		// Witnesses is the network's witness table, as published at
+		// witness-network.org: operator, env, lists, about, vkey. Drawn on
+		// /graph. A non-empty vkey (cosignature/v1, 0x04) is also added to the
+		// peer verifier set, so that witness's cosignatures on checkpoints we
+		// fetch count as corroboration exactly as a peer_witnesses key does.
+		Witnesses []server.NetworkWitness `json:"witnesses"`
 	} `json:"witness_network"`
 
 	PollInterval    string `json:"poll_interval"`
@@ -925,7 +931,13 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill,
 			"concurrency_derived", cfg.Audit.GoConcurrent < 1)
 	}
 
-	peers, err := cosig.NewVerifier(cfg.PeerWitnesses)
+	// Network witnesses whose keys we hold are peers like any other: their
+	// cosignatures on the checkpoints we fetch are read and recorded by the
+	// same path. The table entries are rewritten so a rejected key is not
+	// later drawn as one we verify.
+	peerKeys, netWitnesses := networkPeerKeys(cfg.PeerWitnesses, cfg.WitnessNetwork.Witnesses, log)
+	cfg.WitnessNetwork.Witnesses = netWitnesses
+	peers, err := cosig.NewVerifier(peerKeys)
 	if err != nil {
 		return err
 	}
@@ -997,7 +1009,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill,
 	}
 	defer stop()
 
-	addCheckpoint, about, err := startWitnessNetwork(ctx, cfg, w, db, log)
+	addCheckpoint, about, network, err := startWitnessNetwork(ctx, cfg, w, db, log)
 	if err != nil {
 		return err
 	}
@@ -1009,7 +1021,8 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill,
 			Storage:       server.StoragePaths{DBPath: cfg.DB, ExportDir: cfg.ExportDir},
 			FundingPath:   cfg.FundingPath,
 			AddCheckpoint: addCheckpoint,
-			About:         about}).Handler(),
+			About:         about,
+			Network:       network}).Handler(),
 	}
 	startPprof(ctx, cfg.PprofListen, log)
 	startUnblockProbe(ctx, log)

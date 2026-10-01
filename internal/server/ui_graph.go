@@ -52,10 +52,16 @@ import (
 // Canvas geometry. The viewBox is wider than it is tall because the sector
 // labels sit outside the outermost ring at the left and right extremes, which
 // is where the horizontal headroom goes.
+//
+// It was widened from 1300 when the witness-network column arrived on the
+// right. The ring sits in the middle of the wider canvas, the peer column stays
+// pinned to the left edge, and the witness-network column is pinned to the
+// right edge, so each margin column has clear air between it and the sector
+// labels beside it.
 const (
-	graphW  = 1300.0
+	graphW  = 1480.0
 	graphH  = 940.0
-	graphCX = 650.0
+	graphCX = 740.0
 	graphCY = 476.0
 
 	// The band radii between which every node lives. r0 is far enough out that
@@ -129,6 +135,20 @@ type graphNode struct {
 	Corroborated bool
 	Peers        []string
 
+	// Awaiting marks a log a witness-network list names that has never pushed
+	// to us. It is drawn hollow, just past the outermost ring, and is not a
+	// witnessed log in any sense: there is no measurement behind it, so it is
+	// never stale, forked or corroborated, and it is left out of every count
+	// of what this witness covers. It sits on the map only so the gap between
+	// "listed" and "witnessed" is visible rather than merely stated.
+	Awaiting bool
+
+	// AlsoListed names the witness-network lists that also carry a log we
+	// poll, drawn as a short notch on the node's spoke. Tick is its geometry.
+	AlsoListed     string
+	TickX1, TickY1 float64
+	TickX2, TickY2 float64
+
 	// Labelled nodes get their origin drawn beside them. Only a handful are:
 	// eighty labels is not a map, it is a wall.
 	Labelled             bool
@@ -158,6 +178,46 @@ type graphPeer struct {
 	Divergent  bool
 	Width      float64 // edge stroke width, by comparable logs
 	Title      string
+	// OnRight: this peer is also in the witness-network table, so it is drawn
+	// once, in that column on the right, and not again on the left. It stays
+	// in Peers so the peer table and count still include it.
+	OnRight bool
+}
+
+// graphNetWitness is one entry of the witness-network table, drawn in the
+// column on the right margin.
+//
+// The edge drawn to it is one of two very different things, and they are
+// drawn differently so they cannot be confused. SOLID: we hold its key and on
+// N logs we both published a root at the same size — the same evidence edge a
+// peer on the left gets. DASHED, to the network wedge rather than to any log:
+// it declares, in the network's table, that it follows these lists. That is
+// somebody's statement of intent, and nothing this witness has checked.
+type graphNetWitness struct {
+	Operator string
+	Env      string
+	Name     string // key name; "" when no key is configured
+	Lists    []string
+	About    string // an https about page, used as the link; else ""
+
+	X, Y, R        float64
+	LabelX, LabelY float64
+	Sub            string // second label line: key name, or "key not configured"
+
+	Verified   bool // solid evidence edge
+	Dashed     bool // declared edge drawn to the network wedge
+	Divergent  bool
+	Comparable int
+	Width      float64
+	EdgeX      float64 // end of the dashed declared edge, on the network wedge
+	EdgeY      float64
+	Title      string
+}
+
+// graphNetEnv is the heading over one environment's group in the column.
+type graphNetEnv struct {
+	Label string
+	X, Y  float64
 }
 
 // graphSector is one ecosystem's wedge.
@@ -170,6 +230,10 @@ type graphSector struct {
 	TopTier string
 	Stale   int
 	Forked  int
+	// Awaiting counts listed logs drawn hollow in this wedge; only the
+	// witness-network wedge has any. Not part of Count, which is logs
+	// witnessed.
+	Awaiting int
 
 	Start, End  float64 // degrees, clockwise from twelve o'clock
 	Wedge       string  // path data for the tinted background wedge
@@ -204,6 +268,21 @@ type graphView struct {
 	Corroborated int
 	Unobserved   int
 	PeerCount    int
+
+	// The witness network, when this witness takes part in one. Network is
+	// false, and everything else here zero, when it does not.
+	Network       bool
+	NetWitnesses  []graphNetWitness
+	NetEnvs       []graphNetEnv
+	NetStaging    int
+	NetTesting    int
+	NetVerified   int // network witnesses whose cosignature key we hold
+	NetComparable int // of those, how many share a comparable root with us
+	NetLogs       int // distinct logs named across the lists
+	NetLists      int // lists this witness follows
+	NetPushed     int // listed (not configured) logs that have pushed to us
+	AwaitingCount int // listed logs that have not pushed yet
+	NetMoved      []string
 
 	// Flagged is the subset a reader must not have to hunt for in the picture:
 	// anything stale or forked, listed in text with its real age.
@@ -351,6 +430,8 @@ func shortKind(kind, label string) string {
 		return "CT"
 	case "software":
 		return "SW"
+	case networkKind:
+		return "WN"
 	}
 	if len(label) > 5 {
 		return label[:5]
@@ -363,15 +444,91 @@ func shortKind(kind, label string) string {
 // tested as arithmetic — in particular so the "does anything overlap at eighty
 // nodes" question has an answer that is checked rather than eyeballed.
 func layoutGraph(groups []logGroup, now time.Time) *graphView {
+	return layoutGraphNet(groups, nil, now)
+}
+
+// awaitingOrbit is where a listed-but-never-pushed log is drawn: just past the
+// 48h+ ring, inside the wedge. Past the ring rather than on it, because on it
+// would read as "cosigned two days ago" — and there is no cosignature at all.
+// The rim is still the right neighbourhood, for the reason layoutGraph gives
+// for a record with no timestamp: an absent measurement must never render as
+// a healthy one.
+const awaitingOrbit = graphRMax + 8
+
+// ringLabelHalfWidth is half the width of the widest age-ring label ("48h+ ·
+// scale ends" at 10.5px mono), which the hollow nodes are kept clear of.
+const ringLabelHalfWidth = 56.0
+
+// placeNetworkGroup puts the witness-network wedge second in the dial, making
+// one up if no listed log has pushed yet but some are waiting to.
+//
+// Second, because the dial starts at nine o'clock and runs clockwise: the
+// first ecosystem takes the upper left and the second lands in the upper
+// right, nearest the column of network witnesses whose declared edges run to
+// it. Anywhere else those edges would have to cross the whole ring. The
+// order is a legibility choice, like angle within a wedge, and carries no
+// meaning.
+func placeNetworkGroup(groups []logGroup, awaiting int) []logGroup {
+	var net *logGroup
+	rest := make([]logGroup, 0, len(groups)+1)
+	for i := range groups {
+		if groups[i].Kind == networkKind {
+			c := groups[i]
+			net = &c
+			continue
+		}
+		rest = append(rest, groups[i])
+	}
+	if net == nil {
+		if awaiting == 0 {
+			return groups
+		}
+		net = &logGroup{Kind: networkKind, Label: kindLabel(networkKind)}
+	}
+	at := 1
+	if len(rest) == 0 {
+		at = 0
+	}
+	out := append([]logGroup{}, rest[:at]...)
+	out = append(out, *net)
+	return append(out, rest[at:]...)
+}
+
+func kindLabel(kind string) string {
+	for _, k := range kindOrder {
+		if k.kind == kind {
+			return k.label
+		}
+	}
+	return kind
+}
+
+// layoutGraphNet is layoutGraph plus the listed logs that have not pushed yet,
+// which are laid out in the witness-network wedge by the same relaxation, so
+// the no-overlap guarantee covers them too.
+func layoutGraphNet(groups []logGroup, awaiting []NetworkLog, now time.Time) *graphView {
 	g := &graphView{
 		Scale: 1, ScalePct: 100,
 		CX: graphCX, CY: graphCY, W: graphW, H: graphH,
 		Generated: now.Format("2006-01-02 15:04:05 UTC"),
 	}
 
+	awaiting = append([]NetworkLog(nil), awaiting...)
+	sort.Slice(awaiting, func(i, j int) bool { return awaiting[i].Origin < awaiting[j].Origin })
+	groups = placeNetworkGroup(groups, len(awaiting))
+	// A wedge's width follows how many dots it must hold, drawn or hollow:
+	// sizing the network wedge by its pushed logs alone would pack every
+	// hollow one onto a floor-width arc and shrink the whole fleet to fit.
+	slots := func(grp logGroup) int {
+		if grp.Kind == networkKind {
+			return grp.Count + len(awaiting)
+		}
+		return grp.Count
+	}
+
 	total := 0
 	for _, grp := range groups {
-		total += grp.Count
+		total += slots(grp)
 	}
 	if total == 0 {
 		return g
@@ -396,7 +553,7 @@ func layoutGraph(groups []logGroup, now time.Time) *graphView {
 	available := 360 - n*graphGutter
 	var weight float64
 	for _, grp := range groups {
-		weight += math.Sqrt(float64(grp.Count))
+		weight += math.Sqrt(float64(slots(grp)))
 	}
 	floor := math.Min(16, available/n)
 	spare := available - n*floor
@@ -406,12 +563,17 @@ func layoutGraph(groups []logGroup, now time.Time) *graphView {
 	angle := -90 + graphGutter/2
 
 	for _, grp := range groups {
-		width := floor + spare*math.Sqrt(float64(grp.Count))/weight
+		width := floor + spare*math.Sqrt(float64(slots(grp)))/weight
 		s := graphSector{
 			Kind: grp.Kind, Label: grp.Label, Short: shortKind(grp.Kind, grp.Label),
 			Count: grp.Count, Entries: grp.Entries, TopTier: grp.TopTier,
 			Stale: grp.Stale, Forked: grp.Forked,
 			Start: angle, End: angle + width,
+		}
+		var hollow []NetworkLog
+		if grp.Kind == networkKind {
+			hollow = awaiting
+			s.Awaiting = len(awaiting)
 		}
 		s.Wedge = wedgePath(graphR0-46, graphRMax+16, s.Start, s.End)
 		s.Arc = arcPath(graphRMax+26, s.Start+1, s.End-1)
@@ -446,6 +608,7 @@ func layoutGraph(groups []logGroup, now time.Time) *graphView {
 		})
 
 		sectorIdx := len(g.Sectors) - 1
+		nslots := float64(len(rows) + len(hollow))
 		for i, r := range rows {
 			code, rank := tierCode(r.Tier)
 			// A record with no timestamp is drawn at the outer rim, not at the
@@ -470,21 +633,50 @@ func layoutGraph(groups []logGroup, now time.Time) *graphView {
 				orbit:       ageRadius(age),
 				sector:      sectorIdx,
 			}
-			slot := (float64(i) + 0.5) / float64(len(rows))
+			slot := (float64(i) + 0.5) / nslots
 			nd.angle = s.Start + width*slot
 			// A node may be nudged sideways to avoid a collision but never out
 			// of its own ecosystem's wedge: the grouping is data, the exact
 			// angle is not.
-			margin := degFor(nr+1, nd.orbit)
-			nd.lo, nd.hi = s.Start+margin, s.End-margin
-			if nd.lo > nd.hi {
-				nd.lo, nd.hi = (s.Start+s.End)/2, (s.Start+s.End)/2
-			}
+			nd.lo, nd.hi = wedgeBounds(s, nr, nd.orbit)
 			nd.Title = fmt.Sprintf("%s — %s · tier %s · %s entries · last cosigned %s",
 				r.Origin, grp.Label, codeOrUnknown(code), humanCount(r.Size), r.Age)
 			if r.Forked {
 				nd.Title += " · FORKED"
 			}
+			g.Nodes = append(g.Nodes, nd)
+		}
+		// The hollow ones take the slots after the drawn ones, in origin order,
+		// so the arrangement is as deterministic as the rest of the wedge.
+		for i, nl := range hollow {
+			nd := graphNode{
+				Origin: nl.Origin, Label: shortOrigin(nl.Origin), Kind: grp.Kind, Group: grp.Label,
+				Code: "?", R: graphNodeMin, Awaiting: true,
+				orbit:  awaitingOrbit,
+				sector: sectorIdx,
+			}
+			slot := (float64(len(rows)+i) + 0.5) / nslots
+			nd.angle = s.Start + width*slot
+			nd.lo, nd.hi = wedgeBounds(s, nd.R, nd.orbit)
+			// The age rings are labelled straight up from the hub, and the
+			// hollow run sits just past the outermost of them. If the wedge
+			// spans twelve o'clock, keep each hollow node on its own side of
+			// the labels rather than on top of "48h+ · scale ends".
+			if nd.lo < 0 && nd.hi > 0 {
+				clear := degFor(ringLabelHalfWidth+nd.R+2, nd.orbit)
+				if nd.angle < 0 {
+					nd.hi = math.Max(nd.lo, math.Min(nd.hi, -clear))
+				} else {
+					nd.lo = math.Min(nd.hi, math.Max(nd.lo, clear))
+				}
+				nd.angle = clampAngle(nd.angle, nd.lo, nd.hi)
+			}
+			lists := nl.List
+			if len(nl.Lists) > 0 {
+				lists = strings.Join(nl.Lists, ", ")
+			}
+			nd.Title = fmt.Sprintf("%s — listed on %s, awaiting first push · never cosigned here, "+
+				"so not counted as witnessed, stale or corroborated", nl.Origin, lists)
 			g.Nodes = append(g.Nodes, nd)
 		}
 	}
@@ -534,6 +726,11 @@ func layoutGraph(groups []logGroup, now time.Time) *graphView {
 	perSector := map[int]int{}
 	for i := range g.Nodes {
 		nd := &g.Nodes[i]
+		if nd.Awaiting {
+			// Hover-only. A drawn label would make a log that has never sent
+			// us anything as prominent as the largest one we witness.
+			continue
+		}
 		if nd.Stale || nd.Forked {
 			nd.Labelled = true
 			continue
@@ -562,8 +759,14 @@ func layoutGraph(groups []logGroup, now time.Time) *graphView {
 			nd.LabelY = ly
 		}
 	}
+	unclashLabels(g.Nodes)
 
 	for _, nd := range g.Nodes {
+		if nd.Awaiting {
+			g.AwaitingCount++
+			continue
+		}
+		g.TotalLogs++
 		g.TotalEntries += nd.Size
 		if nd.Stale {
 			g.StaleCount++
@@ -575,7 +778,6 @@ func layoutGraph(groups []logGroup, now time.Time) *graphView {
 			g.Flagged = append(g.Flagged, nd)
 		}
 	}
-	g.TotalLogs = len(g.Nodes)
 	sort.Slice(g.Flagged, func(i, j int) bool { return g.Flagged[i].orbit > g.Flagged[j].orbit })
 
 	// The guide rings are the scale. Without them the radial axis is a vibe;
@@ -607,7 +809,23 @@ func layoutGraph(groups []logGroup, now time.Time) *graphView {
 			"shape is its tier. %d of the %d logs are stale and %d are forked; every one of them is "+
 			"listed in the table below this figure.",
 		g.TotalLogs, g.StaleCount, g.TotalLogs, g.ForkedCount)
+	if g.AwaitingCount > 0 {
+		g.AriaLabel += fmt.Sprintf(" %d further logs are named on witness-network lists but have not "+
+			"pushed a checkpoint yet; they are drawn hollow just outside the outer ring and are not "+
+			"counted as witnessed.", g.AwaitingCount)
+	}
 	return g
+}
+
+// wedgeBounds is the range of angles a node of radius r at orbit may be slid
+// across without any part of it leaving sector s.
+func wedgeBounds(s graphSector, r, orbit float64) (lo, hi float64) {
+	margin := degFor(r+1, orbit)
+	lo, hi = s.Start+margin, s.End-margin
+	if lo > hi {
+		lo, hi = (s.Start+s.End)/2, (s.Start+s.End)/2
+	}
+	return lo, hi
 }
 
 func codeOrUnknown(code string) string {
@@ -794,6 +1012,63 @@ func fitNodes(nodes []graphNode) float64 {
 	return worst
 }
 
+// labelBox estimates a drawn label's bounding box. Labels are 10px monospace,
+// so a character is about 6px wide and the box can be worked out from the
+// text alone, without a font metric.
+func labelBox(nd *graphNode) (x0, y0, x1, y1 float64) {
+	w := 6.0 * float64(len([]rune(nd.Label)))
+	switch nd.LabelAnchor {
+	case "end":
+		x0 = nd.LabelX - w
+	case "middle":
+		x0 = nd.LabelX - w/2
+	default:
+		x0 = nd.LabelX
+	}
+	return x0, nd.LabelY - 9, x0 + w, nd.LabelY + 3
+}
+
+// unclashLabels hides drawn labels that would overprint one another.
+//
+// Neighbouring nodes are kept apart by relaxAngles, but their labels are
+// wider than the nodes, and two labelled logs a few degrees apart near twelve
+// o'clock — where anchors switch from "end" to "start" — print on top of each
+// other and become unreadable as both. Where two collide, the one a reader
+// must not miss (stale or forked) keeps its label, then the larger log; the
+// other falls back to hover, which every node already has.
+func unclashLabels(nodes []graphNode) {
+	var order []int
+	for i := range nodes {
+		if nodes[i].Labelled {
+			order = append(order, i)
+		}
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		na, nb := &nodes[order[a]], &nodes[order[b]]
+		fa, fb := na.Stale || na.Forked, nb.Stale || nb.Forked
+		if fa != fb {
+			return fa
+		}
+		return na.Size > nb.Size
+	})
+	var kept [][4]float64
+	for _, i := range order {
+		x0, y0, x1, y1 := labelBox(&nodes[i])
+		clash := false
+		for _, k := range kept {
+			if x0 < k[2] && k[0] < x1 && y0 < k[3] && k[1] < y1 {
+				clash = true
+				break
+			}
+		}
+		if clash && !(nodes[i].Stale || nodes[i].Forked) {
+			nodes[i].Labelled = false
+			continue
+		}
+		kept = append(kept, [4]float64{x0, y0, x1, y1})
+	}
+}
+
 func clampAngle(v, lo, hi float64) float64 {
 	if v < lo {
 		return lo
@@ -813,14 +1088,20 @@ func clampAngle(v, lo, hi float64) float64 {
 // contradict a log. So the number this layout is built to make unmissable is
 // not how many peers there are, it is how many logs have none.
 func attachPeers(g *graphView, gs *gossipView, corr map[string][]string) {
+	drawn := 0
 	for i := range g.Nodes {
+		if g.Nodes[i].Awaiting {
+			// Nothing to corroborate: we hold no checkpoint for it.
+			continue
+		}
+		drawn++
 		if who, ok := corr[g.Nodes[i].Origin]; ok && len(who) > 0 {
 			g.Nodes[i].Corroborated = true
 			g.Nodes[i].Peers = who
 			g.Corroborated++
 		}
 	}
-	g.Unobserved = len(g.Nodes) - g.Corroborated
+	g.Unobserved = drawn - g.Corroborated
 	g.PeerCount = len(gs.Peers)
 
 	// Stacked down the left margin. One peer today; the spacing holds for a
@@ -849,23 +1130,49 @@ func attachPeers(g *graphView, gs *gossipView, corr map[string][]string) {
 }
 
 func (s *Server) graphPage(w http.ResponseWriter, r *http.Request) {
-	v, err := s.buildStatus()
+	g, err := s.buildGraph()
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	g := layoutGraph(v.Groups, v.Now)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = graphTmpl.Execute(w, g)
+}
+
+// buildGraph is everything /graph draws, before it is rendered.
+func (s *Server) buildGraph() (*graphView, error) {
+	v, err := s.buildStatus()
+	if err != nil {
+		return nil, err
+	}
+	// Listed logs with no record here are the hollow ones. Logs a list names
+	// that are also configured are polled, and already on the map as
+	// themselves.
+	nv := s.network()
+	var awaiting []NetworkLog
+	if nv != nil {
+		have := make(map[string]bool, len(v.Logs))
+		for _, lv := range v.Logs {
+			have[lv.Origin] = true
+		}
+		for _, nl := range nv.Logs {
+			if !nl.Static && !have[nl.Origin] {
+				awaiting = append(awaiting, nl)
+			}
+		}
+	}
+	g := layoutGraphNet(v.Groups, awaiting, v.Now)
 	g.WitnessName = v.WitnessName
-	attachPeers(g, s.peerSummary(v), s.corroborated(v))
+	gs := s.peerSummary(v)
+	attachPeers(g, gs, s.corroborated(v))
+	attachNetwork(g, nv, gs)
 	// A retired log is one with stored history that is no longer configured. It
 	// is not drawn, because it is not being witnessed and putting it on a
 	// liveness map would make the map claim something false — but it is counted
 	// in words, because "we quietly stopped watching this" is exactly the kind
 	// of change that should never be invisible.
 	g.Retired, g.RetiredCount = v.Retired, len(v.Retired)
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = graphTmpl.Execute(w, g)
+	return g, nil
 }
 
 var graphFuncs = template.FuncMap{

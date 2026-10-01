@@ -37,11 +37,11 @@ there push only adds timeliness. `/about` states this.
 
 Start with the smaller staging list only:
 
-- `https://raw.githubusercontent.com/transparency-dev/witness-network/main/lists/staging/log-list-10qps-4klogs.1`
+- `https://staging.witness-network.org/log-list-10qps-4klogs.1`
 
 and add the larger one once the signer is measured:
 
-- `https://raw.githubusercontent.com/transparency-dev/witness-network/main/lists/staging/log-list-100qps-40klogs.1`
+- `https://staging.witness-network.org/log-list-100qps-40klogs.1`
 
 Staging first, because nothing yet depends on this witness and staging is the
 place to find out whether the push path keeps up before anything does. The list
@@ -68,7 +68,7 @@ our own.
 ```json
 "witness_network": {
   "lists": [
-    "https://raw.githubusercontent.com/transparency-dev/witness-network/main/lists/staging/log-list-10qps-4klogs.1"
+    "https://staging.witness-network.org/log-list-10qps-4klogs.1"
   ],
   "refresh": "24h",
   "public_url": "https://witness.gdbsecurity.com",
@@ -102,7 +102,7 @@ The about page gives the witness's cosignature/v1 verifier key, its
 add-checkpoint URL, and the lists it follows.
 
 Lists followed (staging):
-  https://raw.githubusercontent.com/transparency-dev/witness-network/main/lists/staging/log-list-10qps-4klogs.1
+  https://staging.witness-network.org/log-list-10qps-4klogs.1
 
 I plan to add the 100qps staging list once I have measured the signer's
 sustained rate; the witness signs with a YubiHSM.

@@ -31,6 +31,13 @@ type Registry struct {
 
 	mu         sync.RWMutex
 	discovered map[string]*push.Log
+
+	// mentions records which lists name an origin, in the order they were
+	// first seen doing so. It is an index for display only — /graph uses it to
+	// say "this log is also on list X" — and never a source of keys: an origin
+	// listed after it was configured or discovered is still verified under the
+	// key it was first known by. Like everything else here it only grows.
+	mentions map[string][]string
 }
 
 var _ push.Registry = (*Registry)(nil)
@@ -41,6 +48,7 @@ func NewRegistry(static []*push.Log) *Registry {
 	r := &Registry{
 		static:     make(map[string]*push.Log, len(static)),
 		discovered: make(map[string]*push.Log),
+		mentions:   make(map[string][]string),
 	}
 	for _, l := range static {
 		if l.From == "" {
@@ -91,8 +99,37 @@ func (r *Registry) Load(db *store.Store) error {
 			continue
 		}
 		r.add(l)
+		r.mention(pl.Origin, pl.List)
 	}
 	return errors.Join(errs...)
+}
+
+// mention records that list names origin. Idempotent.
+func (r *Registry) mention(origin, list string) {
+	if origin == "" || list == "" || list == FromConfig {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, l := range r.mentions[origin] {
+		if l == list {
+			return
+		}
+	}
+	r.mentions[origin] = append(r.mentions[origin], list)
+}
+
+// ListsFor returns the URLs of the lists known to name origin, in the order
+// they were first seen doing so; nil if none. For a statically configured log
+// this is only known once a list naming it has been fetched in this process.
+func (r *Registry) ListsFor(origin string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ls := r.mentions[origin]
+	if len(ls) == 0 {
+		return nil
+	}
+	return append([]string(nil), ls...)
 }
 
 // add inserts a discovered log unless its origin is already known, statically

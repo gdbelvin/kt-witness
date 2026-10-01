@@ -224,6 +224,19 @@ func (s *Server) buildStatus() (*statusView, error) {
 	v.Forks = len(v.ForkOrigins)
 	v.RetractedForks = len(retracted)
 
+	// Logs discovered from witness-network lists are configured too, just not
+	// at startup: Tiers is built once from the config file and the list
+	// fetcher adds logs while the process runs. Without this a log that had
+	// pushed to us would be filed as retired the moment it did.
+	netLogs := map[string]bool{}
+	if nv := s.network(); nv != nil {
+		for _, nl := range nv.Logs {
+			if !nl.Static {
+				netLogs[nl.Origin] = true
+			}
+		}
+	}
+
 	for _, rec := range recs {
 		// A log that has been removed from the configuration keeps its stored
 		// record — that history is evidence and deleting it would be
@@ -232,11 +245,17 @@ func (s *Server) buildStatus() (*statusView, error) {
 		// (retired, rejected, or past its temporal window) ages forever and
 		// trips the staleness alarm that is supposed to mean the witness is
 		// stuck.
-		if len(s.Tiers) > 0 {
-			if _, configured := s.Tiers[rec.Origin]; !configured {
-				v.Retired = append(v.Retired, rec.Origin)
-				continue
+		tier, kind := s.Tiers[rec.Origin], s.Kinds[rec.Origin]
+		_, configured := s.Tiers[rec.Origin]
+		if !configured && netLogs[rec.Origin] {
+			configured, tier = true, networkTier
+			if kind == "" {
+				kind = networkKind
 			}
+		}
+		if len(s.Tiers) > 0 && !configured {
+			v.Retired = append(v.Retired, rec.Origin)
+			continue
 		}
 		lv := logView{
 			Origin:       rec.Origin,
@@ -247,8 +266,8 @@ func (s *Server) buildStatus() (*statusView, error) {
 			Forked:       forked[rec.Origin],
 			History:      byOrigin[rec.Origin],
 			CheckpointID: originHashes(rec.Origin)[0],
-			Tier:         s.Tiers[rec.Origin],
-			Kind:         s.Kinds[rec.Origin],
+			Tier:         tier,
+			Kind:         kind,
 		}
 		lv.RootShort = lv.Root[:16]
 		lv.Path = "/" + lv.CheckpointID + "/checkpoint"

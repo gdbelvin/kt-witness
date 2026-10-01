@@ -105,6 +105,13 @@ type Server struct {
 	// About is published at /about: what witness-network.org asks every
 	// witness to state publicly. See about.go.
 	About AboutInfo
+
+	// Network reports the witness-network.org logs and witnesses this witness
+	// knows about. Nil when it takes no part in the network; see network.go.
+	// A list-discovered log with a stored record is treated as configured
+	// (kind "network" unless Kinds says otherwise, tier A) rather than as
+	// retired, because Tiers is fixed at startup and lists add logs later.
+	Network func() NetworkView
 }
 
 // cov returns the coverage cache, applying CoverageTTL on first use.
