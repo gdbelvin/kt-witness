@@ -100,6 +100,24 @@ cannot choose, which removes a class of proof-padding tricks outright. The leaf
 binds the version counter and the key's first log position, so it cannot be
 replayed elsewhere or made to claim a different version count.
 
+### Where the design comes from: Merkle²
+
+Signal's construction descends from **Merkle²** (Hu, Hooshmand, Kalidhindi,
+Yang, Popa — IEEE S&P 2021, [eprint 2021/453](https://eprint.iacr.org/2021/453)):
+a chronological tree on the outside, so a third party can check that each epoch
+*extends* the last as cheaply as CT's consistency proof, and prefix trees on the
+inside, so a key can be looked up by its index. The payoff the paper is after is
+the one Signal's per-label version search delivers: an owner checks
+O(log n) prefix trees once, instead of every epoch (§V-B).
+
+The nesting is not the paper's, though, and the difference is visible in the
+reimplementation here. In Merkle², every *internal* node of the chronological
+tree carries a prefix tree of exactly the entries beneath it (§IV-A, Fig. 2). In
+Signal, each *leaf* of the log tree commits to a prefix tree over the whole
+directory (`log leaf = SHA-256(prefix_root ‖ commitment)`, above). Arguments
+from the paper about what is checkable carry over; arguments about its specific
+proof shapes do not.
+
 ### The index is not chosen by Signal
 
 The prefix-tree position is the **VRF output** of the search key
@@ -299,12 +317,22 @@ every proof obtainable still examines a vanishing fraction of the directory."
 That answered a question nobody asked. Sampling labels is not what an auditor of
 this design does.
 
-**The auditor's job is the label-independent structural properties**: that the
-log is append-only, and that each update legally transformed the prefix tree.
-The first is verified here, continuously, and is what tier A means. The second
-is not, and cannot be — verifying that updates were legal requires seeing them,
-Signal's updates are per-label, and the VRF exists precisely so a third party
-cannot enumerate them.
+**In the design Signal descends from, the auditor's job is exactly what this
+witness does.** Merkle²'s auditors verify an extension proof between epochs and
+gossip digests with one another so a fork is caught (§II, §V-A). The paper is
+explicit that this does not vouch for new prefix trees — "the extension proof
+alone does not suffice … because the attacker might compromise newly added
+prefix trees" — and assigns that to ID owners, through monitoring proofs and
+signature chains (§V-B, §V-C). Append-only is verified here, continuously, and
+is what tier A means; comparing views with other witnesses is the gossip half.
+
+**Signal asks more of its auditors than the paper does.** In third-party
+auditing mode its auditors also receive the update stream and check that each
+update legally transformed the prefix tree. That is not verified here, and
+cannot be: it requires seeing the updates, Signal's updates are per-label, and
+the VRF exists precisely so a third party cannot enumerate them. So the gap
+below is Signal's addition to the design, not a hole in the auditing the
+design calls for.
 
 So the honest sentence is: **this witness verifies the shape of the log, and the
 complete history of every label it can name; it cannot verify that updates it
@@ -340,3 +368,6 @@ Reimplemented from libsignal `rust/keytrans/`: `prefix.rs`, `commitments.rs`,
 `implicit.rs`, `guide.rs`, `log.rs`, `left_balanced.rs`, `verify.rs`, and the
 wire definitions in `src/proto/`. Endpoint behaviour from
 signalapp/Signal-Server `KeyTransparencyController.java`, confirmed by probing.
+Design lineage and the auditor's role: Y. Hu, K. Hooshmand, H. Kalidhindi,
+S. J. Yang, R. A. Popa, "Merkle²: A Low-Latency Transparency Log System,"
+IEEE S&P 2021, <https://eprint.iacr.org/2021/453>.
