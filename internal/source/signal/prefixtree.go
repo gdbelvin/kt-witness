@@ -43,27 +43,51 @@ const prefixTreeDepth = 8 * 32
 // prefixLeafHash is the leaf of the prefix tree for an index at log position pos
 // with version counter ctr.
 func prefixLeafHash(index hash, ctr uint32, pos uint64) hash {
-	h := sha256.New()
-	h.Write([]byte{0x00})
-	h.Write(index[:])
-	var b [8]byte
-	binary.BigEndian.PutUint32(b[:4], ctr)
-	h.Write(b[:4])
-	binary.BigEndian.PutUint64(b[:], pos)
-	h.Write(b[:])
-	var out hash
-	copy(out[:], h.Sum(nil))
-	return out
+	return PrefixLeafHash(index, ctr, pos)
 }
 
-func prefixParentHash(left, right hash) hash {
-	h := sha256.New()
-	h.Write([]byte{0x01})
-	h.Write(left[:])
-	h.Write(right[:])
-	var out hash
-	copy(out[:], h.Sum(nil))
-	return out
+func prefixParentHash(left, right hash) hash { return PrefixParentHash(left, right) }
+
+// The exported forms below exist so the auditor-stream replay
+// (internal/signalaudit) hashes with exactly these functions rather than a
+// second copy: a client-side proof and an auditor-side replay that disagreed
+// on a byte of preimage would each pass their own tests and still contradict
+// one another. They build the preimage on the stack because the replay calls
+// them hundreds of times per update.
+
+// PrefixLeafHash is SHA-256(0x00 ‖ index ‖ counter_be32 ‖ pos_be64).
+func PrefixLeafHash(index [32]byte, ctr uint32, pos uint64) [32]byte {
+	var b [1 + 32 + 4 + 8]byte
+	b[0] = 0x00
+	copy(b[1:33], index[:])
+	binary.BigEndian.PutUint32(b[33:37], ctr)
+	binary.BigEndian.PutUint64(b[37:45], pos)
+	return sha256.Sum256(b[:])
+}
+
+// PrefixParentHash is SHA-256(0x01 ‖ left ‖ right).
+func PrefixParentHash(left, right [32]byte) [32]byte {
+	var b [1 + 32 + 32]byte
+	b[0] = 0x01
+	copy(b[1:33], left[:])
+	copy(b[33:65], right[:])
+	return sha256.Sum256(b[:])
+}
+
+// PrefixStandInHash is SHA-256(0x02 ‖ seed ‖ level), the value Signal uses for
+// a prefix-tree node whose subtree holds no real leaf. It never appears in a
+// client search proof (those carry stand-ins as opaque copath hashes), only in
+// the auditor stream, where Signal sends the 16-byte seed instead of the hash so
+// the auditor can recompute every unexplored sibling itself.
+//
+// level is the node's depth minus one: depth 0 is the root, which is never a
+// stand-in, so subtracting one lets depths 1..256 fit in a byte.
+func PrefixStandInHash(seed [16]byte, level uint8) [32]byte {
+	var b [1 + 16 + 1]byte
+	b[0] = 0x02
+	copy(b[1:17], seed[:])
+	b[17] = level
+	return sha256.Sum256(b[:])
 }
 
 // evaluatePrefixProof walks the 256 sibling hashes from the leaf back to the
@@ -139,11 +163,12 @@ func marshalUpdateValue(value []byte) []byte {
 // together with the commitment recorded there. This is the join between the two
 // trees — it is what makes a log entry mean "at this point, the directory was
 // this shape and contained this commitment".
-func logLeafHash(prefixRoot, commitment hash) hash {
-	h := sha256.New()
-	h.Write(prefixRoot[:])
-	h.Write(commitment[:])
-	var out hash
-	copy(out[:], h.Sum(nil))
-	return out
+func logLeafHash(prefixRoot, commitment hash) hash { return LogLeafHash(prefixRoot, commitment) }
+
+// LogLeafHash is SHA-256(prefixRoot ‖ commitment), the log-tree leaf.
+func LogLeafHash(prefixRoot, commitment [32]byte) [32]byte {
+	var b [64]byte
+	copy(b[:32], prefixRoot[:])
+	copy(b[32:], commitment[:])
+	return sha256.Sum256(b[:])
 }

@@ -46,12 +46,18 @@ func (n node) marshal() []byte {
 }
 
 func treeHash(left, right node) node {
-	h := sha256.New()
-	h.Write(left.marshal())
-	h.Write(right.marshal())
-	var v hash
-	copy(v[:], h.Sum(nil))
-	return node{interior: true, value: v}
+	// Same preimage as marshal(left) ‖ marshal(right), built on the stack:
+	// the auditor replay calls this on every append.
+	var b [66]byte
+	if left.interior {
+		b[0] = 1
+	}
+	copy(b[1:33], left.value[:])
+	if right.interior {
+		b[33] = 1
+	}
+	copy(b[34:66], right.value[:])
+	return node{interior: true, value: sha256.Sum256(b[:])}
 }
 
 // --- RFC 9420 node arithmetic ------------------------------------------------
