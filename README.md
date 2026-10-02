@@ -13,7 +13,8 @@ per-ecosystem adapters, intended to be *operated*, not just published.
 [`docs/design.md`](docs/design.md) is how the witness works, independent of any
 deployment. One file per ecosystem covers what is unique to it:
 [c2sp](docs/c2sp.md) · [meta](docs/meta.md) · [proton](docs/proton.md) ·
-[signal](docs/signal.md) · [apple](docs/apple.md).
+[signal](docs/signal.md) · [apple](docs/apple.md) ·
+[keytrans](docs/keytrans.md).
 [`docs/witness-network.md`](docs/witness-network.md) covers joining
 witness-network.org: the lists followed, the push-only caveat, and the config.
 
@@ -81,9 +82,11 @@ overpromises, so the distinction is enforced in the type system
   tree is absent from `list_trees` and the API rejects it by id. Those are
   published at `/applications` as **observations, never cosigned** — see below.
 - **Google KT** — archived since 2024-10-11, no live deployment.
-- **IETF keytrans** — the draft deliberately specifies no transport, and no
-  public deployment speaks it, so there is nothing to be conformant to on the
-  wire yet. Deliberately skipped; see NOTES.md.
+- **IETF keytrans, tier A: working.** draft-ietf-keytrans-protocol-05 logs
+  over the reference log's HTTP binding: signed heads, batched consistency
+  proofs against a retained view, and the auditor's signed root in auditing
+  mode. Tested against recorded exchanges from the reference log and run end
+  to end against it. Still no public deployment; see docs/keytrans.md.
 
 ## How consistency is verified
 

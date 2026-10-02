@@ -36,6 +36,7 @@ import (
 	"github.com/gdbsecurity/kt-witness/internal/source/akd"
 	"github.com/gdbsecurity/kt-witness/internal/source/apple"
 	"github.com/gdbsecurity/kt-witness/internal/source/c2sp"
+	"github.com/gdbsecurity/kt-witness/internal/source/keytrans"
 	"github.com/gdbsecurity/kt-witness/internal/source/proton"
 	ktsignal "github.com/gdbsecurity/kt-witness/internal/source/signal"
 	"github.com/gdbsecurity/kt-witness/internal/source/sigsum"
@@ -382,9 +383,13 @@ type logConfig struct {
 
 	StartEpoch        int64 `json:"start_epoch"`
 	MaxEpochsPerRound int64 `json:"max_epochs_per_round"`
+
+	// keytrans: the log's encoded IETF KT Configuration, hex, pinned out of
+	// band. The origin is derived from it; Endpoint is the log's base URL.
+	Configuration string `json:"configuration"`
 }
 
-func (l logConfig) build(log *slog.Logger, entries source.EntryStore, epochs source.EpochRecorder, audits source.AuditRecorder, ctLogs []proton.CTLog) (source.Source, error) {
+func (l logConfig) build(log *slog.Logger, entries source.EntryStore, epochs source.EpochRecorder, audits source.AuditRecorder, state source.StateStore, ctLogs []proton.CTLog) (source.Source, error) {
 	switch l.Type {
 	case "", "c2sp":
 		return c2sp.New(c2sp.Config{
@@ -488,6 +493,13 @@ func (l logConfig) build(log *slog.Logger, entries source.EntryStore, epochs sou
 			AccountIdentityKey: idKey,
 			AccountInterval:    time.Duration(l.AccountIntervalSec) * time.Second,
 			Log:                log,
+		})
+	case "keytrans":
+		return keytrans.New(keytrans.Config{
+			Origin:        l.Origin,
+			Endpoint:      l.Endpoint,
+			Configuration: l.Configuration,
+			State:         state,
 		})
 	default:
 		return nil, fmt.Errorf("log %q: unknown type %q", l.Origin, l.Type)
@@ -744,7 +756,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill,
 
 	var sources []source.Source
 	for _, l := range cfg.Logs {
-		src, err := l.build(log, db, db, db, ctLogs)
+		src, err := l.build(log, db, db, db, db, ctLogs)
 		if err != nil {
 			return err
 		}
@@ -1511,7 +1523,7 @@ func kindOf(l logConfig) string {
 		return "kt"
 	}
 	switch l.Type {
-	case "akd", "proton", "signal":
+	case "akd", "proton", "signal", "keytrans":
 		return "kt"
 	case "apple":
 		// Apple runs both: the Top-Level Tree is key transparency, the AT log is

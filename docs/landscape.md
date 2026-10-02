@@ -74,7 +74,7 @@ work; listed for completeness.
 | Signal | **witnessed, A** + spot check | [signal.md](signal.md) |
 | Apple iMessage | **observations only** | No IDS_MESSAGING tree exists to query; [apple.md](apple.md) |
 | Google keytransparency | **dead** | Archived 2024-10-11, no deployment |
-| IETF keytrans | **nothing to witness** | The draft specifies no transport |
+| IETF keytrans | **adapter ready, A** | No public deployment; witnesses the reference log's HTTP binding. [keytrans.md](keytrans.md) |
 
 ### The plexi namespace list
 

@@ -97,7 +97,12 @@ tracked separately. That makes attribution *better*, not worse:
 
 Say which of those three it was before disclosing anything.
 
-## IETF keytrans: deliberately skipped
+## IETF keytrans: skipped, then built
+
+The reasoning below held until we came to operate a log ourselves, which
+supplies the transport the draft leaves out. The adapter now exists (see
+docs/keytrans.md). The reasoning is kept because it is still true of every
+deployment we do not run.
 
 draft-ietf-keytrans-protocol-05 specifies data structures and cryptographic
 computations but explicitly *no transport* (§2.1), and no public service speaks
