@@ -305,3 +305,16 @@ type EntryStore interface {
 	LogEntries(origin string) (map[uint64][32]byte, error)
 	PutLogEntries(origin string, entries map[uint64][32]byte) error
 }
+
+// StateStore persists a source's own verification state between rounds and
+// across restarts, as an opaque blob per origin.
+//
+// For protocols whose consistency proofs are relative to more than the last
+// root. IETF Key Transparency is one: a proof that a head extends the previous
+// one is checked against the previous head's full subtree hashes and frontier
+// entries, which the verifier must have kept. Lose them and no future head can
+// be proven, so they belong on disk next to the head itself.
+type StateStore interface {
+	SourceState(origin string) ([]byte, error)
+	PutSourceState(origin string, state []byte) error
+}

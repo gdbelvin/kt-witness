@@ -327,6 +327,7 @@ hardware, because publishing is what invites people to depend on it.
       `serviceberry.tlog.stagemole.eu` and `test.sigsum.org/barreleye` —
       with append-only proven from the log's own `get-consistency-proof`.
       See docs/sigsum.md.
-- [ ] **IETF keytrans.** Revisit when a public deployment exists. The draft
-      specifies no transport, so there is currently nothing to be conformant to
-      on the wire.
+- [x] **IETF keytrans.** Adapter at tier A for the keytrans reference log's
+      HTTP binding (internal/source/keytrans, docs/keytrans.md). Tier B is the
+      third-party auditor role (section 15.2), which the reference log's
+      auditor already implements; running it from here is the next step.

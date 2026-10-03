@@ -60,6 +60,10 @@ var (
 	// Add-only: an entry, once written, is never updated or removed by a list
 	// change. See pushlogs.go.
 	bucketPushLogs = []byte("push_logs")
+
+	// bucketSourceState holds an opaque blob per origin for sources that
+	// must carry verification state between rounds. See state.go.
+	bucketSourceState = []byte("source_state")
 )
 
 // ErrRaced means the stored head changed between verification and persistence,
@@ -104,7 +108,7 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bucketHeads, bucketForks, bucketPoisoned, bucketAudits, bucketProgress, bucketHistory, bucketAppHeads, bucketLogEntries, bucketEpochs, bucketRetractions, bucketPushLogs} {
+		for _, b := range [][]byte{bucketHeads, bucketForks, bucketPoisoned, bucketAudits, bucketProgress, bucketHistory, bucketAppHeads, bucketLogEntries, bucketEpochs, bucketRetractions, bucketPushLogs, bucketSourceState} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
