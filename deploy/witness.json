@@ -538,6 +538,12 @@
       "origin": "log2025-1.rekor.sigstore.dev",
       "base_url": "https://log2025-1.rekor.sigstore.dev/api/v2",
       "vkey": "log2025-1.rekor.sigstore.dev+cf119915+AbfK5adZJxsI323FwGD2AJJ9F4i89cfDuLdGJBIYntuO"
+    },
+    {
+      "type": "c2sp",
+      "origin": "log.veil.rip/test-1",
+      "base_url": "https://log.veil.rip/test-1/",
+      "vkey": "log.veil.rip/test-1+3a203129+ARuvMXX36YtXtrD2XXeF9TgCFSnQ3sYHGMrT6G6cWLLX"
     }
   ],
   "work": {
