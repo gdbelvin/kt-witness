@@ -19,9 +19,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/gdbsecurity/kt-witness/internal/loglist"
 	"github.com/gdbsecurity/kt-witness/internal/pace"
 
 	"filippo.io/torchwood"
@@ -124,7 +126,12 @@ type config struct {
 		Lists []string `json:"lists"`
 		// Refresh is how often the lists are re-read. At most weekly, as the
 		// network requires; empty means 24h.
-		Refresh   string `json:"refresh"`
+		Refresh string `json:"refresh"`
+		// Poll has the witness try each list-discovered log at the URL its
+		// origin spells, https://<origin>/, and poll the ones that serve a
+		// checkpoint under their listed key and the tiles behind it, rather
+		// than waiting for their operators to push. See loglist.Monitor.
+		Poll      bool   `json:"poll"`
 		PublicURL string `json:"public_url"`
 		Operator  string `json:"operator"`
 		Contact   string `json:"contact"`
@@ -1021,10 +1028,11 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill,
 	}
 	defer stop()
 
-	addCheckpoint, about, network, err := startWitnessNetwork(ctx, cfg, w, db, log)
+	addCheckpoint, about, network, monitor, err := startWitnessNetwork(ctx, cfg, w, db, log)
 	if err != nil {
 		return err
 	}
+	polledLogs.Store(monitor)
 
 	srv := &http.Server{
 		Addr: cfg.Listen,
@@ -1117,7 +1125,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill,
 	// Witness once before auditing starts. The auditor works from what we have
 	// already attested, so launching it first would spend its opening pass on an
 	// empty store and then sleep a full interval before doing anything useful.
-	round(ctx, w, sources, db, log, device)
+	round(ctx, w, withPolled(sources), db, log, device)
 	mirror()
 	if once {
 		return nil
@@ -1244,7 +1252,7 @@ func run(cfg *config, log *slog.Logger, events *server.EventLog, once, backfill,
 			return nil
 		case <-time.After(pollInterval):
 		}
-		round(ctx, w, sources, db, log, device)
+		round(ctx, w, withPolled(sources), db, log, device)
 		scanApplications(ctx, db, sources, log)
 		mirror()
 	}
@@ -1980,6 +1988,34 @@ const backfillRefresh = time.Hour
 // and a per-ecosystem rate was really one arbitrary log's counter.
 var logKinds map[string]string
 
+// polledLogs is the monitor polling list-discovered logs, if any. Unlike
+// logKinds it is set after goroutines that label metrics have started, hence
+// the atomic; a nil Monitor answers every question with "no".
+var polledLogs atomic.Pointer[loglist.Monitor]
+
+// withPolled is the set a round witnesses: the configured sources, then any
+// list-discovered logs promoted to polling since the last round. The monitor
+// already skips configured origins; a polled source for an origin that is also
+// configured is dropped here too, because two sources for one origin in the
+// same round would race on its stored head.
+func withPolled(sources []source.Source) []source.Source {
+	extra := polledLogs.Load().Sources()
+	if len(extra) == 0 {
+		return sources
+	}
+	have := make(map[string]bool, len(sources))
+	for _, s := range sources {
+		have[s.Origin()] = true
+	}
+	out := sources[:len(sources):len(sources)]
+	for _, s := range extra {
+		if !have[s.Origin()] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // labelsFor builds the standard metric labels for an origin.
 //
 // An unknown origin is labelled "generic" rather than left blank: an empty
@@ -1987,6 +2023,11 @@ var logKinds map[string]string
 // series, which is precisely the confusion this is here to end.
 func labelsFor(origin string) map[string]string {
 	kind := logKinds[origin]
+	if kind == "" && polledLogs.Load().Polled(origin) {
+		// The kind the status page gives a list-discovered log, so a log's
+		// round metrics and its staleness land in the same series.
+		kind = "network"
+	}
 	if kind == "" {
 		kind = "generic"
 	}

@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"filippo.io/torchwood"
@@ -84,6 +85,13 @@ type Config struct {
 	// path elements and suffixes partial tiles with ".p/<W>". The tree maths is
 	// identical either way, so this is purely how the same tiles are addressed.
 	TileLayout string
+
+	// HTTPClient, if set, carries every checkpoint and tile request. A log
+	// whose URL came from the operator uses the default client; one whose URL
+	// was derived from a third party's list uses a client that refuses to dial
+	// anything but public addresses (see loglist.PublicClient), because that
+	// URL is an input this witness does not control.
+	HTTPClient *http.Client
 }
 
 // sumDBLayout names the go.dev/design/25530-sumdb tile scheme.
@@ -123,6 +131,9 @@ func New(cfg Config) (*Source, error) {
 	opts := []torchwood.TileFetcherOption{
 		torchwood.WithUserAgent("kt-witness/0.1 (+https://github.com/gdbsecurity/kt-witness)"),
 		torchwood.WithTilePath(tilePath),
+	}
+	if cfg.HTTPClient != nil {
+		opts = append(opts, torchwood.WithHTTPClient(cfg.HTTPClient))
 	}
 	f, err := torchwood.NewTileFetcher(cfg.BaseURL, opts...)
 	if err != nil {

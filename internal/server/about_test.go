@@ -89,6 +89,26 @@ func TestAboutDerivesURLFromRequest(t *testing.T) {
 	}
 }
 
+// Polling discovered logs narrows the caveat but does not remove it: a listed
+// log that does not publish at its origin's URL is still push-only, and the
+// page must still say so.
+func TestAboutStatesPollingAndKeepsCaveat(t *testing.T) {
+	s := &Server{VKey: testWitnessVKey, AddCheckpoint: http.NotFoundHandler(),
+		About: AboutInfo{Lists: []string{"https://example.org/l"}, PollsDiscovered: true}}
+	for _, accept := range []string{"", "text/html"} {
+		body := getAbout(t, s, "w.example", accept, nil)
+		for _, want := range []string{"https://<origin>/", "polls it on its own schedule", "not independent"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("accept=%q: /about omits %q", accept, want)
+			}
+		}
+	}
+	s.About.PollsDiscovered = false
+	if body := getAbout(t, s, "w.example", "", nil); strings.Contains(body, "https://<origin>/") {
+		t.Error("/about claims polling when it is off")
+	}
+}
+
 // Following no list is a legitimate state and must be said plainly, not left
 // as an empty section a reviewer might read as a rendering bug.
 func TestAboutSaysWhenNoListsFollowed(t *testing.T) {

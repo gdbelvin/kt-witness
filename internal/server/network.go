@@ -32,6 +32,10 @@ type NetworkLog struct {
 	// log is drawn in its own ecosystem's wedge with a marker, not as a
 	// network log.
 	Static bool
+	// PolledURL is where a discovered log is polled, when the witness found
+	// it serving checkpoint and tiles at its origin's URL; empty for a log we
+	// see only by push. A polled log is witnessed at networkPolledTier.
+	PolledURL string
 }
 
 // NetworkWitness is one entry from the network's witness table.
@@ -68,9 +72,13 @@ type NetworkView struct {
 // Kinds entry names. networkTier is its tier: the push protocol carries a
 // consistency proof from the previous size we cosigned, so what we establish
 // is append-only, exactly as for a polled tier-A log.
+//
+// networkPolledTier is the tier of a discovered log this witness also polls on
+// its own schedule: the same claim a configured C2SP log carries.
 const (
-	networkKind = "network"
-	networkTier = "A (checkpoint witness, pushed)"
+	networkKind       = "network"
+	networkTier       = "A (checkpoint witness, pushed)"
+	networkPolledTier = "A (checkpoint witness)"
 )
 
 // ShortListName reduces a list URL to the name the network's own tables use,

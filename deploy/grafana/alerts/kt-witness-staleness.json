@@ -1,0 +1,164 @@
+[
+  {
+    "uid": "afx35og61dam8b",
+    "title": "kt-witness: witness is stuck",
+    "folderUID": "afvyr68dobym8a",
+    "ruleGroup": "kt-witness",
+    "condition": "B",
+    "for": "10m",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "labels": {
+      "service": "kt-witness",
+      "severity": "critical"
+    },
+    "annotations": {
+      "description": "The witness re-cosigns every log it polls at least hourly, so this means THE WITNESS is stuck, not that a log is quiet. While stale, equivocation on that log would go undetected — the cosignature timestamp is what consumers use to tell a live witness from a dead one. Push-only logs (tier \"A (checkpoint witness, pushed)\") are excluded: they are cosigned only when their operator pushes, so their staleness measures the operator, not us; \"a push-only log has gone quiet\" covers them. Check: docker compose logs on docker-services, and http://192.168.0.146:8088/",
+      "summary": "A log the witness polls has not been cosigned in over two hours."
+    },
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 900,
+          "to": 0
+        },
+        "datasourceUid": "efq9ck8t93vnke",
+        "model": {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "query": "from(bucket: \"server\")\n  |> range(start: -15m)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_log_staleness_seconds\" and r.tier != \"A (checkpoint witness, pushed)\")\n  |> max() |> group() |> max() |> keep(columns: [\"_value\"])",
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 900,
+          "to": 0
+        },
+        "datasourceUid": "__expr__",
+        "model": {
+          "conditions": [
+            {
+              "evaluator": {
+                "params": [
+                  7800
+                ],
+                "type": "gt"
+              },
+              "operator": {
+                "type": "and"
+              },
+              "query": {
+                "params": [
+                  "A"
+                ]
+              },
+              "reducer": {
+                "params": [],
+                "type": "last"
+              }
+            }
+          ],
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "A",
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "B",
+          "type": "threshold"
+        }
+      }
+    ]
+  },
+  {
+    "uid": "kt-witness-pushed-quiet",
+    "title": "kt-witness: a push-only log has gone quiet",
+    "folderUID": "afvyr68dobym8a",
+    "ruleGroup": "kt-witness",
+    "condition": "B",
+    "for": "30m",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "labels": {
+      "service": "kt-witness",
+      "severity": "warning"
+    },
+    "annotations": {
+      "summary": "A witness-network log that only pushes to us has not pushed in over a day.",
+      "description": "Not a witness fault: a push-only log is cosigned only when its operator sends a checkpoint, and this one has stopped. Find it on /metrics (kt_witness_log_staleness_seconds with the pushed tier). If it publishes at https://<origin>/, the hourly probe will start polling it on its own (witness_network.poll); otherwise the operator's contact is on the list and on /graph. NoData is OK: with no push-only logs there is nothing to report."
+    },
+    "data": [
+      {
+        "refId": "A",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 900,
+          "to": 0
+        },
+        "datasourceUid": "efq9ck8t93vnke",
+        "model": {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "efq9ck8t93vnke"
+          },
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "query": "from(bucket: \"server\")\n  |> range(start: -15m)\n  |> filter(fn: (r) => r.stack == \"kt-witness\" and r._field == \"kt_witness_log_staleness_seconds\" and r.tier == \"A (checkpoint witness, pushed)\")\n  |> max() |> group() |> max() |> keep(columns: [\"_value\"])",
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "B",
+        "queryType": "",
+        "relativeTimeRange": {
+          "from": 900,
+          "to": 0
+        },
+        "datasourceUid": "__expr__",
+        "model": {
+          "conditions": [
+            {
+              "evaluator": {
+                "params": [
+                  86400
+                ],
+                "type": "gt"
+              },
+              "operator": {
+                "type": "and"
+              },
+              "query": {
+                "params": [
+                  "A"
+                ]
+              },
+              "reducer": {
+                "params": [],
+                "type": "last"
+              }
+            }
+          ],
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "A",
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "B",
+          "type": "threshold"
+        }
+      }
+    ]
+  }
+]

@@ -116,6 +116,31 @@ Every query in both files was run against this InfluxDB (`influx query` inside
 the `influxdb` container) before being committed, and the histogram-quantile
 pipeline was checked against hand-computed values on synthetic buckets.
 
+## Staleness alerts
+
+`alerts/kt-witness-staleness.json` holds the "witness is stuck" rule, which
+until now existed only in Grafana, and a companion. Apply it with the same loop
+as above, substituting the file name; the stuck rule keeps its original uid, so
+the PUT updates it in place.
+
+| rule | fires when | severity |
+|---|---|---|
+| witness is stuck | any log we **poll** is over 7800s (2h10m) since its last cosignature, for 10m | critical |
+| a push-only log has gone quiet | any log at tier `A (checkpoint witness, pushed)` is over 24h, for 30m | warning |
+
+The split is by `tier`, which telegraf carries as a tag. The stuck rule used to
+take the maximum over every log, and a witness-network log we can only be pushed
+is cosigned when its operator sends a checkpoint and not otherwise. In October
+2026 `api.riskrouter.eu/tlog/evidence-v2` stopped pushing, its staleness passed
+two hours, and the critical "witness is stuck" fired while the witness was
+cosigning every other log on time. A quiet push-only log is worth knowing about —
+it is a log nobody is watching — but it is the operator's silence, not ours, so
+it gets its own warning on a day's threshold.
+
+A list log the witness polls (`witness_network.poll`, tier
+`A (checkpoint witness)`) stays under the stuck rule: we fetch it ourselves, so
+it going stale is our fault again.
+
 ## The datasource
 
 Panels reference the InfluxDB datasource by uid `efq9ck8t93vnke`. On a different

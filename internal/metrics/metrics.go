@@ -111,6 +111,34 @@ func (r *Registry) Set(name string, labels map[string]string, v float64) {
 	r.values[key{name, labelString(labels)}] = v
 }
 
+// Sample is one series of a gauge family, for Replace.
+type Sample struct {
+	Labels map[string]string
+	Value  float64
+}
+
+// Replace sets the gauge family name to exactly samples, dropping every other
+// series of it, in one step so a concurrent Write sees the old family or the
+// new one and never a mix.
+//
+// Set alone only ever adds series. That is right for a label set that never
+// changes, but a per-log gauge carries the log's tier, and a log whose tier
+// moves would otherwise leave its old series behind, frozen at its last value:
+// a staleness gauge stuck at six hours, read by an alert taking the maximum,
+// fires forever for a log that is fine.
+func (r *Registry) Replace(name string, samples []Sample) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for k := range r.values {
+		if k.name == name {
+			delete(r.values, k)
+		}
+	}
+	for _, s := range samples {
+		r.values[key{name, labelString(s.Labels)}] = s.Value
+	}
+}
+
 // Write renders the registry in Prometheus text exposition format.
 func (r *Registry) Write(w io.Writer) error {
 	r.mu.Lock()
@@ -186,4 +214,5 @@ var Default = New()
 func Add(name string, labels map[string]string, delta float64) { Default.Add(name, labels, delta) }
 func Inc(name string, labels map[string]string)                { Default.Inc(name, labels) }
 func Set(name string, labels map[string]string, v float64)     { Default.Set(name, labels, v) }
+func Replace(name string, samples []Sample)                    { Default.Replace(name, samples) }
 func Describe(name string, k Kind, help string)                { Default.Describe(name, k, help) }

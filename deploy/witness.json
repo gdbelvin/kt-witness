@@ -33,6 +33,7 @@
       "https://staging.witness-network.org/log-list-10qps-4klogs.1"
     ],
     "refresh": "24h",
+    "poll": true,
     "public_url": "https://witness.gdbsecurity.com",
     "operator": "GDB Security",
     "contact": "gdb@gdbsecurity.com",
