@@ -268,20 +268,27 @@ func (s *Server) refreshStoreMetrics() error {
 		metrics.Set(MNetRequests, l, float64(st.Requests))
 	}
 
+	// The per-log gauges carry tier, which changes — a list-discovered log
+	// goes from pushed to polled, an audited one from B to B+ — so they are
+	// replaced whole each time rather than Set, which would leave the series
+	// under the old tier frozen. A retired log drops out the same way. Only
+	// after the whole pass: a scrape that fails partway keeps the last good
+	// family rather than one missing every log after the failure.
+	var sizes, witnessed, ages, forks []metrics.Sample
 	for _, lg := range v.Logs {
 		kind := lg.Kind
 		if kind == "" {
 			kind = "generic"
 		}
 		l := map[string]string{"origin": lg.Origin, "tier": lg.Tier, "kind": kind}
-		metrics.Set(MLogSize, l, float64(lg.Size))
-		metrics.Set(MLogWitnessed, l, float64(lg.WitnessedAt.Unix()))
-		metrics.Set(MLogAge, l, now.Sub(lg.WitnessedAt).Seconds())
+		sizes = append(sizes, metrics.Sample{Labels: l, Value: float64(lg.Size)})
+		witnessed = append(witnessed, metrics.Sample{Labels: l, Value: float64(lg.WitnessedAt.Unix())})
+		ages = append(ages, metrics.Sample{Labels: l, Value: now.Sub(lg.WitnessedAt).Seconds()})
 		forked := 0.0
 		if lg.Forked {
 			forked = 1
 		}
-		metrics.Set(MLogForked, l, forked)
+		forks = append(forks, metrics.Sample{Labels: l, Value: forked})
 
 		origin := map[string]string{"origin": lg.Origin}
 		if lg.History != nil {
@@ -325,6 +332,10 @@ func (s *Server) refreshStoreMetrics() error {
 			metrics.Set(MAuditEpochs, map[string]string{"origin": lg.Origin, "outcome": outcome}, float64(n))
 		}
 	}
+	metrics.Replace(MLogSize, sizes)
+	metrics.Replace(MLogWitnessed, witnessed)
+	metrics.Replace(MLogAge, ages)
+	metrics.Replace(MLogForked, forks)
 	return nil
 }
 
