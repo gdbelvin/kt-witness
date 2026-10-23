@@ -73,10 +73,10 @@ func TestNetworkPeerKeys(t *testing.T) {
 }
 
 func TestNetworkViewNilWhenUnconfigured(t *testing.T) {
-	if networkView(nil, nil, nil) != nil {
+	if networkView(nil, nil, nil, nil) != nil {
 		t.Fatal("no lists and no witnesses must leave /graph's network layer off")
 	}
-	f := networkView(nil, nil, []server.NetworkWitness{{Operator: "x", Env: "testing"}})
+	f := networkView(nil, nil, []server.NetworkWitness{{Operator: "x", Env: "testing"}}, nil)
 	if f == nil || len(f().Witnesses) != 1 || len(f().Logs) != 0 {
 		t.Fatal("a witness table alone should still be drawn")
 	}
@@ -101,7 +101,7 @@ func TestNetworkViewReportsDiscoveredLogs(t *testing.T) {
 	if err := reg.Load(db); err != nil {
 		t.Fatal(err)
 	}
-	v := networkView(reg, []string{list}, nil)()
+	v := networkView(reg, []string{list}, nil, nil)()
 	if len(v.Lists) != 1 || v.Lists[0] != "staging/log-list-10qps-4klogs.1" {
 		t.Errorf("lists %v", v.Lists)
 	}
@@ -121,4 +121,21 @@ func testNoteVKey(t *testing.T, name string) string {
 		t.Fatal(err)
 	}
 	return vkey
+}
+
+// With polling off there is no monitor, and the round set and metric labels
+// must be exactly what they were before polling existed.
+func TestNoMonitorLeavesRoundUnchanged(t *testing.T) {
+	polledLogs.Store(nil)
+	if got := withPolled(nil); got != nil {
+		t.Errorf("withPolled(nil) = %v with no monitor", got)
+	}
+	if k := labelsFor("unconfigured.example/log")["kind"]; k != "generic" {
+		t.Errorf("unknown origin kind = %q with no monitor, want generic", k)
+	}
+	polledLogs.Store(&loglist.Monitor{})
+	defer polledLogs.Store(nil)
+	if k := labelsFor("unconfigured.example/log")["kind"]; k != "generic" {
+		t.Errorf("unpolled origin kind = %q, want generic", k)
+	}
 }

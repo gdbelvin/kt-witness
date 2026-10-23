@@ -228,11 +228,15 @@ func (s *Server) buildStatus() (*statusView, error) {
 	// at startup: Tiers is built once from the config file and the list
 	// fetcher adds logs while the process runs. Without this a log that had
 	// pushed to us would be filed as retired the moment it did.
-	netLogs := map[string]bool{}
+	netLogs := map[string]string{}
 	if nv := s.network(); nv != nil {
 		for _, nl := range nv.Logs {
-			if !nl.Static {
-				netLogs[nl.Origin] = true
+			if nl.Static {
+				continue
+			}
+			netLogs[nl.Origin] = networkTier
+			if nl.PolledURL != "" {
+				netLogs[nl.Origin] = networkPolledTier
 			}
 		}
 	}
@@ -247,8 +251,8 @@ func (s *Server) buildStatus() (*statusView, error) {
 		// stuck.
 		tier, kind := s.Tiers[rec.Origin], s.Kinds[rec.Origin]
 		_, configured := s.Tiers[rec.Origin]
-		if !configured && netLogs[rec.Origin] {
-			configured, tier = true, networkTier
+		if nt, ok := netLogs[rec.Origin]; !configured && ok {
+			configured, tier = true, nt
 			if kind == "" {
 				kind = networkKind
 			}

@@ -31,8 +31,10 @@ const staticPushQPD = 1440
 // It returns a nil handler when push is not enabled, which leaves
 // /add-checkpoint unregistered; /about is served either way and says so. The
 // returned network func feeds /graph; it is nil when nothing about the network
-// is configured, which leaves the map exactly as it was.
-func startWitnessNetwork(ctx context.Context, cfg *config, w *witness.Witness, db *store.Store, log *slog.Logger) (http.Handler, server.AboutInfo, func() server.NetworkView, error) {
+// is configured, which leaves the map exactly as it was. The monitor polls the
+// discovered logs that can be polled; it is nil unless witness_network.poll is
+// set and there is a list to discover from.
+func startWitnessNetwork(ctx context.Context, cfg *config, w *witness.Witness, db *store.Store, log *slog.Logger) (http.Handler, server.AboutInfo, func() server.NetworkView, *loglist.Monitor, error) {
 	wn := cfg.WitnessNetwork
 	about := server.AboutInfo{
 		PublicURL: wn.PublicURL,
@@ -41,7 +43,7 @@ func startWitnessNetwork(ctx context.Context, cfg *config, w *witness.Witness, d
 		Lists:     wn.Lists,
 	}
 	if !wn.Push && len(wn.Lists) == 0 {
-		return nil, about, networkView(nil, nil, wn.Witnesses), nil
+		return nil, about, networkView(nil, nil, wn.Witnesses, nil), nil, nil
 	}
 
 	interval, intervalText := loglist.DefaultInterval, "24h"
@@ -49,12 +51,12 @@ func startWitnessNetwork(ctx context.Context, cfg *config, w *witness.Witness, d
 		intervalText = wn.Refresh
 		d, err := time.ParseDuration(wn.Refresh)
 		if err != nil {
-			return nil, about, nil, fmt.Errorf("witness_network.refresh: %w", err)
+			return nil, about, nil, nil, fmt.Errorf("witness_network.refresh: %w", err)
 		}
 		// Refused rather than clamped: the network's rule is at most weekly,
 		// and /about must state the interval actually in force.
 		if d <= 0 || d > loglist.MaxInterval {
-			return nil, about, nil, fmt.Errorf("witness_network.refresh %s: must be positive and at most %s", d, loglist.MaxInterval)
+			return nil, about, nil, nil, fmt.Errorf("witness_network.refresh %s: must be positive and at most %s", d, loglist.MaxInterval)
 		}
 		interval = d
 	}
@@ -74,7 +76,7 @@ func startWitnessNetwork(ctx context.Context, cfg *config, w *witness.Witness, d
 		}
 		v, err := note.NewVerifier(l.VKey)
 		if err != nil {
-			return nil, about, nil, fmt.Errorf("log %s: vkey: %w", l.Origin, err)
+			return nil, about, nil, nil, fmt.Errorf("log %s: vkey: %w", l.Origin, err)
 		}
 		static = append(static, &push.Log{
 			Origin: l.Origin, VKey: l.VKey, Verifier: v, From: loglist.FromConfig,
@@ -95,11 +97,18 @@ func startWitnessNetwork(ctx context.Context, cfg *config, w *witness.Witness, d
 		}
 		go f.Run(ctx)
 	}
+	var mon *loglist.Monitor
+	if wn.Poll && len(wn.Lists) > 0 {
+		mon = &loglist.Monitor{Registry: reg, Log: log}
+		about.PollsDiscovered = true
+		go mon.Run(ctx)
+	}
 	log.Info("witness-network: push enabled",
-		"static_logs", len(static), "lists", len(wn.Lists), "refresh", interval.String())
+		"static_logs", len(static), "lists", len(wn.Lists), "refresh", interval.String(),
+		"poll_discovered", mon != nil)
 
 	h := push.New(push.Config{Witness: w, Store: db, Registry: reg, Log: log})
-	return h, about, networkView(reg, wn.Lists, wn.Witnesses), nil
+	return h, about, networkView(reg, wn.Lists, wn.Witnesses, mon), mon, nil
 }
 
 // networkView returns what /graph draws of the network: every log a list
@@ -109,7 +118,8 @@ func startWitnessNetwork(ctx context.Context, cfg *config, w *witness.Witness, d
 //
 // A func rather than a value because the fetcher adds logs while we run. Each
 // call reads the registry afresh; it is a few dozen map reads per page load.
-func networkView(reg *loglist.Registry, lists []string, ws []server.NetworkWitness) func() server.NetworkView {
+// The monitor, which may be nil, says which discovered logs are polled.
+func networkView(reg *loglist.Registry, lists []string, ws []server.NetworkWitness, mon *loglist.Monitor) func() server.NetworkView {
 	if reg == nil && len(lists) == 0 && len(ws) == 0 {
 		return nil
 	}
@@ -140,6 +150,7 @@ func networkView(reg *loglist.Registry, lists []string, ws []server.NetworkWitne
 			v.Logs = append(v.Logs, server.NetworkLog{
 				Origin: l.Origin, List: names[0], Lists: names,
 				QPD: l.QPD, Contact: l.Contact, Static: static,
+				PolledURL: mon.URL(l.Origin),
 			})
 		}
 		return v

@@ -262,6 +262,17 @@ polls it also accepts pushes for, and for those push only adds timeliness. The
 `/about` page says this in so many words; see
 [witness-network.md](witness-network.md).
 
+The gap can be narrowed, though not closed. Many C2SP logs are served at the
+URL their origin spells, so with `witness_network.poll` set the witness tries
+each discovered log at `https://<origin>/` (`loglist.Monitor`), hourly until it
+answers. A log that serves a checkpoint under the key the list gave, and tiles
+that hash to its root, is polled from then on exactly as a configured one is.
+The URL is a convention rather than anything the list asserts, so trust is
+unchanged — the origin line and the key are still pinned — but where the
+witness connects now comes from a third party's document, so those requests go
+through a client that dials public addresses only. Against the staging list in
+October 2026 this reached 4 of 21 logs; the rest stay push-only.
+
 Unchanged logs are re-cosigned hourly. A cosignature carries a timestamp, so
 re-signing an unchanged head turns that timestamp into a liveness signal: a
 consumer can tell "this log has not moved" apart from "this witness stopped

@@ -33,6 +33,18 @@ refused whichever way it arrives — but a head never pushed is a head never
 seen. The logs this witness polls on its own it also accepts pushes for, and
 there push only adds timeliness. `/about` states this.
 
+With `"poll": true` the witness narrows this. It tries each discovered log at
+`https://<origin>/`, the URL most C2SP logs are served at, and polls the ones
+that answer with a checkpoint under their listed key and the tiles behind it.
+Those are drawn at tier A rather than "A (pushed)", and `/about` says which
+case applies. The probe repeats hourly, so a log that starts publishing later is
+picked up; a log once polled is not demoted. Origins that are not a public DNS
+name (an IP literal, a port, a single label such as `localhost`) are never
+tried, and every connection is refused unless it reaches a public address — a
+list naming `192.168.0.42/x` cannot point the witness at its own network.
+Against the staging list in October 2026, 4 of its 21 logs were pollable,
+including the two that had gone quiet on push.
+
 ## Which lists, and why staging
 
 Start with the smaller staging list only:
@@ -71,6 +83,7 @@ our own.
     "https://staging.witness-network.org/log-list-10qps-4klogs.1"
   ],
   "refresh": "24h",
+  "poll": true,
   "public_url": "https://witness.gdbsecurity.com",
   "operator": "GDB Security",
   "contact": "gdb@gdbsecurity.com"

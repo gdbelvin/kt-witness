@@ -200,6 +200,81 @@ func TestUnconfiguredOriginsAreNotReportedAsLive(t *testing.T) {
 	}
 }
 
+// A list-discovered log is live whichever way we see it, but its tier says
+// which: pushed when we only see what its operator sends, plain tier A once we
+// poll it ourselves.
+func TestDiscoveredLogTierSaysWhetherPolled(t *testing.T) {
+	s := testServer(t)
+	var h tlog.Hash
+	for _, o := range []string{"pushed.example/log", "polled.example/log"} {
+		if err := s.Store.CompareAndSet(nil, &store.Record{
+			Origin: o, Size: 7, Hash: h, Cosigned: []byte("x"), WitnessedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Network = func() NetworkView {
+		return NetworkView{Logs: []NetworkLog{
+			{Origin: "pushed.example/log", List: "staging/l"},
+			{Origin: "polled.example/log", List: "staging/l", PolledURL: "https://polled.example/log/"},
+		}}
+	}
+	v, err := s.buildStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, lg := range v.Logs {
+		got[lg.Origin] = lg.Tier
+	}
+	if got["pushed.example/log"] != networkTier {
+		t.Errorf("pushed log tier = %q, want %q", got["pushed.example/log"], networkTier)
+	}
+	if got["polled.example/log"] != networkPolledTier {
+		t.Errorf("polled log tier = %q, want %q", got["polled.example/log"], networkPolledTier)
+	}
+}
+
+// When a log's tier changes its staleness series must move with it. Set alone
+// left the series under the old tier frozen at its last value, so a pushed log
+// that went quiet and was then polled kept the "witness is stuck" alert firing
+// on a number nothing updated.
+func TestStalenessSeriesFollowsTierChange(t *testing.T) {
+	s := testServer(t)
+	Init("test", "testcommit", "testdate")
+	const origin = "tierflip.example/log"
+	var h tlog.Hash
+	if err := s.Store.CompareAndSet(nil, &store.Record{
+		Origin: origin, Size: 7, Hash: h, Cosigned: []byte("x"), WitnessedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	polled := ""
+	s.Network = func() NetworkView {
+		return NetworkView{Logs: []NetworkLog{{Origin: origin, List: "staging/l", PolledURL: polled}}}
+	}
+	scrape := func() string {
+		w := httptest.NewRecorder()
+		s.metricsHandler(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		return w.Body.String()
+	}
+	series := func(tier string) string {
+		return `kt_witness_log_staleness_seconds{kind="network",origin="` + origin + `",tier="` + tier + `"}`
+	}
+
+	if body := scrape(); !strings.Contains(body, series(networkTier)) {
+		t.Fatalf("pushed log has no staleness series under %q", networkTier)
+	}
+	polled = "https://tierflip.example/log/"
+	body := scrape()
+	if !strings.Contains(body, series(networkPolledTier)) {
+		t.Errorf("polled log has no staleness series under %q", networkPolledTier)
+	}
+	if strings.Contains(body, series(networkTier)) {
+		t.Errorf("series under the old tier %q survived the change", networkTier)
+	}
+}
+
 // The tier a source reports is what its own checks prove; whether a log is also
 // construction audited lives in the audit record. Computing the effective tier
 // from the source alone meant B+ could never be reached by the logs that are

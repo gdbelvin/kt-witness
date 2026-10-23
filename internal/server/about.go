@@ -37,6 +37,9 @@ type AboutInfo struct {
 	Lists []string
 	// ListRefresh is the configured re-read interval, as the config states it.
 	ListRefresh string
+	// PollsDiscovered is true when the witness polls list-discovered logs
+	// that publish at https://<origin>/, rather than relying on push alone.
+	PollsDiscovered bool
 }
 
 // independenceNote is the one caveat the page must carry. docs/design.md
@@ -46,6 +49,16 @@ type AboutInfo struct {
 const independenceNote = "Logs discovered from a witness-network list come with no monitoring URL, " +
 	"so this witness cosigns them only when their operator pushes a checkpoint: for those logs it sees " +
 	"only what the operator chooses to send it, and is not independent of that operator. " +
+	"The C2SP logs it polls on its own schedule it also accepts pushes for, through the same checks."
+
+// pollingIndependenceNote replaces independenceNote when discovered logs are
+// polled. It still has to carry the caveat, because polling only reaches the
+// logs that publish at their origin's URL.
+const pollingIndependenceNote = "Logs discovered from a witness-network list come with no monitoring URL. " +
+	"This witness tries each one at https://<origin>/ and, where the log serves its checkpoint and tiles " +
+	"there under the key the list gave, polls it on its own schedule as well as accepting pushes. " +
+	"A listed log that does not publish there is cosigned only when its operator pushes a checkpoint: " +
+	"for those logs it sees only what the operator chooses to send it, and is not independent of that operator. " +
 	"The C2SP logs it polls on its own schedule it also accepts pushes for, through the same checks."
 
 const noListsNote = "This witness does not follow any witness-network list yet."
@@ -80,6 +93,9 @@ func (s *Server) about(w http.ResponseWriter, r *http.Request) {
 		Contact:       s.About.Contact,
 		NoLists:       noListsNote,
 		Independence:  independenceNote,
+	}
+	if s.About.PollsDiscovered {
+		v.Independence = pollingIndependenceNote
 	}
 	if i := strings.Index(s.VKey, "+"); i > 0 {
 		v.WitnessName = s.VKey[:i]
