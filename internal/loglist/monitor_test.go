@@ -211,6 +211,21 @@ func TestMonitorRetriesUnpollableLogs(t *testing.T) {
 	}
 }
 
+// A log the operator configured under another adapter — sigsum, static CT —
+// is not in the push registry, but it is still configured, and must not get a
+// second source from the monitor.
+func TestMonitorSkipsOriginsConfiguredUnderOtherTypes(t *testing.T) {
+	l := newTileLog(t, "sigsumlike.example/log", 10)
+	srv := logHost(t, map[string][]byte{l.origin: l.checkpoint(t, l.signer)}, l)
+	reg := NewRegistry(nil)
+	reg.add(l.pushLog(t))
+	m := &Monitor{Registry: reg, Client: srv.Client(), Configured: map[string]bool{l.origin: true},
+		baseURL: func(o string) string { return srv.URL + "/" + o + "/" }}
+	if n := m.ProbeOnce(context.Background()); n != 0 || l.hits.Load() != 0 {
+		t.Fatalf("configured origin was probed (%d hits) or promoted (%d)", l.hits.Load(), n)
+	}
+}
+
 func TestNilMonitorHasNoSources(t *testing.T) {
 	var m *Monitor
 	if m.Sources() != nil || m.Polled("x") || m.URL("x") != "" {
@@ -269,6 +284,15 @@ func TestCheckPublic(t *testing.T) {
 		"[fe80::1]:443":            false,
 		"[::ffff:192.168.0.1]:443": false,
 		"224.0.0.1:443":            false,
+		"198.18.0.1:443":           false, // benchmarking
+		"192.0.2.1:443":            false, // documentation
+		"240.0.0.1:443":            false, // reserved
+		"[64:ff9b::c0a8:2a]:443":   false, // NAT64 for 192.168.0.42
+		"[64:ff9b:1::1]:443":       false,
+		"[2002:c0a8:2a::1]:443":    false, // 6to4 for 192.168.0.42
+		"[2001::1]:443":            false, // Teredo
+		"[2001:db8::1]:443":        false,
+		"[::c0a8:2a]:443":          false, // IPv4-compatible
 	} {
 		err := checkPublic(addr)
 		if (err == nil) != ok {

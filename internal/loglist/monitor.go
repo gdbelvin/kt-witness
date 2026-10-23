@@ -56,6 +56,11 @@ const (
 // the round loop reports that the way it reports any other.
 type Monitor struct {
 	Registry *Registry
+	// Configured is every origin the operator configured, of any type. The
+	// registry only knows the C2SP ones, which are the only ones that can be
+	// pushed; a sigsum or static CT log can also be on a list, and promoting
+	// it here would witness one origin from two sources in the same round.
+	Configured map[string]bool
 	// Interval defaults to DefaultProbeInterval.
 	Interval time.Duration
 	// Client defaults to PublicClient(). Every request a promoted source
@@ -105,7 +110,7 @@ func (m *Monitor) ProbeOnce(ctx context.Context) int {
 		n   atomic.Int64
 	)
 	for _, l := range m.Registry.Logs() {
-		if m.Registry.IsStatic(l.Origin) || m.Polled(l.Origin) {
+		if m.Registry.IsStatic(l.Origin) || m.Configured[l.Origin] || m.Polled(l.Origin) {
 			continue
 		}
 		u := m.urlFor(l.Origin)
@@ -331,10 +336,34 @@ var errNotPublic = errors.New("loglist: refusing to connect to a non-public addr
 
 // cgnat is 100.64.0.0/10, shared address space — and the range Tailscale
 // hands out, so a homelab's tailnet lives there.
-var (
-	cgnat       = netip.MustParsePrefix("100.64.0.0/10")
-	thisNetwork = netip.MustParsePrefix("0.0.0.0/8")
-)
+// notPublic is every range a log's address has no business being in, beyond
+// what the netip predicates already cover: special-purpose IPv4 space, and the
+// IPv6 prefixes that carry an IPv4 address inside them. A NAT64 or 6to4 address
+// is a way to name an IPv4 host — on a network that translates, possibly one on
+// our own LAN — so those are refused outright rather than unwrapped.
+var notPublic = func() []netip.Prefix {
+	var ps []netip.Prefix
+	for _, s := range []string{
+		"0.0.0.0/8",       // "this network"; Linux routes a dial here to the local host
+		"100.64.0.0/10",   // shared address space — and the range Tailscale hands out
+		"192.0.0.0/24",    // IETF protocol assignments
+		"192.0.2.0/24",    // documentation
+		"198.18.0.0/15",   // benchmarking
+		"198.51.100.0/24", // documentation
+		"203.0.113.0/24",  // documentation
+		"240.0.0.0/4",     // reserved
+		"::/96",           // IPv4-compatible (deprecated)
+		"64:ff9b::/96",    // NAT64
+		"64:ff9b:1::/48",  // local-use NAT64
+		"100::/64",        // discard-only
+		"2001::/23",       // IETF protocol assignments, Teredo among them
+		"2001:db8::/32",   // documentation
+		"2002::/16",       // 6to4
+	} {
+		ps = append(ps, netip.MustParsePrefix(s))
+	}
+	return ps
+}()
 
 func checkPublic(address string) error {
 	host, _, err := net.SplitHostPort(address)
@@ -346,11 +375,13 @@ func checkPublic(address string) error {
 		return err
 	}
 	ip = ip.Unmap()
-	// 0.0.0.0/8 passes IsGlobalUnicast, and Linux routes a dial to it to the
-	// local host.
-	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() ||
-		ip.IsLinkLocalUnicast() || cgnat.Contains(ip) || thisNetwork.Contains(ip) {
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
 		return fmt.Errorf("%w: %s", errNotPublic, ip)
+	}
+	for _, p := range notPublic {
+		if p.Contains(ip) {
+			return fmt.Errorf("%w: %s", errNotPublic, ip)
+		}
 	}
 	return nil
 }

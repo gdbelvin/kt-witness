@@ -99,7 +99,11 @@ func startWitnessNetwork(ctx context.Context, cfg *config, w *witness.Witness, d
 	}
 	var mon *loglist.Monitor
 	if wn.Poll && len(wn.Lists) > 0 {
-		mon = &loglist.Monitor{Registry: reg, Log: log}
+		configured := make(map[string]bool, len(cfg.Logs))
+		for _, l := range cfg.Logs {
+			configured[l.Origin] = true
+		}
+		mon = &loglist.Monitor{Registry: reg, Configured: configured, Log: log}
 		about.PollsDiscovered = true
 		go mon.Run(ctx)
 	}

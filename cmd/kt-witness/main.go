@@ -1994,13 +1994,26 @@ var logKinds map[string]string
 var polledLogs atomic.Pointer[loglist.Monitor]
 
 // withPolled is the set a round witnesses: the configured sources, then any
-// list-discovered logs promoted to polling since the last round.
+// list-discovered logs promoted to polling since the last round. The monitor
+// already skips configured origins; a polled source for an origin that is also
+// configured is dropped here too, because two sources for one origin in the
+// same round would race on its stored head.
 func withPolled(sources []source.Source) []source.Source {
 	extra := polledLogs.Load().Sources()
 	if len(extra) == 0 {
 		return sources
 	}
-	return append(sources[:len(sources):len(sources)], extra...)
+	have := make(map[string]bool, len(sources))
+	for _, s := range sources {
+		have[s.Origin()] = true
+	}
+	out := sources[:len(sources):len(sources)]
+	for _, s := range extra {
+		if !have[s.Origin()] {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // labelsFor builds the standard metric labels for an origin.
